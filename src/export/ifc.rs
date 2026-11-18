@@ -272,7 +272,8 @@ struct Body {
     min_z: f64,
 }
 
-fn body(model: &Model, product: &Product, units: Units) -> Option<Body> {
+/// `paint`: one colour for all of it, in place of the model's.
+fn body(model: &Model, product: &Product, units: Units, paint: Option<[u8; 4]>) -> Option<Body> {
     // the triangles, quantised (world), with their colour
     let mut tris: Vec<([[i64; 3]; 3], [u8; 4])> = Vec::new();
     for &(li, first, count) in &product.ranges {
@@ -290,9 +291,10 @@ fn body(model: &Model, product: &Product, units: Units) -> Option<Body> {
             else {
                 continue;
             };
-            let colour = match &layer.colors {
-                Some(c) => c.get(t[0] as usize).copied().unwrap_or([base[0], base[1], base[2], 255]),
-                None => [base[0], base[1], base[2], 255],
+            let colour = match (paint, &layer.colors) {
+                (Some(p), _) => p,
+                (None, Some(c)) => c.get(t[0] as usize).copied().unwrap_or([base[0], base[1], base[2], 255]),
+                (None, None) => [base[0], base[1], base[2], 255],
             };
             tris.push(([corners[0], corners[1], corners[2]], colour));
         }
@@ -386,42 +388,150 @@ fn revit_class(category: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// The IFC class and predefined type of a Tekla object: by what the file says it is (its `Type`:
-/// column, beam, polybeam, contour plate, slab, pad or strip footing, weld, bolt group), else by
-/// its name (COLUMN, BEAM, ... and their Dutch words) and profile. A beam whose name says it
-/// braces or ties is a member.
-fn tekla_class(name: &str, kind: &str, profile: &str) -> (&'static str, &'static str) {
-    let name = name.to_uppercase();
-    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
-    let bracing = has(&["BRAC", "VERBAND", "TREK", "STAAF", "ROD", "TIE", "STRUT", "SCHOOR"]);
-    // a beam or column of a plate's section (a stiffener or a strip a connection made) is a plate
-    let plate_section = ["PL", "FL", "BL"].iter().any(|p| profile.to_uppercase().starts_with(p) && profile[p.len()..].starts_with(|c: char| c.is_ascii_digit()));
-    if plate_section && matches!(kind, "Column" | "Beam" | "Polybeam" | "Profile part" | "Contour plate") {
-        return ("IFCPLATE", "NOTDEFINED");
+/// How a straight part runs: level, plumb, or inclined (neither).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Run {
+    Level,
+    Plumb,
+    Inclined,
+}
+
+/// How a body runs: the direction most of its edge length lies along. A profile's side faces each
+/// add two edges along its length, and only one (longer) diagonal each, in a direction of its
+/// own. `None` without edges.
+fn run(body: &Body) -> Option<Run> {
+    let mut edges: Vec<[f64; 3]> = Vec::new();
+    for (_, set) in &body.sets {
+        for t in &set.triangles {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let (a, b) = (set.points[a as usize], set.points[b as usize]);
+                edges.push([0, 1, 2].map(|k| (b[k] - a[k]) as f64));
+            }
+        }
     }
+    let length = |e: &[f64; 3]| (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt();
+    // edge length by direction (to a thousandth, either way along), and the longest edge of each
+    let mut by_direction: HashMap<[i32; 3], (f64, usize)> = HashMap::new();
+    for (i, e) in edges.iter().enumerate() {
+        let l = length(e);
+        if l == 0.0 {
+            continue;
+        }
+        let first = e.iter().copied().find(|c| *c != 0.0).unwrap_or(1.0);
+        let d = e.map(|c| (c / l * first.signum() * 1000.0).round() as i32);
+        // its longest edge gives a direction most exactly
+        let entry = by_direction.entry(d).or_insert((0.0, i));
+        entry.0 += l;
+        if l > length(&edges[entry.1]) {
+            entry.1 = i;
+        }
+    }
+    let mut candidates: Vec<(f64, usize)> = by_direction.into_values().collect();
+    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+    // edge length along a direction: of the edges within about 0.06° of it (so also those just
+    // across a thousandth)
+    let along = |d: &[f64; 3]| {
+        let l = length(d);
+        edges
+            .iter()
+            .filter(|e| {
+                let c = [e[1] * d[2] - e[2] * d[1], e[2] * d[0] - e[0] * d[2], e[0] * d[1] - e[1] * d[0]];
+                length(&c) <= 1e-3 * l * length(e)
+            })
+            .map(length)
+            .sum::<f64>()
+    };
+    let axis = candidates.iter().take(4).map(|&(_, i)| &edges[i]).max_by(|a, b| along(a).total_cmp(&along(b)))?;
+    let rise = axis[2].abs() / length(axis);
+    Some(if rise < 1e-3 {
+        Run::Level
+    } else if rise > 1.0 - 1e-6 {
+        Run::Plumb
+    } else {
+        Run::Inclined
+    })
+}
+
+/// The IFC class and predefined type of a Tekla object, as Tekla's own IFC export gives it: by
+/// what the file says it is (its `Type`: column, beam, polybeam, contour plate, slab, pad or strip
+/// footing, weld, bolt group, rebar), else by its part type, else by its name (COLUMN, BEAM, ...
+/// and their Dutch words) and profile. A beam that runs neither level nor plumb is a member (as
+/// Tekla exports an inclined beam); a beam of a plate's section stays a beam (Tekla's "flat wide
+/// beams as plates" off). Fasteners have no predefined type (`""`, written `$`).
+fn tekla_class(name: &str, kind: &str, part_type: &str, profile: &str, run: Option<Run>) -> (&'static str, &'static str) {
+    let beam = if run == Some(Run::Inclined) { ("IFCMEMBER", "NOTDEFINED") } else { ("IFCBEAM", "NOTDEFINED") };
     match kind {
-        "Column" => return ("IFCCOLUMN", "COLUMN"),
+        "Column" => return ("IFCCOLUMN", "NOTDEFINED"),
+        "Beam" | "Polybeam" => return beam,
+        "Contour plate" => return ("IFCPLATE", "NOTDEFINED"),
+        "Slab" => return ("IFCSLAB", "NOTDEFINED"),
         "Pad footing" => return ("IFCFOOTING", "PAD_FOOTING"),
         "Strip footing" => return ("IFCFOOTING", "STRIP_FOOTING"),
-        "Slab" => return ("IFCSLAB", "FLOOR"),
-        "Weld" => return ("IFCFASTENER", "WELD"),
-        "Bolt group" => return ("IFCMECHANICALFASTENER", "BOLT"),
+        "Weld" => return ("IFCFASTENER", ""),
+        "Bolt group" => return ("IFCMECHANICALFASTENER", ""),
         "Rebar group" | "Single rebar" => return ("IFCREINFORCINGBAR", "NOTDEFINED"),
-        "Beam" | "Polybeam" if bracing => return ("IFCMEMBER", "BRACE"),
-        "Beam" | "Polybeam" => return ("IFCBEAM", "BEAM"),
         _ => {}
     }
+    match part_type.to_uppercase().as_str() {
+        "COLUMN" => return ("IFCCOLUMN", "NOTDEFINED"),
+        "BEAM" | "POLYBEAM" => return beam,
+        "PLATE" | "CONTOUR_PLATE" => return ("IFCPLATE", "NOTDEFINED"),
+        "SLAB" => return ("IFCSLAB", "NOTDEFINED"),
+        "PAD_FOOTING" => return ("IFCFOOTING", "PAD_FOOTING"),
+        "STRIP_FOOTING" => return ("IFCFOOTING", "STRIP_FOOTING"),
+        _ => {}
+    }
+    // a profile part the file says nothing more of: a beam (Tekla's profile parts are beams)
+    if kind == "Profile part" && run.is_some() {
+        return beam;
+    }
+    let name = name.to_uppercase();
+    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
     if has(&["COLUMN", "KOLOM"]) {
         ("IFCCOLUMN", "COLUMN")
-    } else if has(&["PLATE", "PLAAT"]) || kind == "Contour plate" || profile.to_uppercase().starts_with("PL") {
+    } else if has(&["PLATE", "PLAAT"]) || profile.to_uppercase().starts_with("PL") {
         ("IFCPLATE", "NOTDEFINED")
-    } else if bracing {
+    } else if has(&["BRAC", "VERBAND", "TREK", "STAAF", "ROD", "TIE", "STRUT", "SCHOOR"]) {
         ("IFCMEMBER", "BRACE")
     } else if has(&["BEAM", "RAFTER", "PURLIN", "GIRDER", "JOIST", "LIGGER", "SPANT", "GORDING"]) {
         ("IFCBEAM", "BEAM")
     } else {
         ("IFCMEMBER", "NOTDEFINED")
     }
+}
+
+/// Tekla objects Tekla's IFC export leaves out: control points, lines and planes, grid planes
+/// (the grids are IfcGrid) and loads.
+fn tekla_left_out(kind: &str) -> bool {
+    matches!(kind, "Control point" | "Control line" | "Control plane" | "Grid plane") || kind.ends_with(" load") || kind == "Load"
+}
+
+/// The colour Tekla's IFC export gives a weld or a bolt group, which the model's object
+/// representation does not colour: welds amber, bolts black.
+fn tekla_colour(kind: &str) -> Option<[u8; 4]> {
+    match kind {
+        "Weld" => Some([244, 177, 0, 255]),
+        "Bolt group" => Some([0, 0, 0, 255]),
+        _ => None,
+    }
+}
+
+/// The material of a Tekla object as Tekla's IFC export names it: a part's material, a rebar's
+/// grade, a bolt group's standard; and its category: the material type (a rebar's steel), else
+/// the material's own name.
+fn tekla_material(props: &[(String, String)]) -> Option<(String, String)> {
+    let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.trim()).filter(|v| !v.is_empty());
+    let (name, category) = match get("Type") {
+        Some("Bolt group") => (get("Standard")?, Some("STEEL")),
+        Some("Rebar group" | "Single rebar") => (get("Grade").or(get("Material"))?, Some("STEEL")),
+        _ => (get("Material")?, None),
+    };
+    let category = category.or(match get("Material type") {
+        Some(t @ ("STEEL" | "CONCRETE" | "TIMBER")) => Some(t),
+        Some("REBAR" | "REBAR_MESH") => Some("STEEL"),
+        _ => None,
+    });
+    Some((name.to_string(), category.unwrap_or(name).to_string()))
 }
 
 /// The IFC class and predefined type of a Vectorworks object: the entity Vectorworks itself
@@ -465,21 +575,39 @@ fn vectorworks_class(entity: &str, category: &str) -> (&'static str, &'static st
     }
 }
 
-/// Name, object type, tag, IFC class and predefined type of an element.
+/// Name, description, object type, tag, IFC class and predefined type (`""` for none) of an
+/// element.
 struct Identity {
     name: String,
+    description: Option<String>,
     object_type: Option<String>,
     tag: Option<String>,
     class: &'static str,
     predefined: &'static str,
 }
 
-fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) -> Identity {
+/// `run`: how the element runs, where its body is known (a Tekla beam's class follows it).
+fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)], run: Option<Run>) -> Identity {
     let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
     let category = get("category").unwrap_or(layer);
+    if format == "Tekla Structures" && matches!(key, Key::Element(_)) {
+        // as Tekla's own export: the name, the profile as description, the material as tag; a
+        // bolt group named after its standard; fasteners and rebars without profile and tag
+        let kind = get("Type").unwrap_or("");
+        let (class, predefined) = tekla_class(get("Name").unwrap_or(""), kind, get("Part type").unwrap_or(""), get("Profile").unwrap_or(""), run);
+        let part = !matches!(class, "IFCFASTENER" | "IFCMECHANICALFASTENER" | "IFCREINFORCINGBAR");
+        let name = if kind == "Bolt group" { get("Standard").or(get("Name")) } else { get("Name") };
+        return Identity {
+            name: name.unwrap_or(category).to_string(),
+            description: get("Profile").filter(|_| part).map(str::to_string),
+            object_type: None,
+            tag: get("Material").filter(|_| part).map(str::to_string),
+            class,
+            predefined,
+        };
+    }
     let (class, predefined) = match format {
         "Revit" => revit_class(category).unwrap_or(("IFCBUILDINGELEMENTPROXY", "NOTDEFINED")),
-        "Tekla Structures" if matches!(key, Key::Element(_)) => tekla_class(get("Name").unwrap_or(""), get("Type").unwrap_or(""), get("Profile").unwrap_or("")),
         "Archicad" => match category {
             "Wall" => ("IFCWALL", "NOTDEFINED"),
             "Slab" => ("IFCSLAB", "FLOOR"),
@@ -525,13 +653,13 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     let rhino = format == "Rhino";
     let object_type = if rhino { get("Type") } else { ["type", "Profile", "Definition", "Mesh"].iter().find_map(|k| get(k)) }.map(str::to_string);
     let tag = if rhino { get("Id") } else { ["id", "Tekla id"].iter().find_map(|k| get(k)) }.map(str::to_string);
-    Identity { name, object_type, tag, class, predefined }
+    Identity { name, description: None, object_type, tag, class, predefined }
 }
 
 /// The IFC class (upper case) the export gives an element of `format` with these properties on
 /// layer `layer`.
 pub(crate) fn export_class(format: &str, layer: &str, props: &[(String, String)]) -> &'static str {
-    identity(format, &Key::Element(0), layer, props).class
+    identity(format, &Key::Element(0), layer, props, None).class
 }
 
 /// The material names of an element: Revit's "materials" list or a single "Material".
@@ -614,9 +742,10 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     let mut curve_styles: HashMap<[u8; 4], u64> = HashMap::new();
 
     // project, site, building
+    let tekla = model.format == "Tekla Structures";
     let info = |k: &str| model.project.info.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
     let stem = Path::new(file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let project_name = info("name").map(str::to_string).unwrap_or(stem);
+    let project_name = info("name").or(info("Project name")).map(str::to_string).unwrap_or(stem);
     let project = f.add(format!(
         "IFCPROJECT({},$,{},$,$,{},$,(#{context}),#{unit_assignment})",
         text(&ids.get("project")),
@@ -626,18 +755,45 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     let project_props: Vec<(String, String)> = model.project.info.iter().filter(|(_, v)| !v.is_empty()).cloned().collect();
     property_set(&mut f, &ids, "project", "Project information", &project_props, project)?;
 
+    // Tekla: as Tekla's own export, site, building and storey are 'Unknown' where the model's
+    // locations (its Organizer) do not name them, with the project's address
+    let tekla_places = if tekla { TeklaPlaces::of(model, document) } else { TeklaPlaces::default() };
+    let address = if tekla { postal_address(&mut f, &info)? } else { None };
+    let address = address.map_or("$".to_string(), |a| format!("#{a}"));
+    let (site_name, building_name) = if tekla { ("Unknown", tekla_places.building.as_deref().unwrap_or("Unknown")) } else { ("Site", "Building") };
     let site_placement = f.add(format!("IFCLOCALPLACEMENT($,#{world})"))?;
-    let site = f.add(format!("IFCSITE({},$,'Site',$,$,#{site_placement},$,$,.ELEMENT.,$,$,$,$,$)", text(&ids.get("site"))))?;
+    let site = f.add(format!("IFCSITE({},$,{},$,$,#{site_placement},$,$,.ELEMENT.,$,$,$,$,{address})", text(&ids.get("site")), text(site_name)))?;
     let building_placement = f.add(format!("IFCLOCALPLACEMENT(#{site_placement},#{world})"))?;
     let building = f.add(format!(
-        "IFCBUILDING({},$,'Building',$,$,#{building_placement},$,$,.ELEMENT.,$,$,$)",
-        text(&ids.get("building"))
+        "IFCBUILDING({},$,{},$,$,#{building_placement},$,$,.ELEMENT.,$,$,{address})",
+        text(&ids.get("building")),
+        text(building_name)
     ))?;
     f.add(format!("IFCRELAGGREGATES({},$,$,$,#{project},(#{site}))", text(&ids.get("aggregates/project"))))?;
     f.add(format!("IFCRELAGGREGATES({},$,$,$,#{site},(#{building}))", text(&ids.get("aggregates/site"))))?;
 
-    // storeys: the document's levels (low to high: the model's and those added), else one at zero
+    // Tekla: the grids, one per level, in the building
+    let mut grid_layers: Vec<(String, Vec<u64>)> = Vec::new();
+    if tekla && !model.project.grids.is_empty() {
+        let footprint = f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('FootPrint','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?;
+        let mut grids = Vec::new();
+        for level in document.levels() {
+            if let Some((grid, representation)) = grid(&mut f, &ids, schema, units, &model.project.grids, &level.name, level.elevation, building_placement, footprint)? {
+                grids.push(grid);
+                grid_layers.push((format!("Grid {}", level.name), vec![representation]));
+            }
+        }
+        if !grids.is_empty() {
+            f.add(format!("IFCRELCONTAINEDINSPATIALSTRUCTURE({},$,$,$,{},#{building})", text(&ids.get("contained/building")), refs(&grids)))?;
+        }
+    }
+
+    // storeys: the document's levels (low to high: the model's and those added), else one at
+    // zero; Tekla's: those of its locations, else one
     let mut levels: Vec<(String, f64)> = document.levels().iter().map(|l| (l.name.clone(), l.elevation)).collect();
+    if tekla {
+        levels = tekla_places.storeys.clone();
+    }
     if levels.is_empty() {
         levels.push(("Level 0".to_string(), 0.0));
     }
@@ -659,7 +815,10 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     f.add(format!("IFCRELAGGREGATES({},$,$,$,#{building},{})", text(&ids.get("aggregates/building")), refs(&storey_ids)))?;
 
     // elements
-    let mut styles: HashMap<[u8; 4], u64> = HashMap::new();
+    // a surface style per colour; Tekla's per colour and material, named after the material
+    let mut styles: HashMap<([u8; 4], Option<String>), u64> = HashMap::new();
+    // the category of each material (Tekla's: steel, concrete, timber, else its name)
+    let mut categories: HashMap<String, String> = HashMap::new();
     let mut contained: Vec<Vec<u64>> = vec![Vec::new(); storeys.len()];
     let mut spaces: Vec<Vec<u64>> = vec![Vec::new(); storeys.len()];
     let mut by_material: Vec<(Vec<String>, Vec<u64>)> = Vec::new();
@@ -669,36 +828,51 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     // the GlobalIds the source file gives its elements (Tekla's, from its object GUIDs), once each
     let mut own_ids: HashSet<String> = HashSet::new();
     for product in products(model) {
-        let Some(body) = body(model, &product, units) else { continue };
         let props = match product.key {
             Key::Element(id) => model.element_props(id),
             Key::Layer(_) => Vec::new(),
         };
+        let prop = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
+        let kind = if tekla { prop("Type").unwrap_or("") } else { "" };
+        if tekla && tekla_left_out(kind) {
+            continue;
+        }
+        let Some(body) = body(model, &product, units, if tekla { tekla_colour(kind) } else { None }) else { continue };
         let key = match &product.key {
             Key::Element(id) => format!("element/{id}"),
             Key::Layer(name) => format!("layer/{name}"),
         };
-        let mut who = identity(&model.format, &product.key, &product.layer, &props);
+        let mut who = identity(&model.format, &product.key, &product.layer, &props, if tekla { run(&body) } else { None });
+        // Tekla: its material as Tekla's export names it, with its category
+        let tekla_material = if tekla { tekla_material(&props) } else { None };
+        if let Some((name, category)) = &tekla_material {
+            categories.entry(name.clone()).or_insert_with(|| category.clone());
+        }
         if body.sets.is_empty() {
             // curves only
             who.class = "IFCANNOTATION";
         }
         let annotation = who.class == "IFCANNOTATION";
 
-        // its storey: the level it names, else the highest level at or below its lowest point
-        let level = props.iter().find(|(k, _)| k == "level").map(|(_, v)| v.as_str());
-        let storey = level
-            .and_then(|l| levels.iter().position(|(n, _)| n == l))
-            .unwrap_or_else(|| levels.iter().rposition(|(_, z)| *z <= body.min_z + 0.01).unwrap_or(0));
+        // its storey: the level it names, else the highest level at or below its lowest point;
+        // Tekla's: the storey of its location, else the one for those without
+        let storey = if tekla {
+            tekla_places.storey(prop("Storey"))
+        } else {
+            prop("level")
+                .and_then(|l| levels.iter().position(|(n, _)| n == l))
+                .unwrap_or_else(|| levels.iter().rposition(|(_, z)| *z <= body.min_z + 0.01).unwrap_or(0))
+        };
         let (_, storey_placement, elevation) = storeys[storey];
 
         let mut items = Vec::new();
+        let style_name = tekla_material.as_ref().map(|(m, _)| m.clone());
         for (colour, set) in &body.sets {
-            let style = match styles.get(colour) {
+            let style = match styles.get(&(*colour, style_name.clone())) {
                 Some(&s) => s,
                 None => {
-                    let s = surface_style(&mut f, *colour)?;
-                    styles.insert(*colour, s);
+                    let s = surface_style(&mut f, *colour, style_name.as_deref())?;
+                    styles.insert((*colour, style_name.clone()), s);
                     s
                 }
             };
@@ -785,13 +959,15 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
         // else one derived from the file and the element
         let global_id = own_global_id(&props).filter(|g| own_ids.insert(g.clone())).unwrap_or_else(|| ids.get(&key));
         let head = format!(
-            "{}({},$,{},$,{},#{placement},#{shape},{}",
+            "{}({},$,{},{},{},#{placement},#{shape},{}",
             who.class,
             text(&global_id),
             text(&who.name),
+            opt(who.description.as_deref()),
             opt(who.object_type.as_deref()),
             opt(who.tag.as_deref()),
         );
+        let predefined = enumeration(who.predefined);
         let element = f.add(match who.class {
             // an annotation has no tag; a predefined type in IFC 4x3 only
             "IFCANNOTATION" => format!(
@@ -801,14 +977,14 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
                 opt(who.object_type.as_deref()),
                 if x3 { ",.NOTDEFINED." } else { "" },
             ),
-            "IFCDOOR" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
-            "IFCWINDOW" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
-            "IFCREINFORCINGBAR" => format!("{head},$,$,$,$,.{}.,$)", who.predefined),
+            "IFCDOOR" => format!("{head},$,$,{predefined},.NOTDEFINED.,$)"),
+            "IFCWINDOW" => format!("{head},$,$,{predefined},.NOTDEFINED.,$)"),
+            "IFCREINFORCINGBAR" => format!("{head},$,$,$,$,{predefined},$)"),
             // nominal diameter and length unknown here
-            "IFCMECHANICALFASTENER" => format!("{head},$,$,.{}.)", who.predefined),
+            "IFCMECHANICALFASTENER" => format!("{head},$,$,{predefined})"),
             // the tag is the long name; an element of its storey, not a composite
-            "IFCSPACE" => format!("{head},.ELEMENT.,.{}.,$)", who.predefined),
-            _ => format!("{head},.{}.)", who.predefined),
+            "IFCSPACE" => format!("{head},.ELEMENT.,{predefined},$)"),
+            _ => format!("{head},{predefined})"),
         })?;
         property_set(&mut f, &ids, &key, &model.format, &props, element)?;
 
@@ -820,7 +996,13 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
         }
         // a build-up is a layer set; else the materials the properties name
         let build_up = if annotation { None } else { layered(&props) };
-        let mats = if build_up.is_some() || annotation { Vec::new() } else { materials(&props) };
+        let mats = if build_up.is_some() || annotation {
+            Vec::new()
+        } else if tekla {
+            tekla_material.iter().map(|(m, _)| m.clone()).collect()
+        } else {
+            materials(&props)
+        };
         if let Some(build_up) = build_up {
             match by_build_up.iter_mut().find(|(b, _)| *b == build_up) {
                 Some((_, list)) => list.push(element),
@@ -833,11 +1015,14 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
                 None => by_material.push((mats, vec![element])),
             }
         }
-        match by_layer.iter_mut().find(|(l, _)| *l == product.layer) {
+        // its presentation layer: the layer it is drawn in; Tekla's export: its phase
+        let layer = if tekla { prop("Phase name").unwrap_or(&product.layer) } else { &product.layer };
+        match by_layer.iter_mut().find(|(l, _)| l == layer) {
             Some((_, list)) => list.extend(&representations),
-            None => by_layer.push((product.layer.clone(), representations)),
+            None => by_layer.push((layer.to_string(), representations)),
         }
     }
+    by_layer.extend(grid_layers);
 
     // relations
     for (i, elements) in spaces.iter().enumerate().filter(|(_, e)| !e.is_empty()) {
@@ -857,7 +1042,7 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
             let id = match material_ids.get(m) {
                 Some(&id) => id,
                 None => {
-                    let id = f.add(format!("IFCMATERIAL({},$,$)", text(m)))?;
+                    let id = f.add(format!("IFCMATERIAL({},$,{})", text(m), opt(categories.get(m).map(String::as_str))))?;
                     material_ids.insert(m.clone(), id);
                     id
                 }
@@ -916,13 +1101,153 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     Ok(())
 }
 
-/// A surface style for a colour (sRGB8, alpha 255 = opaque).
-fn surface_style(f: &mut Step<impl Write>, c: [u8; 4]) -> io::Result<u64> {
+/// A surface style for a colour (sRGB8, alpha 255 = opaque), named `name` or after its colour
+/// (`#RRGGBB`).
+fn surface_style(f: &mut Step<impl Write>, c: [u8; 4], name: Option<&str>) -> io::Result<u64> {
     let ratio = |v: u8| real(v as f64 / 255.0);
     let colour = f.add(format!("IFCCOLOURRGB($,{},{},{})", ratio(c[0]), ratio(c[1]), ratio(c[2])))?;
     let shading = f.add(format!("IFCSURFACESTYLESHADING(#{colour},{})", real(1.0 - c[3] as f64 / 255.0)))?;
-    let name = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    let name = name.map_or_else(|| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]), str::to_string);
     f.add(format!("IFCSURFACESTYLE({},.BOTH.,(#{shading}))", text(&name)))
+}
+
+/// Where Tekla's export puts things: the storeys of the model's locations (its Organizer) by name
+/// and height, the one for objects without, and the building's name where the locations give
+/// one. Without locations, one storey 'Unknown' at zero, as Tekla's export without them.
+#[derive(Default)]
+struct TeklaPlaces {
+    storeys: Vec<(String, f64)>,
+    /// The storey of objects without a location.
+    unplaced: usize,
+    building: Option<String>,
+}
+
+impl TeklaPlaces {
+    fn of(model: &Model, document: &Document) -> Self {
+        let mut names: Vec<String> = Vec::new();
+        let mut buildings: Vec<String> = Vec::new();
+        let mut any_unplaced = false;
+        let mut ids: Vec<&u64> = model.props.keys().collect();
+        ids.sort();
+        for id in ids {
+            let props = model.element_props(*id);
+            let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.trim()).filter(|v| !v.is_empty());
+            if get("Type").is_some_and(tekla_left_out) {
+                continue;
+            }
+            match get("Storey") {
+                Some(s) if !names.iter().any(|n| n == s) => names.push(s.to_string()),
+                Some(_) => {}
+                None => any_unplaced = true,
+            }
+            if let Some(b) = get("Building").filter(|b| !buildings.iter().any(|n| n == b)) {
+                buildings.push(b.to_string());
+            }
+        }
+        // a storey's height: the level of its name, else zero
+        let height = |name: &str| document.levels().iter().find(|l| l.name == name).map_or(0.0, |l| l.elevation);
+        let mut storeys: Vec<(String, f64)> = names.iter().map(|n| (n.clone(), height(n))).collect();
+        storeys.sort_by(|a, b| a.1.total_cmp(&b.1));
+        if any_unplaced || storeys.is_empty() {
+            storeys.push(("Unknown".to_string(), 0.0));
+        }
+        let unplaced = storeys.len() - 1;
+        let building = (buildings.len() == 1).then(|| buildings.remove(0));
+        TeklaPlaces { storeys, unplaced, building }
+    }
+
+    /// The storey of an object in the storey `name` of the locations.
+    fn storey(&self, name: Option<&str>) -> usize {
+        name.and_then(|n| self.storeys.iter().position(|(s, _)| s == n)).unwrap_or(self.unplaced)
+    }
+}
+
+/// The project's postal address (Tekla's project information), when it has a town or country.
+fn postal_address<'a>(f: &mut Step<impl Write>, info: &impl Fn(&str) -> Option<&'a str>) -> io::Result<Option<u64>> {
+    if info("Town").is_none() && info("Country").is_none() {
+        return Ok(None);
+    }
+    let lines = info("Address").map_or("$".to_string(), |a| format!("({})", text(a)));
+    Ok(Some(f.add(format!(
+        "IFCPOSTALADDRESS($,$,$,$,{lines},{},{},{},{},{})",
+        opt(info("Postal box")),
+        opt(info("Town")),
+        opt(info("Region")),
+        opt(info("Postal code")),
+        opt(info("Country")),
+    ))?))
+}
+
+/// An IfcGrid at a level, as Tekla's export writes one per level of its grids: the grid lines
+/// that run along y as its U axes, those along x as its V axes, each a 2D line in the grid's
+/// placement; with its 'FootPrint' representation. `None` without lines both ways.
+#[allow(clippy::too_many_arguments)]
+fn grid(
+    f: &mut Step<impl Write>,
+    ids: &Guids,
+    schema: Schema,
+    units: Units,
+    lines: &[crate::model::GridLine],
+    name: &str,
+    elevation: f64,
+    building_placement: u64,
+    footprint: u64,
+) -> io::Result<Option<(u64, u64)>> {
+    let mut u: Vec<&crate::model::GridLine> = Vec::new();
+    let mut v: Vec<&crate::model::GridLine> = Vec::new();
+    let mut seen: HashSet<(String, [i64; 4])> = HashSet::new();
+    for line in lines {
+        let ends = [line.a[0], line.a[1], line.b[0], line.b[1]].map(|c| units.quantise(c as f64));
+        if !seen.insert((line.name.clone(), ends)) || (ends[0], ends[1]) == (ends[2], ends[3]) {
+            continue;
+        }
+        if (ends[2] - ends[0]).abs() <= (ends[3] - ends[1]).abs() {
+            u.push(line);
+        } else {
+            v.push(line);
+        }
+    }
+    if u.is_empty() || v.is_empty() {
+        return Ok(None);
+    }
+    let list_end = if schema == Schema::Ifc4x3 { "),$)" } else { "))" };
+    let mut curves = Vec::new();
+    let mut axes = |f: &mut Step<_>, lines: &[&crate::model::GridLine]| -> io::Result<Vec<u64>> {
+        let mut out = Vec::new();
+        for line in lines {
+            let c = |x: f32| fixed(units.quantise(x as f64), units.decimals);
+            let points = f.add(format!("IFCCARTESIANPOINTLIST2D((({},{}),({},{})){list_end}", c(line.a[0]), c(line.a[1]), c(line.b[0]), c(line.b[1])))?;
+            let curve = f.add(format!("IFCINDEXEDPOLYCURVE(#{points},$,.F.)"))?;
+            curves.push(curve);
+            out.push(f.add(format!("IFCGRIDAXIS({},#{curve},.T.)", text(&line.name)))?);
+        }
+        Ok(out)
+    };
+    let u = axes(f, &u)?;
+    let v = axes(f, &v)?;
+    let point = f.add(format!("IFCCARTESIANPOINT((0.,0.,{}))", fixed(units.quantise(elevation), units.decimals)))?;
+    let placement = f.add(format!("IFCAXIS2PLACEMENT3D(#{point},$,$)"))?;
+    let placement = f.add(format!("IFCLOCALPLACEMENT(#{building_placement},#{placement})"))?;
+    let set = f.add(format!("IFCGEOMETRICCURVESET({})", refs(&curves)))?;
+    let representation = f.add(format!("IFCSHAPEREPRESENTATION(#{footprint},'FootPrint','GeometricCurveSet',(#{set}))"))?;
+    let shape = f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{representation}))"))?;
+    let grid = f.add(format!(
+        "IFCGRID({},$,{},$,$,#{placement},#{shape},{},{},$,.RECTANGULAR.)",
+        text(&ids.get(&format!("grid/{name}"))),
+        text(name),
+        refs(&u),
+        refs(&v),
+    ))?;
+    Ok(Some((grid, representation)))
+}
+
+/// An enumeration value: `.VALUE.`, or `$` for none (`""`).
+fn enumeration(value: &str) -> String {
+    if value.is_empty() {
+        "$".to_string()
+    } else {
+        format!(".{value}.")
+    }
 }
 
 /// A curve style for a colour (sRGB8; curves are drawn opaque).
@@ -1232,24 +1557,65 @@ mod tests {
     }
 
     #[test]
-    fn tekla_objects_get_the_class_of_what_they_are() {
-        assert_eq!(tekla_class("KOLOM", "Column", "HEA300"), ("IFCCOLUMN", "COLUMN"));
-        assert_eq!(tekla_class("SPANT", "Beam", "IPE400"), ("IFCBEAM", "BEAM"));
-        assert_eq!(tekla_class("WINDVERBAND", "Beam", "L80/8"), ("IFCMEMBER", "BRACE"));
-        assert_eq!(tekla_class("LUIFELLIGGER", "Polybeam", "IPE200"), ("IFCBEAM", "BEAM"));
-        assert_eq!(tekla_class("VLOER", "Slab", "200"), ("IFCSLAB", "FLOOR"));
-        assert_eq!(tekla_class("POER", "Pad footing", "1500*1500"), ("IFCFOOTING", "PAD_FOOTING"));
-        assert_eq!(tekla_class("FUNDERINGSBALK", "Strip footing", "600*800"), ("IFCFOOTING", "STRIP_FOOTING"));
-        assert_eq!(tekla_class("WELD", "Weld", ""), ("IFCFASTENER", "WELD"));
-        assert_eq!(tekla_class("BEUGEL", "Rebar group", ""), ("IFCREINFORCINGBAR", "NOTDEFINED"));
-        assert_eq!(tekla_class("STAAF", "Single rebar", ""), ("IFCREINFORCINGBAR", "NOTDEFINED"));
-        // a strip of plate a connection made as a column or beam
-        assert_eq!(tekla_class("PLAAT", "Column", "PL10*150"), ("IFCPLATE", "NOTDEFINED"));
-        assert_eq!(tekla_class("SCHOTJE", "Beam", "FL80*10"), ("IFCPLATE", "NOTDEFINED"));
+    fn tekla_objects_get_the_class_tekla_exports_them_as() {
+        assert_eq!(tekla_class("KOLOM", "Column", "COLUMN", "HEA300", Some(Run::Plumb)), ("IFCCOLUMN", "NOTDEFINED"));
+        assert_eq!(tekla_class("SPANT", "Beam", "BEAM", "IPE400", Some(Run::Level)), ("IFCBEAM", "NOTDEFINED"));
+        // a beam neither level nor plumb is a member; a plumb one stays a beam
+        assert_eq!(tekla_class("SCHROEF", "Beam", "BEAM", "D8", Some(Run::Inclined)), ("IFCMEMBER", "NOTDEFINED"));
+        assert_eq!(tekla_class("ANKER", "Beam", "BEAM", "D12", Some(Run::Plumb)), ("IFCBEAM", "NOTDEFINED"));
+        assert_eq!(tekla_class("LUIFELLIGGER", "Polybeam", "", "IPE200", None).0, "IFCBEAM");
+        assert_eq!(tekla_class("VLOER", "Slab", "SLAB", "200", None), ("IFCSLAB", "NOTDEFINED"));
+        assert_eq!(tekla_class("POER", "Pad footing", "", "1500*1500", None), ("IFCFOOTING", "PAD_FOOTING"));
+        assert_eq!(tekla_class("FUNDERINGSBALK", "Strip footing", "", "600*800", None), ("IFCFOOTING", "STRIP_FOOTING"));
+        // fasteners without a predefined type
+        assert_eq!(tekla_class("WELD", "Weld", "", "", None), ("IFCFASTENER", ""));
+        assert_eq!(tekla_class("M20 7990", "Bolt group", "", "", None), ("IFCMECHANICALFASTENER", ""));
+        assert_eq!(tekla_class("BEUGEL", "Rebar group", "", "", None), ("IFCREINFORCINGBAR", "NOTDEFINED"));
+        assert_eq!(tekla_class("STAAF", "Single rebar", "", "", None), ("IFCREINFORCINGBAR", "NOTDEFINED"));
+        // a beam or column of a plate's section stays one ("flat wide beams as plates" off)
+        assert_eq!(tekla_class("PLAAT", "Column", "COLUMN", "PL10*150", Some(Run::Plumb)).0, "IFCCOLUMN");
+        assert_eq!(tekla_class("SCHOTJE", "Beam", "BEAM", "FL80*10", Some(Run::Level)).0, "IFCBEAM");
+        // a profile part: by its part type, else a beam
+        assert_eq!(tekla_class("H_PAAL", "Profile part", "COLUMN", "300*300", Some(Run::Plumb)).0, "IFCCOLUMN");
+        assert_eq!(tekla_class("H_NOKKAP", "Profile part", "", "PL3", Some(Run::Level)).0, "IFCBEAM");
         // a file that does not say what the part is: by its name, in English or Dutch, or profile
-        assert_eq!(tekla_class("COLUMN", "Profile part", "HEA200").0, "IFCCOLUMN");
-        assert_eq!(tekla_class("GORDING", "Profile part", "UNP160").0, "IFCBEAM");
-        assert_eq!(tekla_class("P1", "Contour plate", "PL10").0, "IFCPLATE");
+        assert_eq!(tekla_class("COLUMN", "", "", "HEA200", None).0, "IFCCOLUMN");
+        assert_eq!(tekla_class("GORDING", "", "", "UNP160", None).0, "IFCBEAM");
+        assert_eq!(tekla_class("P1", "", "", "PL10", None).0, "IFCPLATE");
+        // what Tekla's export leaves out
+        assert!(tekla_left_out("Control point") && tekla_left_out("Grid plane") && tekla_left_out("Point load"));
+        assert!(!tekla_left_out("Beam") && !tekla_left_out("Weld"));
+    }
+
+    /// A bar of `length` along `along`, 0.1 square (quantised to 0.01 mm), as one face set.
+    fn bar(along: [f64; 3], length: f64) -> Body {
+        let n = { let l = (along[0] * along[0] + along[1] * along[1] + along[2] * along[2]).sqrt(); along.map(|c| c / l) };
+        // two directions across it
+        let up = if n[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+        let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let u = cross(n, up);
+        let lu = (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt();
+        let u = u.map(|c| c / lu);
+        let v = cross(n, u);
+        let corner = |i: usize| [0, 1, 2].map(|k| ((i & 1) as f64 * length * n[k] + ((i >> 1) & 1) as f64 * 0.1 * u[k] + ((i >> 2) & 1) as f64 * 0.1 * v[k]) * 1e5).map(|c| c.round() as i64);
+        let (_, idx) = cube([0.0; 3]);
+        let mut set = FaceSet::default();
+        for t in idx.chunks_exact(3) {
+            set.triangle([corner(t[0] as usize), corner(t[1] as usize), corner(t[2] as usize)]);
+        }
+        Body { origin: [0; 3], sets: vec![([0; 4], set)], curves: Vec::new(), min_z: 0.0 }
+    }
+
+    #[test]
+    fn bodies_run_along_their_longest_edges() {
+        assert_eq!(run(&bar([1.0, 0.0, 0.0], 3.0)), Some(Run::Level));
+        assert_eq!(run(&bar([1.0, 1.0, 0.0], 0.3)), Some(Run::Level));
+        assert_eq!(run(&bar([0.0, 0.0, 1.0], 0.3)), Some(Run::Plumb));
+        assert_eq!(run(&bar([1.0, 0.0, 2.0], 0.3)), Some(Run::Inclined));
+        assert_eq!(run(&bar([0.0, 1.0, 0.01], 5.0)), Some(Run::Inclined));
+        // a cube runs any of its ways, but not along a diagonal
+        assert_ne!(run(&bar([1.0, 0.0, 0.0], 0.1)), Some(Run::Inclined));
+        assert_eq!(run(&Body { origin: [0; 3], sets: Vec::new(), curves: Vec::new(), min_z: 0.0 }), None);
     }
 
     /// Two Tekla parts: a column with its GUID, and a beam whose GlobalId the column already has.

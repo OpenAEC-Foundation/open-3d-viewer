@@ -14,6 +14,9 @@
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
+//!   open-3d-viewer FILE.ifc --check OUT.html|json|csv [--ids FILE.ids] [--rules NAME] [--issues OUT.bcf]
+//!                  (the BIM Validator without a window: the report, and an issue per failed rule;
+//!                  ends with code 1 when a rule failed)
 //!
 //! In the OpenAEC SuperCloud (`managed`): OPENAEC_BEHEERD=1, OPENAEC_MAP (work folder),
 //! OPENAEC_TAAL, OPENAEC_THEMA, OPENAEC_OPEN (file to open), and OPENAEC_MCP_POORT with
@@ -84,6 +87,11 @@ struct Args {
     /// Do not take remote control commands (the MCP server).
     no_remote: bool,
     save_as: Option<PathBuf>,
+    /// `--check`: the report to write; with the rule set to check on and the BCF file for the
+    /// issues of what failed.
+    check: Option<PathBuf>,
+    rules: Option<String>,
+    issues: Option<PathBuf>,
     /// Exploded view for `--screenshot`: percent per axis, and the mode.
     explode: Option<[f32; 3]>,
     explode_mode: Option<explode::ExplodeMode>,
@@ -168,6 +176,9 @@ fn parse_args() -> Result<Args, String> {
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
+            "--check" => args.check = Some(PathBuf::from(value()?)),
+            "--rules" => args.rules = Some(value()?),
+            "--issues" => args.issues = Some(PathBuf::from(value()?)),
             "--explode" => {
                 let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--explode X,Y,Z")).collect::<Result<_, _>>()?;
                 args.explode = Some(<[f32; 3]>::try_from(v).map_err(|_| "--explode X,Y,Z")?);
@@ -218,6 +229,8 @@ pub fn main_as(edition: crate::product::Edition) {
         bench::run(file, args.frames.unwrap_or(300), args.throughput)
     } else if let Some(out) = &args.save_as {
         save_as(&args, out)
+    } else if let Some(out) = &args.check {
+        check(&args, out)
     } else if let Some(out) = &args.screenshot {
         screenshot(&args, out)
     } else if args.window_screenshot.is_some() {
@@ -259,6 +272,32 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
     export::save(&model, &crate::document::Document::from_model(&model), out, true)?;
     println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
     Ok(())
+}
+
+/// Checks FILE on a rule set without a window and writes the report: the BIM Validator from the
+/// command line, for scripts and build servers.
+#[cfg(feature = "validator")]
+fn check(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--check needs a FILE to check")?;
+    let mut app = App::default();
+    if let Some(language) = args.language {
+        app.collab.language = language;
+    }
+    app.set_model(Arc::new(loaders::load(file)?));
+    let (lines, failed) = app.collab_check_to(args.rules.as_deref(), args.ids.as_deref(), out, args.issues.as_deref())?;
+    for line in lines {
+        println!("{line}");
+    }
+    println!("report: {}", out.display());
+    if failed > 0 {
+        return Err(format!("{failed} rules failed"));
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "validator"))]
+fn check(_: &Args, _: &std::path::Path) -> Result<(), String> {
+    Err("this build has no BIM Validator".into())
 }
 
 fn initial_state(args: &Args) -> App {

@@ -15,6 +15,8 @@ pub mod report;
 pub mod svg;
 pub mod xlsx;
 
+pub use ifc::Schema as IfcSchema;
+
 use crate::document::Document;
 use crate::model::Model;
 use std::io;
@@ -54,11 +56,22 @@ pub fn writer_for(file_name: &str) -> Result<Box<dyn Writer>, String> {
         .ok_or_else(|| format!("Cannot save as .{ext}"))
 }
 
+/// The writer for the extension of `file_name`, a `.ifc` in `ifc`'s schema.
+pub fn writer_for_schema(file_name: &str, ifc: IfcSchema) -> Result<Box<dyn Writer>, String> {
+    let writer = writer_for(file_name)?;
+    Ok(if ifc == IfcSchema::Ifc4x3 && writer.extensions() == ["ifc"] { Box::new(ifc::Ifc4x3Writer) } else { writer })
+}
+
 /// Saves a model with the writer matching the extension of `path`, through [`write_file`]: a failed
 /// save leaves no half file behind, and an existing file is only replaced when `replace`.
 pub fn save(model: &Model, document: &Document, path: &Path, replace: bool) -> Result<(), String> {
+    save_schema(model, document, path, replace, IfcSchema::Ifc4)
+}
+
+/// As [`save`], a `.ifc` in `ifc`'s schema.
+pub fn save_schema(model: &Model, document: &Document, path: &Path, replace: bool, ifc: IfcSchema) -> Result<(), String> {
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let writer = writer_for(&file_name)?;
+    let writer = writer_for_schema(&file_name, ifc)?;
     write_file(path, replace, |out| writer.write(model, document, &file_name, out)).map_err(|e| format!("Cannot save {file_name}: {e}"))
 }
 
@@ -121,8 +134,13 @@ fn put_in_place(part: &Path, path: &Path, replace: bool) -> io::Result<()> {
 
 /// The model as the file `file_name`, in memory (the web app hands it to the browser).
 pub fn to_bytes(model: &Model, document: &Document, file_name: &str) -> Result<Vec<u8>, String> {
+    to_bytes_schema(model, document, file_name, IfcSchema::Ifc4)
+}
+
+/// As [`to_bytes`], a `.ifc` in `ifc`'s schema.
+pub fn to_bytes_schema(model: &Model, document: &Document, file_name: &str, ifc: IfcSchema) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    writer_for(file_name)?.write(model, document, file_name, &mut out).map_err(|e| format!("Cannot save {file_name}: {e}"))?;
+    writer_for_schema(file_name, ifc)?.write(model, document, file_name, &mut out).map_err(|e| format!("Cannot save {file_name}: {e}"))?;
     Ok(out)
 }
 
@@ -160,6 +178,10 @@ mod tests {
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.starts_with("ISO-10303-21;") && text.trim_end().ends_with("END-ISO-10303-21;"));
             assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());
+            // and as IFC 4x3
+            super::save_schema(&model, &crate::document::Document::from_model(&model), &out, true, super::IfcSchema::Ifc4x3).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let text = std::fs::read_to_string(&out).unwrap();
+            assert!(text.contains("FILE_SCHEMA(('IFC4X3_ADD2'));") && text.contains("IFCTRIANGULATEDFACESET("), "{}", path.display());
             saved += 1;
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -188,6 +210,14 @@ mod tests {
             let geometry = text.contains("IFCTRIANGULATEDFACESET(") || text.contains("=IFCINDEXEDPOLYCURVE(");
             assert!(geometry, "{}: no geometry", path.display());
             assert!(text.contains("IFCPROPERTYSET(") && text.contains("'Rhino'"), "{}: no Rhino properties", path.display());
+            if path.file_stem().is_some_and(|s| s == "lights") {
+                // five lights with a place, as annotations; the box a proxy
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 5, "{}", path.display());
+                assert_eq!(text.matches("=IFCBUILDINGELEMENTPROXY(").count(), 1, "{}", path.display());
+            }
+            if path.file_stem().is_some_and(|s| s == "clipping") {
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 3, "{}", path.display());
+            }
             if path.file_stem().is_some_and(|s| s == "drafting") {
                 // 7 curves, 6 texts and 5 hatches
                 assert_eq!(text.matches("=IFCANNOTATION(").count(), 18);

@@ -29,13 +29,16 @@ pub enum Product {
     /// The documents of the project folder: their status, their revisions and the elements they
     /// are about.
     Docs,
+    /// Where the project lies and what lies around it: the place, the parcels and buildings,
+    /// the terrain.
+    Gis,
     /// The libraries a project draws on: the general one, a country's content, a company's house
     /// style and the project's own.
     Library,
 }
 
 impl Product {
-    pub const ALL: [Product; 7] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs, Product::Library];
+    pub const ALL: [Product; 8] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs, Product::Gis, Product::Library];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
@@ -46,6 +49,7 @@ impl Product {
             Product::Pointcloud => "pointcloud",
             Product::Analysis => "analysis",
             Product::Docs => "docs",
+            Product::Gis => "gis",
             Product::Library => "library",
         }
     }
@@ -60,6 +64,7 @@ impl Product {
             "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
             "analysis" | "structural-analysis" => Some(Product::Analysis),
             "docs" | "documents" => Some(Product::Docs),
+            "gis" => Some(Product::Gis),
             "library" | "libraries" => Some(Product::Library),
             _ => None,
         }
@@ -71,10 +76,11 @@ impl Product {
         match self {
             Product::Viewer => "View",
             Product::Modeller => "Modeller",
-            Product::Validator => "Collab",
+            Product::Validator => "Validator",
             Product::Pointcloud => "PointCloud",
             Product::Analysis => "Struct",
             Product::Docs => "Docs",
+            Product::Gis => "GIS",
             Product::Library => "Library",
         }
     }
@@ -88,6 +94,7 @@ impl Product {
             Product::Pointcloud => "Pointcloud",
             Product::Analysis => "Structural Analysis",
             Product::Docs => "Docs",
+            Product::Gis => "GIS",
             Product::Library => "Library",
         }
     }
@@ -97,7 +104,7 @@ impl Product {
     pub fn stage(self) -> Option<&'static str> {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
-            Product::Pointcloud | Product::Analysis | Product::Docs | Product::Library => Some("(alpha)"),
+            Product::Pointcloud | Product::Analysis | Product::Docs | Product::Gis | Product::Library => Some("(alpha)"),
             Product::Viewer | Product::Validator => None,
         }
     }
@@ -111,6 +118,7 @@ impl Product {
             Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
             Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
             Product::Docs => l.text("De documenten van het project: status, versies en koppelingen met het model", "The documents of the project: status, revisions and links to the model"),
+            Product::Gis => l.text("Waar het project ligt en wat eromheen ligt: de plek, percelen en panden, het terrein", "Where the project lies and what lies around it: the place, parcels and buildings, the terrain"),
             Product::Library => l.text("De bibliotheken: algemeen, per land, van het bedrijf en van het project", "The libraries: general, per country, of the company and of the project"),
         }
     }
@@ -124,6 +132,7 @@ impl Product {
             Product::Pointcloud => "product.pointcloud",
             Product::Analysis => "product.analysis",
             Product::Docs => "product.docs",
+            Product::Gis => "product.gis",
             Product::Library => "product.library",
         }
     }
@@ -137,6 +146,7 @@ impl Product {
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
             Product::Docs => &[RibbonPage::Docs, RibbonPage::View],
+            Product::Gis => &[RibbonPage::Gis, RibbonPage::View],
             // its page is no view of a model: it has its own tab only
             Product::Library => &[RibbonPage::Library],
         }
@@ -151,6 +161,7 @@ impl Product {
             Product::Pointcloud => "Open BIM Pointcloud",
             Product::Analysis => "Open BIM Structural Analysis",
             Product::Docs => "Open BIM Docs",
+            Product::Gis => "Open BIM GIS",
             Product::Library => "Open BIM Library",
         }
     }
@@ -164,6 +175,7 @@ impl Product {
             Product::Pointcloud => "open-bim-pointcloud",
             Product::Analysis => "open-bim-analysis",
             Product::Docs => "open-bim-docs",
+            Product::Gis => "open-bim-gis",
             Product::Library => "open-bim-library",
         }
     }
@@ -179,6 +191,8 @@ impl Product {
             Product::Analysis => cfg!(feature = "viewer"),
             // in every desktop build: a project folder is a folder of the computer
             Product::Docs => cfg!(not(target_arch = "wasm32")),
+            // part of the viewer: map layers and terrain are models like any other
+            Product::Gis => cfg!(feature = "viewer"),
             // in every build: the libraries come with the suite itself
             Product::Library => true,
         }
@@ -254,6 +268,8 @@ pub enum RibbonPage {
     Analysis,
     /// Docs: the project folder, and opening and linking the picked document.
     Docs,
+    /// GIS: the surroundings and the terrain of the place.
+    Gis,
     /// Library: the source whose library shows.
     Library,
 }
@@ -271,6 +287,7 @@ impl RibbonPage {
             RibbonPage::Cloud => l.text("Puntenwolk", "Point cloud"),
             RibbonPage::Analysis => l.text("Rekenmodel", "Analysis"),
             RibbonPage::Docs => "Docs",
+            RibbonPage::Gis => "GIS",
             RibbonPage::Library => l.text("Bibliotheek", "Library"),
         }
     }
@@ -407,8 +424,8 @@ mod tests {
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
         // the switch: short names, and the four in alpha are the grey ones
-        assert_eq!(Product::ALL.map(Product::label), ["View", "Collab", "PointCloud", "Struct", "Modeller", "Docs", "Library"]);
-        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true, true]);
+        assert_eq!(Product::ALL.map(Product::label), ["View", "Validator", "PointCloud", "Struct", "Modeller", "Docs", "GIS", "Library"]);
+        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true, true, true]);
     }
 
     #[test]
@@ -419,7 +436,7 @@ mod tests {
         names.dedup();
         ids.sort();
         ids.dedup();
-        assert_eq!((names.len(), ids.len()), (7, 7));
+        assert_eq!((names.len(), ids.len()), (8, 8));
         // the Studio is what was released as the viewer: same name, same installer id
         assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);

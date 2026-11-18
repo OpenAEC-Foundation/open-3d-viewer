@@ -45,6 +45,9 @@ pub mod libraries;
 pub mod library;
 mod marks;
 mod gis;
+mod terrain;
+pub use gis::Message as GisMessage;
+pub use terrain::Message as TerrainMessage;
 mod origin;
 mod origin_map;
 pub mod modeller;
@@ -199,6 +202,9 @@ pub struct App {
     /// The undo histories of the views not shown, by view path (the 3D view: "").
     parked_histories: std::collections::HashMap<String, History<ViewState>>,
     pub status: Status,
+    /// The schema the next save writes a `.ifc` in (Export IFC 4x3, `save_file` with a schema);
+    /// back to IFC 4 once that save starts.
+    pub(crate) save_schema: export::IfcSchema,
     pub viewport_size: (f32, f32),
     /// The last press was a finger's, not the mouse's: the hint shows the touch gestures.
     pub fingers: bool,
@@ -468,6 +474,8 @@ pub enum Message {
     ProjectView(Arc<str>),
     Loaded(Result<Arc<Model>, String>),
     SaveDialog,
+    /// File > Export IFC 4x3: ask where, then save the model as a `.ifc` in that schema.
+    SaveIfcDialog(export::IfcSchema),
     SavePicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
@@ -918,6 +926,7 @@ impl Default for App {
             parked_hidden: None,
             parked_histories: Default::default(),
             status: Status::Ready,
+            save_schema: export::IfcSchema::default(),
             viewport_size: (1000.0, 700.0),
             fingers: false,
             initial_view: None,
@@ -1157,16 +1166,39 @@ fn save_dialog_task(model: &Model) -> Task<Message> {
     Task::done(Message::SavePicked(Some(PathBuf::from(save_name(model)))))
 }
 
+/// The model's name as a `.ifc`.
+fn ifc_name(model: &Model) -> String {
+    let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+    format!("{stem}.ifc")
+}
+
+/// Asks where to save the model as a `.ifc` in `schema` (the dialog shows that schema's name).
+#[cfg(not(target_arch = "wasm32"))]
+fn ifc_dialog_task(model: &Model, schema: export::IfcSchema) -> Task<Message> {
+    let mut dialog = rfd::AsyncFileDialog::new().set_title(format!("Export {}", schema.label())).set_file_name(ifc_name(model));
+    if let Some(dir) = crate::managed::dialog_folder(model.path.parent().map(PathBuf::from), crate::managed::work_folder()) {
+        dialog = dialog.set_directory(dir);
+    }
+    dialog = dialog.add_filter(schema.label(), &["ifc"]);
+    Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::SavePicked)
+}
+
+/// The browser: the `.ifc` goes to the downloads.
+#[cfg(target_arch = "wasm32")]
+fn ifc_dialog_task(model: &Model, _schema: export::IfcSchema) -> Task<Message> {
+    Task::done(Message::SavePicked(Some(PathBuf::from(ifc_name(model)))))
+}
+
 /// Saves the model with the document on a worker thread; an existing file is only replaced when
 /// `replace`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: bool) -> Task<Message> {
+pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: bool, ifc: export::IfcSchema) -> Task<Message> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
                 let start = Instant::now();
-                let _ = tx.send(export::save(&model, &document, &path, replace).map(|()| (path, start.elapsed().as_secs_f32())));
+                let _ = tx.send(export::save_schema(&model, &document, &path, replace, ifc).map(|()| (path, start.elapsed().as_secs_f32())));
             });
             rx.await.unwrap_or_else(|_| Err("save thread stopped".to_string()))
         },
@@ -1176,13 +1208,13 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: 
 
 /// Saves the model in the browser: written in memory and handed over as a download.
 #[cfg(target_arch = "wasm32")]
-pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace: bool) -> Task<Message> {
+pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace: bool, ifc: export::IfcSchema) -> Task<Message> {
     Task::perform(
         async move {
             crate::web::next_frame().await;
             let start = Instant::now();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let bytes = export::to_bytes(&model, &document, &name)?;
+            let bytes = export::to_bytes_schema(&model, &document, &name, ifc)?;
             crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
             Ok((path, start.elapsed().as_secs_f32()))
         },
@@ -1215,7 +1247,8 @@ impl App {
         }
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.status = Status::Saving { file, since: Instant::now() };
-        save_task(model, self.document_now(), path, replace)
+        let schema = std::mem::take(&mut self.save_schema);
+        save_task(model, self.document_now(), path, replace, schema)
     }
 
     pub(crate) fn model_matrix(&self) -> Mat4 {
@@ -1907,9 +1940,18 @@ impl App {
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
                     return Task::none();
                 }
+                self.save_schema = export::IfcSchema::Ifc4;
                 return save_dialog_task(model);
             }
-            Message::SavePicked(None) => {}
+            Message::SaveIfcDialog(schema) => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                self.save_schema = schema;
+                return ifc_dialog_task(model, schema);
+            }
+            Message::SavePicked(None) => self.save_schema = export::IfcSchema::Ifc4,
             // the dialog asked before replacing a file
             Message::SavePicked(Some(path)) => return self.start_save(path, true),
             Message::Saved(result) => {

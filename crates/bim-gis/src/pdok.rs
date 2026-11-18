@@ -169,9 +169,24 @@ pub struct Collection {
 /// has its `name` and keeps what the register says about it (links to other records left out).
 /// A parcel comes as its boundary lines, a building as its area.
 pub fn collection(layer: Layer, items: &[Value], frame: &Frame) -> Collection {
+    collection_on(layer, items, frame, None)
+}
+
+/// The height of the ground at a place of the project, where it is known.
+pub type Ground<'a> = &'a dyn Fn(f64, f64) -> Option<f64>;
+
+/// How far over the ground a feature lies, so it shows on it (m).
+pub const LIFT: f64 = 0.05;
+/// The longest piece of a boundary line between two heights of the ground (m).
+const STEP: f64 = 5.0;
+
+/// As [`collection`], with the features laid on the ground: a parcel's boundary follows it,
+/// a height every few metres, and a building lies flat at the highest ground under its outline.
+/// Where the ground is not known a boundary keeps the last height it had.
+pub fn collection_on(layer: Layer, items: &[Value], frame: &Frame, ground: Option<Ground>) -> Collection {
     let mut features = Vec::new();
     for item in items {
-        let Some(geometry) = item.get("geometry").and_then(|g| shape(layer, g, frame)) else { continue };
+        let Some(geometry) = item.get("geometry").and_then(|g| shape(layer, g, frame, ground)) else { continue };
         let given = item["properties"].as_object().cloned().unwrap_or_default();
         let mut properties = Map::new();
         properties.insert("name".into(), json!(name(layer, &given)));
@@ -197,28 +212,67 @@ pub fn collection(layer: Layer, items: &[Value], frame: &Frame) -> Collection {
 }
 
 /// A geometry of the service in the coordinates of `frame`: the rings of a parcel as lines, a
-/// building as it is. `None` for anything but areas.
-fn shape(layer: Layer, geometry: &Value, frame: &Frame) -> Option<Value> {
-    let coordinates = local(&geometry["coordinates"], frame)?;
-    match (geometry["type"].as_str()?, layer) {
-        (kind @ ("Polygon" | "MultiPolygon"), Layer::Buildings) => Some(json!({ "type": kind, "coordinates": coordinates })),
-        ("Polygon", Layer::Parcels) => Some(json!({ "type": "MultiLineString", "coordinates": coordinates })),
-        ("MultiPolygon", Layer::Parcels) => {
-            let rings: Vec<Value> = coordinates.as_array()?.iter().flat_map(|polygon| polygon.as_array().cloned().unwrap_or_default()).collect();
-            Some(json!({ "type": "MultiLineString", "coordinates": rings }))
+/// building as it is, both on the ground when it is given. `None` for anything but areas.
+fn shape(layer: Layer, geometry: &Value, frame: &Frame, ground: Option<Ground>) -> Option<Value> {
+    let polygons: Vec<Vec<Vec<[f64; 2]>>> = match geometry["type"].as_str()? {
+        "Polygon" => vec![rings(&geometry["coordinates"], frame)?],
+        "MultiPolygon" => geometry["coordinates"].as_array()?.iter().map(|polygon| rings(polygon, frame)).collect::<Option<_>>()?,
+        _ => return None,
+    };
+    match layer {
+        Layer::Buildings => {
+            let flat = |polygon: &Vec<Vec<[f64; 2]>>| -> Value {
+                // the highest ground under the outline, so the whole building shows
+                let top = ground.and_then(|ground| polygon.first()?.iter().filter_map(|p| ground(p[0], p[1])).reduce(f64::max));
+                let position = |p: &[f64; 2]| match top {
+                    Some(top) => json!([p[0], p[1], top + LIFT]),
+                    None => json!([p[0], p[1]]),
+                };
+                Value::Array(polygon.iter().map(|ring| Value::Array(ring.iter().map(position).collect())).collect())
+            };
+            Some(match &polygons[..] {
+                [one] if geometry["type"] == "Polygon" => json!({ "type": "Polygon", "coordinates": flat(one) }),
+                many => json!({ "type": "MultiPolygon", "coordinates": many.iter().map(flat).collect::<Vec<_>>() }),
+            })
         }
-        _ => None,
+        Layer::Parcels => {
+            let lines: Vec<Value> = polygons.iter().flatten().map(|ring| draped(ring, ground)).collect();
+            Some(json!({ "type": "MultiLineString", "coordinates": lines }))
+        }
     }
 }
 
-/// Nested positions of the grid as positions of `frame`, heights dropped.
-fn local(coordinates: &Value, frame: &Frame) -> Option<Value> {
-    let list = coordinates.as_array()?;
-    if let (Some(x), Some(y)) = (list.first().and_then(Value::as_f64), list.get(1).and_then(Value::as_f64)) {
-        let [x, y] = frame.local(Rd::new(x, y));
-        return Some(json!([x, y]));
+/// The rings of a polygon of the service in the coordinates of `frame`.
+fn rings(polygon: &Value, frame: &Frame) -> Option<Vec<Vec<[f64; 2]>>> {
+    polygon
+        .as_array()?
+        .iter()
+        .map(|ring| ring.as_array()?.iter().map(|p| Some(frame.local(Rd::new(p.get(0)?.as_f64()?, p.get(1)?.as_f64()?)))).collect::<Option<Vec<_>>>())
+        .collect()
+}
+
+/// A line as positions: as it is without ground; on the ground with a height at its points and
+/// every few metres between them.
+fn draped(line: &[[f64; 2]], ground: Option<Ground>) -> Value {
+    let Some(ground) = ground else { return Value::Array(line.iter().map(|p| json!([p[0], p[1]])).collect()) };
+    let mut last = 0.0;
+    let mut at = |p: [f64; 2]| {
+        last = ground(p[0], p[1]).map_or(last, |z| z + LIFT);
+        json!([p[0], p[1], last])
+    };
+    let mut out = Vec::new();
+    for pair in line.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let pieces = ((a[0] - b[0]).hypot(a[1] - b[1]) / STEP).ceil().max(1.0) as usize;
+        for k in 0..pieces {
+            let t = k as f64 / pieces as f64;
+            out.push(at([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]));
+        }
     }
-    list.iter().map(|inner| local(inner, frame)).collect::<Option<Vec<_>>>().map(Value::Array)
+    if let Some(end) = line.last() {
+        out.push(at(*end));
+    }
+    Value::Array(out)
 }
 
 /// The first position in nested positions.
@@ -310,6 +364,30 @@ mod tests {
         let b = &feature["properties"];
         assert_eq!((b["name"].as_str(), b["bouwjaar"].as_i64(), b["source"].as_str()), (Some("0307100000370278"), Some(1974), Some("Kadaster, BAG (PDOK)")));
         assert!(b.get("verblijfsobject.href").is_none() && b.get("rdf_seealso").is_none() && b.get("oppervlakte").is_none());
+    }
+
+    #[test]
+    fn features_lie_on_the_ground_where_it_is_known() {
+        // ground that rises a metre every ten to the east, known only east of the zero
+        let ground = |x: f64, _y: f64| (x >= 0.0).then_some(x / 10.0);
+        let frame = Frame::at(Rd::new(100_000.0, 400_000.0));
+        let parcel = json!({"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[100000.0,400000.0],[100020.0,400000.0],[100020.0,400004.0],[100000.0,400000.0]]]},"properties":{}});
+        let on = collection_on(Layer::Parcels, &[parcel], &frame, Some(&ground));
+        let line = on.geojson["features"][0]["geometry"]["coordinates"][0].as_array().unwrap().clone();
+        // 20 m in four pieces, 4 m in one, back in five: a height at each, a little over the ground
+        assert_eq!(line.len(), 4 + 1 + 5 + 1);
+        assert_eq!(line[0], json!([0.0, 0.0, LIFT]));
+        assert_eq!(line[2], json!([10.0, 0.0, 1.0 + LIFT]));
+        assert_eq!(line[4], json!([20.0, 0.0, 2.0 + LIFT]));
+        assert_eq!(on.first, Some([0.0, 0.0]));
+        // a building lies flat at the highest ground under its outline
+        let building = json!({"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[100010.0,400000.0],[100030.0,400000.0],[100030.0,400010.0],[100010.0,400000.0]]]},"properties":{"identificatie":"1"}});
+        let on = collection_on(Layer::Buildings, &[building.clone()], &frame, Some(&ground));
+        assert_eq!(on.geojson["features"][0]["geometry"]["coordinates"][0][0], json!([10.0, 0.0, 3.0 + LIFT]));
+        // where no ground is known the building stays as it was
+        let west = Frame::at(Rd::new(100_100.0, 400_000.0));
+        let off = collection_on(Layer::Buildings, &[building], &west, Some(&ground));
+        assert_eq!(off.geojson["features"][0]["geometry"]["coordinates"][0][0], json!([-90.0, 0.0]));
     }
 
     #[test]

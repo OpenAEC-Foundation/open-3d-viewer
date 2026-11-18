@@ -1,5 +1,10 @@
-//! IFC 4 (ISO 16739-1:2018, ADD2 TC1) as a STEP physical file (ISO 10303-21), for every model the
-//! viewer opens.
+//! IFC 4 (ISO 16739-1:2018, ADD2 TC1) or IFC 4x3 (ISO 16739-1:2024, IFC4X3_ADD2) as a STEP
+//! physical file (ISO 10303-21), for every model the viewer opens. Written by the viewer itself,
+//! without an IFC library.
+//!
+//! - The two schemas differ in what this writer writes in three places only: IFC 4x3 point lists
+//!   have a `TagList` (written empty), an IfcAnnotation has a `PredefinedType`, and the header
+//!   names the schema (`IFC4X3_ADD2`) and its Reference View.
 //!
 //! - Spatial structure: project, site, building and one storey per level of the model (Revit),
 //!   else one storey; each element is contained in its level, or the storey it stands on.
@@ -34,7 +39,49 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::Path;
 
+/// The IFC schema a `.ifc` is written in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Schema {
+    /// IFC 4 ADD2 TC1, what a `.ifc` is unless IFC 4x3 is asked for.
+    #[default]
+    Ifc4,
+    /// IFC 4x3 ADD2, the current ISO 16739-1.
+    Ifc4x3,
+}
+
+impl Schema {
+    /// Its name in the file header.
+    fn step(self) -> &'static str {
+        match self {
+            Schema::Ifc4 => "IFC4",
+            Schema::Ifc4x3 => "IFC4X3_ADD2",
+        }
+    }
+
+    /// Its name for people: "IFC 4", "IFC 4x3".
+    pub fn label(self) -> &'static str {
+        match self {
+            Schema::Ifc4 => "IFC 4",
+            Schema::Ifc4x3 => "IFC 4x3",
+        }
+    }
+
+    /// The schema a name gives: IFC4, IFC4X3, IFC4X3_ADD2, 4x3 (any case, with or without a space).
+    pub fn parse(name: &str) -> Option<Schema> {
+        let n: String = name.chars().filter(|c| !c.is_whitespace() && *c != '.').collect::<String>().to_uppercase();
+        match n.trim_start_matches("IFC") {
+            "4" | "4ADD2" | "4ADD2TC1" => Some(Schema::Ifc4),
+            "4X3" | "4X3ADD2" | "4X3_ADD2" => Some(Schema::Ifc4x3),
+            _ => None,
+        }
+    }
+}
+
+/// IFC 4 for a `.ifc`.
 pub struct IfcWriter;
+
+/// IFC 4x3 for a `.ifc`, when that is asked for (File > Export IFC 4x3, `save_file` with a schema).
+pub struct Ifc4x3Writer;
 
 impl super::Writer for IfcWriter {
     fn name(&self) -> &'static str {
@@ -51,6 +98,24 @@ impl super::Writer for IfcWriter {
 
     fn write(&self, model: &Model, document: &Document, file_name: &str, mut out: &mut dyn Write) -> io::Result<()> {
         write(model, document, file_name, &mut out)
+    }
+}
+
+impl super::Writer for Ifc4x3Writer {
+    fn name(&self) -> &'static str {
+        "IFC 4x3"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["ifc"]
+    }
+
+    fn mime(&self) -> &'static str {
+        "application/x-step"
+    }
+
+    fn write(&self, model: &Model, document: &Document, file_name: &str, mut out: &mut dyn Write) -> io::Result<()> {
+        write_schema(model, document, file_name, Schema::Ifc4x3, &mut out)
     }
 }
 
@@ -454,7 +519,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     };
     let (class, predefined) = match (format, get("Type")) {
         // Rhino's drafting: annotations
-        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark" | "Clipping plane")) => ("IFCANNOTATION", "NOTDEFINED"),
+        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark" | "Clipping plane" | "Light")) => ("IFCANNOTATION", "NOTDEFINED"),
         _ => (class, predefined),
     };
     let rhino = format == "Rhino";
@@ -505,15 +570,25 @@ fn layered(props: &[(String, String)]) -> Option<Layered> {
 
 /// Writes the model as an IFC 4 file named `file_name`, with the document's levels as storeys.
 pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl Write) -> io::Result<()> {
+    write_schema(model, document, file_name, Schema::Ifc4, out)
+}
+
+/// Writes the model as an IFC file in `schema` named `file_name`, with the document's levels as
+/// storeys.
+pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema: Schema, out: &mut impl Write) -> io::Result<()> {
+    let x3 = schema == Schema::Ifc4x3;
+    // a point list's end: IFC 4x3 adds its (empty) TagList
+    let list_end = if x3 { "),$)" } else { "))" };
     let units = Units::of(model);
     let app = format!("Open BIM Suite {}", env!("CARGO_PKG_VERSION"));
     let ids = Guids { seed: file_name.to_string() };
 
     writeln!(out, "ISO-10303-21;")?;
     writeln!(out, "HEADER;")?;
-    writeln!(out, "FILE_DESCRIPTION(('ViewDefinition [ReferenceView_V1.2]'),'2;1');")?;
+    let view = if x3 { "ReferenceView" } else { "ReferenceView_V1.2" };
+    writeln!(out, "FILE_DESCRIPTION(('ViewDefinition [{view}]'),'2;1');")?;
     writeln!(out, "FILE_NAME({},{},(''),(''),{},{},'');", text(file_name), text(&timestamp()), text(&app), text(&app))?;
-    writeln!(out, "FILE_SCHEMA(('IFC4'));")?;
+    writeln!(out, "FILE_SCHEMA(('{}'));", schema.step())?;
     writeln!(out, "ENDSEC;")?;
     writeln!(out, "DATA;")?;
     let mut f = Step { out, next: 1 };
@@ -641,7 +716,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
                     fixed(p[2], units.decimals)
                 );
             }
-            coords.push_str("))");
+            coords.push_str(list_end);
             let points = f.add(coords)?;
             let mut faces = String::with_capacity(set.triangles.len() * 20);
             let _ = write!(faces, "IFCTRIANGULATEDFACESET(#{points},$,{},(", if set.closed() { ".T." } else { ".F." });
@@ -674,7 +749,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
                 }
                 let _ = write!(coords, "({},{},{})", fixed(p[0], units.decimals), fixed(p[1], units.decimals), fixed(p[2], units.decimals));
             }
-            coords.push_str("))");
+            coords.push_str(list_end);
             let list = f.add(coords)?;
             let item = f.add(format!("IFCINDEXEDPOLYCURVE(#{list},$,.F.)"))?;
             f.add(format!("IFCSTYLEDITEM(#{item},(#{style}),$)"))?;
@@ -718,12 +793,13 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             opt(who.tag.as_deref()),
         );
         let element = f.add(match who.class {
-            // an annotation has no tag or predefined type in IFC 4
+            // an annotation has no tag; a predefined type in IFC 4x3 only
             "IFCANNOTATION" => format!(
-                "IFCANNOTATION({},$,{},$,{},#{placement},#{shape})",
+                "IFCANNOTATION({},$,{},$,{},#{placement},#{shape}{})",
                 text(&ids.get(&key)),
                 text(&who.name),
-                opt(who.object_type.as_deref())
+                opt(who.object_type.as_deref()),
+                if x3 { ",.NOTDEFINED." } else { "" },
             ),
             "IFCDOOR" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCWINDOW" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
@@ -1083,6 +1159,76 @@ mod tests {
         let mut out = Vec::new();
         write(model, &Document::from_model(model), "test.ifc", &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    fn ifc4x3(model: &Model) -> String {
+        let mut out = Vec::new();
+        write_schema(model, &Document::from_model(model), "test.ifc", Schema::Ifc4x3, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// A Rhino model with a curve of its own (an annotation) and a box.
+    fn rhino_curve_model() -> Model {
+        let (positions, idx) = cube([0.0, 0.0, 0.0]);
+        let (mut positions, normals, indices) = flat_shaded(&positions, &idx);
+        let first = (positions.len() / 3) as u32;
+        positions.extend_from_slice(&[0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 0.0]);
+        let mut normals = normals;
+        normals.extend_from_slice(&[0.0; 9]);
+        let layer = Layer {
+            name: "Default".into(),
+            color: [0.2, 0.2, 0.2],
+            positions,
+            normals,
+            indices,
+            elements: vec![(1, 0, 36)],
+            lines: vec![first, first + 1, first + 1, first + 2],
+            line_elements: vec![(2, 0, 4)],
+            props: vec![(1, r#"{"Type":"Brep","Id":"a"}"#.into()), (2, r#"{"Type":"Curve","Id":"b"}"#.into())],
+            ..Layer::default()
+        };
+        Model::new(PathBuf::from("test.3dm"), "Rhino", vec![layer])
+    }
+
+    #[test]
+    fn ifc4x3_names_its_schema_and_writes_its_own_attributes() {
+        for model in [revit_model(), rhino_curve_model()] {
+            let s = ifc4x3(&model);
+            assert!(s.contains("FILE_SCHEMA(('IFC4X3_ADD2'));"), "{s}");
+            assert!(s.contains("ViewDefinition [ReferenceView]"), "{s}");
+            // point lists: with their (empty) TagList
+            let lists: Vec<&str> = s.lines().filter(|l| l.contains("=IFCCARTESIANPOINTLIST3D(")).collect();
+            assert!(!lists.is_empty());
+            assert!(lists.iter().all(|l| l.ends_with("),$);")), "{lists:?}");
+            // the same elements as IFC 4, apart from those attributes
+            let four = ifc(&model);
+            let classes = |s: &str| s.lines().filter_map(|l| l.split_once('=').map(|(_, r)| r.split('(').next().unwrap_or("").to_string())).collect::<Vec<_>>();
+            assert_eq!(classes(&s), classes(&four));
+        }
+        // an annotation has a predefined type in IFC 4x3, none in IFC 4
+        let model = rhino_curve_model();
+        let x3 = ifc4x3(&model);
+        let annotation = x3.lines().find(|l| l.contains("=IFCANNOTATION(")).expect("an annotation");
+        assert!(annotation.ends_with(",.NOTDEFINED.);"), "{annotation}");
+        let four = ifc(&model);
+        let annotation = four.lines().find(|l| l.contains("=IFCANNOTATION(")).expect("an annotation");
+        assert!(annotation.ends_with(")") || annotation.ends_with(");"));
+        assert!(!annotation.contains(".NOTDEFINED."), "{annotation}");
+        // IFC 4 as it was
+        assert!(four.contains("FILE_SCHEMA(('IFC4'));"));
+        assert!(four.lines().filter(|l| l.contains("=IFCCARTESIANPOINTLIST3D(")).all(|l| l.ends_with("));")));
+    }
+
+    #[test]
+    fn schema_names() {
+        for n in ["IFC4X3", "ifc4x3", "IFC4X3_ADD2", "4x3", "IFC 4x3"] {
+            assert_eq!(Schema::parse(n), Some(Schema::Ifc4x3), "{n}");
+        }
+        for n in ["IFC4", "ifc4", "IFC 4", "4"] {
+            assert_eq!(Schema::parse(n), Some(Schema::Ifc4), "{n}");
+        }
+        assert_eq!(Schema::parse("IFC2X3"), None);
+        assert_eq!(Schema::Ifc4x3.label(), "IFC 4x3");
     }
 
     #[test]

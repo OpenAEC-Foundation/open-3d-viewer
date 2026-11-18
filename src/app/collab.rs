@@ -3055,6 +3055,48 @@ impl App {
 
     /// Opens a BCF file, adds an IDS and runs a check or the clash tests, all at once and
     /// before returning: for a picture of the window without one (`--screenshot`).
+    /// Checks the open IFC models without a window, for the command line: on the rule set named
+    /// (else the one in use), with `ids` added to it, and writes the report to `out` (by its
+    /// extension: `.html`, `.json` or `.csv`) and, when asked, an issue per failed rule to
+    /// `issues` as BCF. Returns a line per model and the number of rules that failed.
+    pub fn collab_check_to(&mut self, rules: Option<&str>, ids: Option<&std::path::Path>, out: &std::path::Path, issues: Option<&std::path::Path>) -> Result<(Vec<String>, usize), String> {
+        self.collab.refresh();
+        if let Some(name) = rules {
+            let k = self.collab.rule_sets.iter().position(|r| r.name.to_lowercase().contains(&name.to_lowercase())).ok_or_else(|| {
+                format!("no rule set named {name}; there are: {}", self.collab.rule_sets.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", "))
+            })?;
+            let _ = self.collab_update(Event::RuleSet(k));
+        }
+        let kind = match out.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+            Some("html" | "htm") => Report::Html,
+            Some("json") => Report::Json,
+            Some("csv") => Report::Csv,
+            _ => return Err("the report is .html, .json or .csv".into()),
+        };
+        self.collab_now(None, ids, Some("check"))?;
+        if self.collab.checked.is_empty() {
+            return Err("nothing to check: the check reads IFC files (.ifc)".into());
+        }
+        let (mut lines, mut failed) = (Vec::new(), 0);
+        for c in &self.collab.checked {
+            match &c.report {
+                Ok(report) => {
+                    let count = |status: ValidationStatus| report.specifications.iter().filter(|s| s.status == status).count();
+                    failed += count(ValidationStatus::Failed);
+                    lines.push(format!("{}: {} rules, {} passed, {} failed", c.name, report.specifications.len(), count(ValidationStatus::Passed), count(ValidationStatus::Failed)));
+                }
+                Err(e) => return Err(format!("{}: {e}", c.name)),
+            }
+        }
+        std::fs::write(out, self.collab_text_report(kind, self.collab.language)).map_err(|e| format!("{}: {e}", out.display()))?;
+        if let Some(path) = issues {
+            let _ = self.collab_update(Event::IssuesFromChecks);
+            self.collab.issues.write_as(self.collab.bcf3).and_then(|bytes| std::fs::write(path, bytes).map_err(|e| e.to_string())).map_err(|e| format!("{}: {e}", path.display()))?;
+            lines.push(format!("{} issues in {}", self.collab.issues.topics.len(), path.display()));
+        }
+        Ok((lines, failed))
+    }
+
     pub fn collab_now(&mut self, bcf: Option<&std::path::Path>, ids: Option<&std::path::Path>, run: Option<&str>) -> Result<(), String> {
         let _ = self.collab_update(Event::Tab(Tab::Issues));
         if let Some(path) = bcf {
@@ -4632,6 +4674,28 @@ mod tests {
         assert_eq!(sent.topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["Sprinkler under duct"], "the open ones only");
         let out = &app.collab.exchanges[0];
         assert_eq!((out.incoming, out.party.as_str(), out.issues), (false, "Installer", 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_model_is_checked_without_a_window_and_the_report_and_the_issues_are_written() {
+        let dir = std::env::temp_dir().join(format!("o3v-check-cli-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-models/ifc-wall-opening.ifc");
+        let mut app = App::default();
+        app.set_model(Arc::new(crate::loaders::load(&file).unwrap()));
+        let (lines, failed) = app.collab_check_to(Some("basic"), None, &dir.join("check.json"), Some(&dir.join("failed.bcf"))).unwrap();
+        assert!(lines[0].starts_with("ifc-wall-opening.ifc: "), "{lines:?}");
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("check.json")).unwrap()).unwrap();
+        assert_eq!(report[0]["model"], "ifc-wall-opening.ifc");
+        // an issue per rule that failed, as BCF
+        assert_eq!(Issues::read(&std::fs::read(dir.join("failed.bcf")).unwrap()).unwrap().topics.len(), failed);
+        // the other kinds of report, and what is no report
+        assert!(app.collab_check_to(None, None, &dir.join("check.html"), None).is_ok());
+        assert!(std::fs::read_to_string(dir.join("check.html")).unwrap().contains("<html"));
+        assert!(app.collab_check_to(None, None, &dir.join("check.txt"), None).is_err());
+        assert!(app.collab_check_to(Some("no such set"), None, &dir.join("check.json"), None).unwrap_err().contains("Basic check"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

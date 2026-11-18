@@ -241,6 +241,7 @@ The readers for SketchUp, Tekla, PLY and Rhino, and the Revit library, live in t
 | **USD** (`.usd`, `.usda`, `.usdc`, `.usdz`) | Yes | No |
 | **Rhino** (`.3dm`, Rhino 1 to 9) | Yes, meshes, polysurfaces and extrusions (their saved render meshes, or meshed by the viewer when the file has none), SubD, curves, texts, hatches, dimensions, leaders, blocks, point clouds | No |
 | **Vectorworks** (`.vwx` documents, `.sta` templates; Vectorworks 2027, beta) | Yes, walls with their doors and windows, slabs, stairs and other solids, extrudes, sweeps, NURBS surfaces, meshes, symbols, 2D shapes and lines; layers and classes with their visibility, records and IFC data, saved views, sheets | No |
+| **SolidWorks** (`.sldprt` parts, `.sldasm` assemblies; compound files, as SolidWorks wrote them up to at least 2016; beta) | Yes, the display list SolidWorks saves with the model: its tessellated faces in the colours of faces and bodies, and the placed parts of an assembly, each with its component path, part, file and configuration. Not read: the exact geometry, other configurations than the one the file was saved in, textures, the feature tree, and files in the newer SolidWorks container | No |
 | **Structural analysis model** (`.samjson`, sam-json v1) | Yes, nodes, members, surfaces, supports, releases, sections, loads and results as model data (drawing comes next) | No |
 | **COLLADA** (`.dae`) | Yes | No |
 | **VRML / X3D** (`.wrl`, `.x3d`, `.x3dv`, also gzipped) | Yes | No |

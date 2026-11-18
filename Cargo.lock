@@ -3808,6 +3808,7 @@ dependencies = [
  "shapefile",
  "signal-hook",
  "skp-reader",
+ "sldw-read",
  "stl_io",
  "tekla-read",
  "tempfile",
@@ -5164,6 +5165,22 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "sldw-core"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/solidworks-dll?rev=a001b0141fcf54f63de1107e2d75e7fdc9e177f1#a001b0141fcf54f63de1107e2d75e7fdc9e177f1"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
+name = "sldw-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/solidworks-dll?rev=a001b0141fcf54f63de1107e2d75e7fdc9e177f1#a001b0141fcf54f63de1107e2d75e7fdc9e177f1"
+dependencies = [
+ "sldw-core",
+]
 
 [[package]]
 name = "slotmap"

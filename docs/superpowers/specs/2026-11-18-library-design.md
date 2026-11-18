@@ -116,6 +116,14 @@ in the right pane, with a drawing of what it makes above its fields.
   gives the type its IFC class. Under the types stands the steel table, found by typing or by
   series, every profile a tile with its outline; a click gives it to the picked type or makes a
   type of it. A type of another library is edited as a copy in the project.
+- **A profile in the file**: the node of a linear type keeps its profile as IFC has it, in
+  `openaec::profile`: the `class` of the definition, `ProfileType`, `ProfileName` for a profile
+  of the steel table, and the definition's attributes by their IFC names, lengths in metres and
+  a slope in radians. It stands beside `openaec::lineartype`, which older readers take the
+  profile from. Reading takes the profile from the IFC form when the node has one (attributes
+  IFC leaves optional may be missing), so a later layer or another program changes a profile by
+  its IFC attributes; a changed profile is a profile of the steel table only when it is named
+  as one and is that one. IFCX has no schema for profiles yet, so the attribute is the suite's.
 - **Search** over every library and the drawing standard, with a look at each result; a found
   setting, build-up or linear type opens where it is edited, and a found steel profile becomes
   a beam type of the project.
@@ -124,10 +132,9 @@ in the right pane, with a drawing of what it makes above its fields.
 
 Not yet: an editor for materials (name, colour, hatch) and for system types; elements that
 were given a build-up or a linear type do not follow a change of the type; the general library
-and a country's types are not edited in place. A profile is kept in the file as before, in the
-suite's own form on its type's node (`openaec::lineartype`): its IFC definition and attributes
-are not written beside it, and an arbitrary profile (`IfcArbitraryClosedProfileDef`) cannot be
-made.
+and a country's types are not edited in place. An arbitrary profile
+(`IfcArbitraryClosedProfileDef`) cannot be made. An element made of a type keeps its own copy
+of the profile in the kernel's form, not as IFC has it.
 
 ## Open questions
 
@@ -145,8 +152,7 @@ made.
 2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
-4. Editors for materials and systems. A profile written to the file by its IFC definition, and
-   profiles drawn freely.
+4. Editors for materials and systems. Profiles drawn freely.
 5. Elements follow a change of their type, when asked.
 6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
 7. Library files and components opened into the page.

@@ -101,22 +101,34 @@ impl ProfileShape {
     /// attribute whose name ends in "Slope" is an angle in radians. IFC has a circle by its
     /// radius, and the width of a rectangle and of an I shape before its depth.
     pub fn ifc(&self) -> (&'static str, Vec<(&'static str, f64)>) {
-        match *self {
-            ProfileShape::Rectangle { width, depth } => ("IfcRectangleProfileDef", vec![("XDim", width), ("YDim", depth)]),
-            ProfileShape::Circle { diameter } => ("IfcCircleProfileDef", vec![("Radius", diameter / 2.0)]),
-            ProfileShape::I { h, b, tw, tf, r, slope } => {
-                ("IfcIShapeProfileDef", vec![("OverallWidth", b), ("OverallDepth", h), ("WebThickness", tw), ("FlangeThickness", tf), ("FilletRadius", r), ("FlangeSlope", slope)])
-            }
-            ProfileShape::U { h, b, tw, tf, r, slope } => {
-                ("IfcUShapeProfileDef", vec![("Depth", h), ("FlangeWidth", b), ("WebThickness", tw), ("FlangeThickness", tf), ("FilletRadius", r), ("FlangeSlope", slope)])
-            }
-            ProfileShape::L { h, b, t, r1, r2 } => ("IfcLShapeProfileDef", vec![("Depth", h), ("Width", b), ("Thickness", t), ("FilletRadius", r1), ("EdgeRadius", r2)]),
-            ProfileShape::T { h, b, tw, tf, r } => ("IfcTShapeProfileDef", vec![("Depth", h), ("FlangeWidth", b), ("WebThickness", tw), ("FlangeThickness", tf), ("FilletRadius", r)]),
-            ProfileShape::Rhs { h, b, t, r_out, r_in } => {
-                ("IfcRectangleHollowProfileDef", vec![("XDim", b), ("YDim", h), ("WallThickness", t), ("InnerFilletRadius", r_in), ("OuterFilletRadius", r_out)])
-            }
-            ProfileShape::Chs { d, t } => ("IfcCircleHollowProfileDef", vec![("Radius", d / 2.0), ("WallThickness", t)]),
-        }
+        let (definition, values) = match *self {
+            ProfileShape::Rectangle { width, depth } => ("IfcRectangleProfileDef", vec![width, depth]),
+            ProfileShape::Circle { diameter } => ("IfcCircleProfileDef", vec![diameter / 2.0]),
+            ProfileShape::I { h, b, tw, tf, r, slope } => ("IfcIShapeProfileDef", vec![b, h, tw, tf, r, slope]),
+            ProfileShape::U { h, b, tw, tf, r, slope } => ("IfcUShapeProfileDef", vec![h, b, tw, tf, r, slope]),
+            ProfileShape::L { h, b, t, r1, r2 } => ("IfcLShapeProfileDef", vec![h, b, t, r1, r2]),
+            ProfileShape::T { h, b, tw, tf, r } => ("IfcTShapeProfileDef", vec![h, b, tw, tf, r]),
+            ProfileShape::Rhs { h, b, t, r_out, r_in } => ("IfcRectangleHollowProfileDef", vec![b, h, t, r_in, r_out]),
+            ProfileShape::Chs { d, t } => ("IfcCircleHollowProfileDef", vec![d / 2.0, t]),
+        };
+        let names = Self::ifc_attributes(definition).unwrap_or_default();
+        (definition, names.iter().copied().zip(values).collect())
+    }
+
+    /// The attributes of IFC's parametric profile definition `definition` that a profile holds,
+    /// by their IFC names and in IFC's order; none for a definition the library does not hold.
+    pub fn ifc_attributes(definition: &str) -> Option<&'static [&'static str]> {
+        Some(match definition {
+            "IfcRectangleProfileDef" => &["XDim", "YDim"],
+            "IfcCircleProfileDef" => &["Radius"],
+            "IfcIShapeProfileDef" => &["OverallWidth", "OverallDepth", "WebThickness", "FlangeThickness", "FilletRadius", "FlangeSlope"],
+            "IfcUShapeProfileDef" => &["Depth", "FlangeWidth", "WebThickness", "FlangeThickness", "FilletRadius", "FlangeSlope"],
+            "IfcLShapeProfileDef" => &["Depth", "Width", "Thickness", "FilletRadius", "EdgeRadius"],
+            "IfcTShapeProfileDef" => &["Depth", "FlangeWidth", "WebThickness", "FlangeThickness", "FilletRadius"],
+            "IfcRectangleHollowProfileDef" => &["XDim", "YDim", "WallThickness", "InnerFilletRadius", "OuterFilletRadius"],
+            "IfcCircleHollowProfileDef" => &["Radius", "WallThickness"],
+            _ => return None,
+        })
     }
 
     /// The profile of IFC's parametric profile definition `definition` with these values of its

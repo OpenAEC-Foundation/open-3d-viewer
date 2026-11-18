@@ -163,7 +163,10 @@ library as its types.
   `bsi::ifc::prop::PredefinedType` (STANDARD, FLOOR, ROOF, CEILING), `bsi::ifc::prop::Name` (its
   English rule name) and `openaec::buildup` (`id`, `role`, `layers` of material key and thickness).
 - A linear type is a node with `bsi::ifc::class` (`IfcColumnType`, `IfcBeamType`, `IfcMemberType`,
-  …), `bsi::ifc::prop::Name` and `openaec::lineartype` (id, role, material key, profile).
+  …), `bsi::ifc::prop::Name` and `openaec::lineartype` (id, role, material key, profile). Since
+  2026-11-18 its profile also stands beside it as IFC has it, in `openaec::profile` (the class of
+  the parametric profile definition and its attributes by their IFC names), and is read from
+  there.
 - Paths are UUIDs (version 8) derived from the key or id, so a library written twice has the same
   paths.
 - Reading takes these nodes from any IFCX file and ignores the rest, so a project file read as a

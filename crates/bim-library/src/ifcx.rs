@@ -10,7 +10,13 @@
 //!   material key and a thickness in metres). IFCX has no layer-set schema yet.
 //! - A linear type is a node of its role's type class (`IfcColumnType`, `IfcBeamType`, ...) with
 //!   its predefined type, its English name and `openaec::lineartype` (its id, role, material key,
-//!   profile and steel designation).
+//!   profile and steel designation). Its profile stands beside it as IFC has it, in
+//!   `openaec::profile`: the `class` of its parametric profile definition
+//!   (`IfcIShapeProfileDef`), `ProfileType`, `ProfileName` (a profile of the steel table) and the
+//!   definition's attributes by their IFC names (`OverallWidth`, `OverallDepth`, ...), lengths in
+//!   metres and a slope in radians. IFCX has no schema for profiles yet. Reading takes the
+//!   profile from there when the node has one, so another program can change a profile by its
+//!   IFC attributes; a node without one reads as before.
 //! - A system type is a node of its group's type class (`IfcCurtainWallType`, `IfcWallType`,
 //!   `IfcCoveringType`, ...) with its predefined type, its English name and `openaec::systemtype`
 //!   (its id, group, grid, members, panels, layers and level).
@@ -21,7 +27,7 @@
 use crate::buildup::BuildUp;
 use crate::library::Library;
 use crate::material::{HatchKind, Material, Names};
-use crate::profile::LinearType;
+use crate::profile::{steel, LinearType, ProfileShape};
 use crate::system::SystemType;
 use crate::{uuid, Lang, LibraryError};
 use serde_json::{json, Map, Value};
@@ -32,6 +38,8 @@ pub const MATERIAL: &str = "openaec::material";
 pub const BUILDUP: &str = "openaec::buildup";
 /// The attribute of a type node with its linear type.
 pub const LINEAR_TYPE: &str = "openaec::lineartype";
+/// The attribute of a linear type's node with its profile as IFC has it.
+pub const PROFILE: &str = "openaec::profile";
 /// The attribute of a type node with its system type.
 pub const SYSTEM_TYPE: &str = "openaec::systemtype";
 
@@ -68,6 +76,41 @@ pub fn material_node(material: &Material) -> Value {
     })
 }
 
+/// A profile as IFC has it: the `class` of its parametric profile definition, `ProfileType`
+/// (an area), `ProfileName` when it has one (the designation of a profile of the steel table),
+/// and the definition's attributes by their IFC names: lengths in metres, a slope in radians.
+pub fn profile_value(profile: &ProfileShape, name: Option<&str>) -> Value {
+    let (class, attributes) = profile.ifc();
+    let mut value = Map::new();
+    value.insert("class".into(), json!(class));
+    value.insert("ProfileType".into(), json!("AREA"));
+    if let Some(name) = name {
+        value.insert("ProfileName".into(), json!(name));
+    }
+    for (attribute, of) in attributes {
+        value.insert(attribute.into(), json!(of));
+    }
+    Value::Object(value)
+}
+
+/// The profile of such a value. Attributes IFC leaves optional may be missing: no fillet or toe
+/// radius, no slope, and an angle without a `Width` has equal legs. None when it names a
+/// definition the library does not hold, or lacks an attribute IFC requires.
+pub fn profile_of(value: &Value) -> Option<ProfileShape> {
+    let class = value.get("class")?.as_str()?;
+    let number = |attribute: &str| value.get(attribute).filter(|v| !v.is_null()).map(Value::as_f64);
+    let values: Option<Vec<f64>> = ProfileShape::ifc_attributes(class)?
+        .iter()
+        .map(|&attribute| match number(attribute) {
+            Some(given) => given,
+            None if attribute != "Radius" && (attribute.ends_with("Radius") || attribute.ends_with("Slope")) => Some(0.0),
+            None if attribute == "Width" => number("Depth").flatten(),
+            None => None,
+        })
+        .collect();
+    ProfileShape::from_ifc(class, &values?)
+}
+
 /// The nodes of a library: its materials, then its build-ups, linear types and system types as
 /// types.
 pub fn nodes(library: &Library) -> Vec<Value> {
@@ -94,6 +137,7 @@ pub fn nodes(library: &Library) -> Vec<Value> {
                 "bsi::ifc::prop::Name": name,
                 "bsi::ifc::prop::PredefinedType": predefined,
                 LINEAR_TYPE: t,
+                PROFILE: profile_value(&t.profile, t.designation.as_deref()),
             }
         }));
     }
@@ -172,7 +216,18 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
             buildups.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
         }
         if let Some(own) = attributes.get(LINEAR_TYPE) {
-            linear_types.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
+            let mut linear: LinearType = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?;
+            // its profile as IFC has it is its profile, when the node has one; one that was
+            // changed there is a profile of the steel table only when it is named as one and
+            // is that one
+            if let Some((as_ifc, profile)) = attributes.get(PROFILE).and_then(|as_ifc| Some((as_ifc, profile_of(as_ifc)?))) {
+                if !profile.same(&linear.profile) {
+                    let table = as_ifc.get("ProfileName").and_then(Value::as_str).and_then(steel).filter(|table| table.shape.same(&profile));
+                    linear.designation = table.map(|table| table.designation.clone());
+                    linear.profile = table.map_or(profile, |table| table.shape.clone());
+                }
+            }
+            linear_types.push(linear);
         }
         if let Some(own) = attributes.get(SYSTEM_TYPE) {
             system_types.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
@@ -229,6 +284,7 @@ mod tests {
         assert_eq!(pipe["attributes"]["bsi::ifc::class"]["code"], "IfcPipeSegmentType");
         assert_eq!(pipe["attributes"]["bsi::ifc::prop::Name"], "Generic round 110");
         assert_eq!(pipe["attributes"][LINEAR_TYPE]["profile"]["kind"], "circle");
+        assert_eq!(pipe["attributes"][PROFILE], json!({"class": "IfcCircleProfileDef", "ProfileType": "AREA", "Radius": 0.055}));
         let masonry = nodes.iter().find(|n| n["path"] == system_type_path("system.masonry-waal-stretcher")).unwrap();
         assert_eq!(masonry["attributes"]["bsi::ifc::class"]["code"], "IfcWallType");
         assert_eq!(masonry["attributes"]["bsi::ifc::prop::Name"], "Brickwork 100 220×62.5 stretcher bond");
@@ -238,6 +294,50 @@ mod tests {
         assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len());
         // paths are stable
         assert_eq!(nodes, self::nodes(&Library::starter()));
+    }
+
+    #[test]
+    fn a_profile_is_written_as_ifc_has_it_and_read_from_there() {
+        let mut library = Library::starter();
+        library.add_linear_type(LinearType::steel("beam.hea-200", LinearRole::Beam, "HEA 200").unwrap()).unwrap();
+        let path = linear_type_path("beam.hea-200");
+        let node = nodes(&library).into_iter().find(|n| n["path"] == path).unwrap();
+        // the definition's class, what kind of profile it is, its name, and its attributes by
+        // their IFC names, in metres
+        let expected = json!({
+            "class": "IfcIShapeProfileDef", "ProfileType": "AREA", "ProfileName": "HEA 200",
+            "OverallWidth": 0.2, "OverallDepth": 0.19, "WebThickness": 0.0065, "FlangeThickness": 0.01, "FilletRadius": 0.018, "FlangeSlope": 0.0,
+        });
+        assert_eq!(node["attributes"][PROFILE], expected);
+        assert_eq!(profile_of(&expected).as_ref(), Some(&steel("HEA 200").unwrap().shape));
+        // a later layer changes the profile by its IFC attributes: it is that profile, and no
+        // profile of the steel table any more
+        let layered = |later: Value| {
+            let mut data = nodes(&library);
+            data.push(json!({"path": path, "attributes": {PROFILE: later}}));
+            json!({ "data": data })
+        };
+        let read_with = |later: Value| read(&layered(later)).unwrap();
+        let mut deeper = expected.clone();
+        deeper["OverallDepth"] = json!(0.25);
+        let changed = read_with(deeper);
+        let t = changed.linear_type("beam.hea-200").unwrap();
+        assert!(matches!(t.profile, ProfileShape::I { h, b, .. } if h == 0.25 && b == 0.2));
+        assert_eq!((t.designation.as_deref(), changed.linear_name("beam.hea-200", Lang::En).as_deref()), (None, Some("Steel 200x250")));
+        // another profile of the table, named as one: that profile of the table
+        let heb = profile_value(&steel("HEB 300").unwrap().shape, Some("HEB 300"));
+        assert_eq!(read_with(heb).linear_type("beam.hea-200").unwrap(), &LinearType::steel("beam.hea-200", LinearRole::Beam, "HEB 300").unwrap());
+        // what IFC leaves optional may be missing: no fillet, no slope, an angle of equal legs
+        let plain = read_with(json!({"class": "IfcIShapeProfileDef", "OverallWidth": 0.1, "OverallDepth": 0.3, "WebThickness": 0.01, "FlangeThickness": 0.02, "FlangeSlope": null}));
+        assert_eq!(plain.linear_type("beam.hea-200").unwrap().profile, ProfileShape::I { h: 0.3, b: 0.1, tw: 0.01, tf: 0.02, r: 0.0, slope: 0.0 });
+        assert_eq!(profile_of(&json!({"class": "IfcLShapeProfileDef", "Depth": 0.08, "Thickness": 0.008})), Some(ProfileShape::L { h: 0.08, b: 0.08, t: 0.008, r1: 0.0, r2: 0.0 }));
+        // a definition the library does not hold, or one that lacks what IFC requires, leaves
+        // the type as it was; so does a node without the attribute, as older files have them
+        for other in [json!({"class": "IfcZShapeProfileDef", "Depth": 0.2}), json!({"class": "IfcCircleProfileDef"}), json!({"class": "IfcRectangleProfileDef", "XDim": 0.2}), Value::Null] {
+            assert_eq!(read_with(other).linear_type("beam.hea-200"), library.linear_type("beam.hea-200"));
+        }
+        // a profile that cannot be made is refused, as a type that does not check is
+        assert!(matches!(read(&layered(json!({"class": "IfcCircleProfileDef", "Radius": 0.0}))), Err(LibraryError::BadProfile(_))));
     }
 
     #[test]

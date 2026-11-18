@@ -15,6 +15,7 @@
 //!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc [--schema IFC4X3]   (convert without a window)
 //!   open-3d-viewer FILE --build-film OUT.mp4|OUT.usda [--film-seconds 20]   (how it is built; .mp4 needs Blender)
+//!   open-3d-viewer FILE --render OUT.png   (a still rendered by Blender)
 //!   open-3d-viewer FILE.ifc --check OUT.html|json|csv [--ids FILE.ids] [--rules NAME] [--issues OUT.bcf]
 //!                  (the BIM Validator without a window: the report, and an issue per failed rule;
 //!                  ends with code 1 when a rule failed)
@@ -91,6 +92,8 @@ struct Args {
     /// `--build-film`: the film of how the model is built (`.mp4`, or `.usda` for its stage
     /// alone), and how many seconds it runs.
     build_film: Option<PathBuf>,
+    /// `--render`: a still of the model, rendered by Blender.
+    render: Option<PathBuf>,
     film_seconds: Option<f32>,
     /// `--check`: the report to write; with the rule set to check on and the BCF file for the
     /// issues of what failed.
@@ -184,6 +187,7 @@ fn parse_args() -> Result<Args, String> {
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
             "--build-film" => args.build_film = Some(PathBuf::from(value()?)),
+            "--render" => args.render = Some(PathBuf::from(value()?)),
             "--film-seconds" => args.film_seconds = Some(value()?.parse().map_err(|_| "--film-seconds N")?),
             "--check" => args.check = Some(PathBuf::from(value()?)),
             "--rules" => args.rules = Some(value()?),
@@ -244,6 +248,8 @@ pub fn main_as(edition: crate::product::Edition) {
         save_as(&args, out)
     } else if let Some(out) = &args.build_film {
         build_film(&args, out)
+    } else if let Some(out) = &args.render {
+        render_still(&args, out)
     } else if let Some(out) = &args.check {
         check(&args, out)
     } else if let Some(out) = &args.screenshot {
@@ -277,6 +283,17 @@ fn keep_crashes() {
         }
         before(info);
     }));
+}
+
+/// `--render`: loads the file and writes a still of it, rendered by Blender from where Blender
+/// finds it shows well.
+fn render_still(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--render needs a FILE to render")?;
+    let model = loaders::load(file)?;
+    let start = web_time::Instant::now();
+    let said = crate::build_film::still(&model, out, None)?;
+    println!("{} -> {} ({said}) in {:.1} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
 }
 
 /// `--build-film`: loads the file and writes the film of how it is built (through Blender), or

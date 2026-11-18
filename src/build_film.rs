@@ -8,7 +8,10 @@
 //!   with its visibility over time, so any program that reads USD plays the order;
 //! - the **film** ([`render`], desktop): Blender, run without a window, loads the stage, puts a
 //!   camera round it and writes an `.mp4`. Blender is a program beside this one (GPL): it is
-//!   started, never linked. `O3V_BLENDER` names its executable where it is not found.
+//!   started, never linked. `O3V_BLENDER` names its executable where it is not found;
+//! - a **still** ([`still`], desktop): the whole model on the same stage, rendered once by
+//!   Blender's path tracer with a sky, a sun and ground under it, from a camera of the caller
+//!   ([`Shot`]) or one Blender places itself.
 
 use crate::model::Model;
 use std::collections::{BTreeMap, HashMap};
@@ -236,8 +239,28 @@ pub fn plan(steps: &[Step], timing: Timing, colours: &BTreeMap<u64, [f32; 3]>) -
     serde_json::json!({ "fps": FPS, "end": timing.end(steps.len()), "steps": steps, "colours": colours }).to_string()
 }
 
+/// Where a still is taken from: the eye, what it looks at (metres, Z up) and its vertical field
+/// of view (degrees).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shot {
+    pub eye: [f32; 3],
+    pub target: [f32; 3],
+    pub fov: f32,
+}
+
+/// What the script needs for a still: that it is one, the colours, and the camera where the
+/// caller gives one.
+pub fn still_plan(colours: &BTreeMap<u64, [f32; 3]>, shot: Option<Shot>) -> String {
+    let colours: serde_json::Map<String, serde_json::Value> = colours.iter().map(|(id, c)| (prim(*id), serde_json::json!(c))).collect();
+    let mut plan = serde_json::json!({ "still": true, "fps": FPS, "end": 1, "steps": [], "colours": colours });
+    if let Some(shot) = shot {
+        plan["camera"] = serde_json::json!({ "eye": shot.eye, "target": shot.target, "fov": shot.fov });
+    }
+    plan.to_string()
+}
+
 /// The script Blender runs: it loads the stage, keys what shows when, puts a sun and a camera
-/// that turns round the model, and writes the film.
+/// that turns round the model, and writes the film; or renders one still.
 #[cfg(not(target_arch = "wasm32"))]
 const SCRIPT: &str = include_str!("build_film.py");
 
@@ -287,11 +310,33 @@ pub fn render(model: &Model, out: &std::path::Path, seconds: f32) -> Result<Stri
         std::fs::write(out, stage).map_err(|e| format!("{}: {e}", out.display()))?;
         return Ok(said);
     }
+    run_blender(&stage, &plan(&steps, timing, &colours(model)), out)?;
+    Ok(said)
+}
+
+/// Writes a still of the whole `model` to `out` (a `.png`), rendered by Blender: from `shot`, or
+/// from where Blender finds the model shows well. Says what it wrote.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn still(model: &Model, out: &std::path::Path, shot: Option<Shot>) -> Result<String, String> {
+    let colours = colours(model);
+    if colours.is_empty() && model.layers.iter().all(|l| l.indices.is_empty()) {
+        return Err("the model has nothing to render".into());
+    }
+    let stage = usd(model, &[], Timing { per_step: 1, hold: 0 });
+    run_blender(&stage, &still_plan(&colours, shot), out)?;
+    Ok(format!("{} elements, 1920 x 1080", colours.len()))
+}
+
+/// Starts Blender without a window on the stage and the plan; it writes `out`.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_blender(stage: &str, plan: &str, out: &std::path::Path) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static RUN: AtomicU32 = AtomicU32::new(0);
     let blender = blender().ok_or("Blender is not found: install it, or set O3V_BLENDER to its executable")?;
-    let dir = std::env::temp_dir().join(format!("o3v-build-film-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("o3v-build-film-{}-{}", std::process::id(), RUN.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let (stage_at, plan_at, script_at) = (dir.join("stage.usda"), dir.join("plan.json"), dir.join("build_film.py"));
-    let written = std::fs::write(&stage_at, stage).and_then(|()| std::fs::write(&plan_at, plan(&steps, timing, &colours(model)))).and_then(|()| std::fs::write(&script_at, SCRIPT));
+    let written = std::fs::write(&stage_at, stage).and_then(|()| std::fs::write(&plan_at, plan)).and_then(|()| std::fs::write(&script_at, SCRIPT));
     written.map_err(|e| format!("{}: {e}", dir.display()))?;
     let run = std::process::Command::new(&blender)
         .args(["--background", "--factory-startup", "--python"])
@@ -305,9 +350,9 @@ pub fn render(model: &Model, out: &std::path::Path, seconds: f32) -> Result<Stri
     if !run.status.success() || !out.is_file() {
         let log = String::from_utf8_lossy(&run.stdout);
         let last: Vec<&str> = log.lines().rev().filter(|l| !l.trim().is_empty()).take(6).collect();
-        return Err(format!("Blender wrote no film ({}): {}", run.status, last.into_iter().rev().collect::<Vec<_>>().join(" | ")));
+        return Err(format!("Blender wrote nothing ({}): {}", run.status, last.into_iter().rev().collect::<Vec<_>>().join(" | ")));
     }
-    Ok(said)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -380,6 +425,33 @@ mod tests {
         assert_eq!(t.end(8), 1 + 8 * 24 + 48);
         // more steps than frames: a frame each
         assert_eq!(Timing::of(1.0, 1000).per_step, 1);
+    }
+
+    #[test]
+    fn a_still_shows_everything_from_the_camera_it_is_given() {
+        let m = model();
+        // no steps: every element shows from the first frame
+        let stage = usd(&m, &[], Timing { per_step: 1, hold: 0 });
+        assert_eq!(stage.matches("token visibility.timeSamples = { 1: \"inherited\" }").count(), 2, "{stage}");
+        let shot = Shot { eye: [10.0, -10.0, 5.0], target: [0.0, 0.0, 2.0], fov: 40.0 };
+        let plan: serde_json::Value = serde_json::from_str(&still_plan(&colours(&m), Some(shot))).unwrap();
+        assert_eq!(plan["still"], true);
+        assert_eq!(plan["camera"]["eye"], serde_json::json!([10.0, -10.0, 5.0]));
+        assert_eq!(plan["camera"]["fov"], 40.0);
+        // without one, Blender places the camera itself
+        let plan: serde_json::Value = serde_json::from_str(&still_plan(&colours(&m), None)).unwrap();
+        assert!(plan.get("camera").is_none());
+    }
+
+    /// Blender renders a still of the two boxes (needs Blender; writes a file in the temp folder).
+    #[test]
+    #[ignore = "needs Blender and writes an image file"]
+    fn blender_renders_a_still() {
+        let out = std::env::temp_dir().join(format!("o3v-still-test-{}.png", std::process::id()));
+        let said = still(&model(), &out, None).expect("a still");
+        let size = std::fs::metadata(&out).expect("the file").len();
+        eprintln!("{said}; {} bytes at {}", size, out.display());
+        assert!(size > 1000);
     }
 
     /// Blender writes a film of the two boxes (needs Blender; writes a file in the temp folder).

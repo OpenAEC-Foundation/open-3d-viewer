@@ -475,6 +475,10 @@ pub enum Message {
     BuildFilmDialog,
     BuildFilmPicked(Option<PathBuf>),
     BuildFilmDone(Result<(PathBuf, String), String>),
+    /// A still of the model as the view shows it, rendered by Blender: asking where to write it
+    /// and where that is (its outcome comes as that of the film does).
+    RenderDialog,
+    RenderPicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
     Mode(RenderMode),
@@ -1151,6 +1155,42 @@ fn build_film_dialog_task(model: &Model) -> Task<Message> {
         dialog = dialog.set_directory(dir);
     }
     Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::BuildFilmPicked)
+}
+
+/// Asks where to write the still.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_dialog_task(model: &Model) -> Task<Message> {
+    let name = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Render").set_file_name(format!("{name}.png")).add_filter("PNG", &["png"]);
+    if let Some(dir) = crate::managed::dialog_folder(model.path.parent().map(PathBuf::from), crate::managed::work_folder()) {
+        dialog = dialog.set_directory(dir);
+    }
+    Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::RenderPicked)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_dialog_task(_model: &Model) -> Task<Message> {
+    Task::done(Message::BuildFilmDone(Err("Rendering needs the desktop app".into())))
+}
+
+/// Renders the still on a worker thread.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_task(model: Arc<Model>, path: PathBuf, shot: crate::build_film::Shot) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::build_film::still(&model, &path, Some(shot)).map(|said| (path, said)));
+            });
+            rx.await.unwrap_or_else(|_| Err("render thread stopped".to_string()))
+        },
+        Message::BuildFilmDone,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_task(_model: Arc<Model>, _path: PathBuf, _shot: crate::build_film::Shot) -> Task<Message> {
+    Task::none()
 }
 
 /// A browser cannot start the program that renders the film.
@@ -1991,7 +2031,25 @@ impl App {
                 }
                 return build_film_dialog_task(model);
             }
-            Message::BuildFilmPicked(None) => {}
+            Message::BuildFilmPicked(None) | Message::RenderPicked(None) => {}
+            Message::RenderDialog => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                return render_dialog_task(model);
+            }
+            Message::RenderPicked(Some(mut path)) => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if path.extension().is_none() {
+                    path.set_extension("png");
+                }
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Saving { file, since: Instant::now() };
+                // from where the view looks now
+                let shot = crate::build_film::Shot { eye: self.camera.eye().to_array(), target: self.camera.target.to_array(), fov: self.camera.fov_y.to_degrees() };
+                return render_task(model, path, shot);
+            }
             Message::BuildFilmPicked(Some(mut path)) => {
                 let Some(model) = self.model.clone() else { return Task::none() };
                 if path.extension().is_none() {

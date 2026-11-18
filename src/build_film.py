@@ -1,7 +1,8 @@
 # Run by Blender without a window (see build_film.rs):
 #   blender --background --factory-startup --python build_film.py -- STAGE.usda PLAN.json OUT.mp4
 # Loads the stage, keys what shows from which frame, puts a sun and a camera that turns round the
-# model, and writes the film.
+# model, and writes the film. With "still" in the plan: one image of the whole model, path traced,
+# with ground under it and a sky, from the camera the plan gives or one placed here.
 import json
 import math
 import sys
@@ -91,10 +92,22 @@ aim.target = pivot
 aim.track_axis = "TRACK_NEGATIVE_Z"
 aim.up_axis = "UP_Y"
 scene.camera = camera
-pivot.rotation_euler = (0, 0, math.radians(-25))
-pivot.keyframe_insert("rotation_euler", frame=1)
-pivot.rotation_euler = (0, 0, math.radians(95))
-pivot.keyframe_insert("rotation_euler", frame=plan["end"])
+still = bool(plan.get("still"))
+given = plan.get("camera")
+if given:
+    # the camera of the caller: where its eye is, what it looks at, how wide it sees
+    pivot.location = Vector(given["target"])
+    camera.location = Vector(given["eye"]) - Vector(given["target"])
+    camera.data.sensor_fit = "VERTICAL"
+    camera.data.angle_y = math.radians(given["fov"])
+    camera.data.clip_end = max(size * 20, camera.location.length * 4)
+elif still:
+    pivot.rotation_euler = (0, 0, math.radians(20))
+else:
+    pivot.rotation_euler = (0, 0, math.radians(-25))
+    pivot.keyframe_insert("rotation_euler", frame=1)
+    pivot.rotation_euler = (0, 0, math.radians(95))
+    pivot.keyframe_insert("rotation_euler", frame=plan["end"])
 
 # light: a sun, and a light sky that fills the shadows
 sun = bpy.data.objects.new("sun", bpy.data.lights.new("sun", "SUN"))
@@ -109,11 +122,69 @@ if background:
     background.inputs["Strength"].default_value = 1.0
 scene.world = world
 
-# the film
 scene.frame_start, scene.frame_end = 1, plan["end"]
 render = scene.render
 render.fps = plan["fps"]
 render.resolution_x, render.resolution_y, render.resolution_percentage = 1920, 1080, 100
+
+if still:
+    # ground under the model, to stand on and to catch its shadow
+    ground = bpy.data.meshes.new("ground")
+    r = size * 40
+    ground.from_pydata([(-r, -r, 0), (r, -r, 0), (r, r, 0), (-r, r, 0)], [], [(0, 1, 2, 3)])
+    floor = bpy.data.objects.new("ground", ground)
+    floor.location = (centre.x, centre.y, low.z - 0.002)
+    scene.collection.objects.link(floor)
+    earth = bpy.data.materials.new("ground")
+    earth.use_nodes = True
+    shader = earth.node_tree.nodes.get("Principled BSDF")
+    if shader:
+        shader.inputs["Base Color"].default_value = (0.42, 0.42, 0.4, 1.0)
+        shader.inputs["Roughness"].default_value = 0.95
+    ground.materials.append(earth)
+    # a sky that lights the scene, with the sun in it
+    nodes, links = world.node_tree.nodes, world.node_tree.links
+    sky = nodes.new("ShaderNodeTexSky")
+    try:
+        sky.sun_elevation = math.radians(40)
+        sky.sun_rotation = math.radians(150)
+    except AttributeError:
+        pass
+    if background:
+        links.new(sky.outputs["Color"], background.inputs["Color"])
+        background.inputs["Strength"].default_value = 0.06
+    sun.data.energy = 2.2
+    sun.data.angle = math.radians(2)
+    # the path tracer, on the graphics card where Blender finds one
+    render.engine = "CYCLES"
+    scene.cycles.samples = 96
+    scene.cycles.use_denoising = True
+    try:
+        prefs = bpy.context.preferences.addons["cycles"].preferences
+        for kind in ("OPTIX", "CUDA", "HIP", "ONEAPI", "METAL"):
+            try:
+                prefs.compute_device_type = kind
+                prefs.get_devices()
+                if any(d.type == kind for d in prefs.devices):
+                    for d in prefs.devices:
+                        d.use = True
+                    scene.cycles.device = "GPU"
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    scene.view_settings.view_transform = "AgX" if "AgX" in [t.identifier for t in type(scene.view_settings).bl_rna.properties["view_transform"].enum_items] else "Filmic"
+    try:
+        render.image_settings.media_type = "IMAGE"
+    except (AttributeError, TypeError):
+        pass
+    render.image_settings.file_format = "PNG"
+    render.filepath = out
+    bpy.ops.render.render(write_still=True)
+    sys.exit(0)
+
+# the film
 engines = [e.identifier for e in type(render).bl_rna.properties["engine"].enum_items]
 render.engine = "BLENDER_EEVEE" if "BLENDER_EEVEE" in engines else "BLENDER_EEVEE_NEXT"
 render.filepath = out

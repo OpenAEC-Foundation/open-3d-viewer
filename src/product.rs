@@ -66,7 +66,7 @@ impl Product {
         match self {
             Product::Viewer => "View",
             Product::Modeller => "Modeller",
-            Product::Validator => "Collab",
+            Product::Validator => "Validator",
             Product::Pointcloud => "PointCloud",
             Product::Analysis => "Struct",
             Product::Docs => "Docs",
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
         // the switch: short names, and the four in alpha are the grey ones
-        assert_eq!(Product::ALL.map(Product::label), ["View", "Collab", "PointCloud", "Struct", "Modeller", "Docs"]);
+        assert_eq!(Product::ALL.map(Product::label), ["View", "Validator", "PointCloud", "Struct", "Modeller", "Docs"]);
         assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true]);
     }
 

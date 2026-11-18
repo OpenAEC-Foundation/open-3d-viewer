@@ -1130,6 +1130,11 @@
     "Party": "Parte",
     "Take in BCF": "Incorporar BCF",
     "Send BCF": "Enviar BCF",
-    "Send open issues only": "Enviar apenas as issues abertas"
+    "Send open issues only": "Enviar apenas as issues abertas",
+    "History in Git": "Histórico no Git",
+    "As the last version in Git": "Igual à última versão no Git",
+    "Changed since the last version in Git": "Alterado desde a última versão no Git",
+    "Not in Git yet": "Ainda não está no Git",
+    "Save model in project folder": "Guardar o modelo na pasta do projeto"
   }
 }

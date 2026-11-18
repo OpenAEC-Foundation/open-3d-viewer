@@ -1231,6 +1231,9 @@ impl Studio {
             Command::new("docs.reveal", l.text("Tonen in map", "Show in folder"), go(Message::Docs(crate::app::DocsMessage::Reveal)))
                 .icon(small("panel.left"), large("panel.left"))
                 .enabled(app.docs_picked().is_some()),
+            Command::new("docs.save", l.text("Model opslaan in projectmap", "Save model in project folder"), go(Message::Docs(crate::app::DocsMessage::Save)))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(app.docs_save_target().is_some()),
             Command::new("docs.link", l.text("Koppelen aan selectie", "Link to selection"), go(Message::Docs(crate::app::DocsMessage::Link)))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.docs_can_link()),
@@ -2346,7 +2349,7 @@ impl Studio {
             RibbonPage::Docs => vec![
                 (l.text("Projectmap", "Project folder"), vec![large("docs.folder"), smalls(&["docs.refresh", "docs.leave"])]),
                 (l.text("Document", "Document"), vec![large("docs.open"), smalls(&["docs.open-outside", "docs.reveal"])]),
-                (l.text("Model", "Model"), vec![large("docs.link")]),
+                (l.text("Model", "Model"), vec![large("docs.link"), large("docs.save")]),
             ],
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),

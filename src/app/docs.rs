@@ -9,12 +9,19 @@
 //! Nothing stands over the list. Choosing the folder, opening a file, its title and status,
 //! recording a revision and linking it to the selected elements are sections of the right pane.
 //!
+//! It works as a file manager does: the folders of the folder that shows stand above its files,
+//! a second click on a file opens it (a model in the suite, anything else in its own program),
+//! and the open model is saved into the project folder. Where the folder is a Git checkout (a
+//! project shared through GitHub), the picked file shows the versions Git keeps of it, and an
+//! older one opens beside the present one.
+//!
 //! Docs writes only when the person does something, and never opens a file to list it (see
 //! `docs/superpowers/specs/2026-11-17-docs-design.md`).
 
 use super::{App, Message, FONT_BOLD};
 use crate::selection::Pickable;
 use crate::theme::Palette;
+use bim_docs::git::{Commit, Standing as GitStanding};
 use bim_docs::{Document, ElementLink, File, Kind, Listing, Register, Service, State, Status as Standing, Sync};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, row, rule, scrollable, text, text_input, Column};
@@ -23,6 +30,7 @@ use openaec_ui::Language;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use web_time::{Duration, Instant};
 
 /// The Docs tab's state.
 #[derive(Debug, Clone)]
@@ -54,6 +62,19 @@ pub struct DocsTab {
     pub note: String,
     /// What went wrong last, said in the right pane.
     pub notice: Option<Notice>,
+    /// The file clicked last and when: a second click soon after opens it.
+    clicked: Option<(String, Instant)>,
+    /// What Git says of the picked file, when the folder is a checkout: the file it was asked
+    /// of, its versions (newest first) and how it stands against the last one.
+    pub versions: Option<Versions>,
+}
+
+/// What Git says of a file of the project folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Versions {
+    /// The file, as its path in the project folder.
+    pub path: String,
+    pub result: Result<(Vec<Commit>, GitStanding), String>,
 }
 
 /// What Docs has to say after something the person did.
@@ -94,6 +115,8 @@ impl DocsTab {
             code: String::new(),
             note: String::new(),
             notice: None,
+            clicked: None,
+            versions: None,
         }
     }
 }
@@ -144,12 +167,87 @@ pub enum DocsMessage {
     Show(String),
     /// The register of this project folder as it was read for a model, before Docs was opened.
     Known(Box<(PathBuf, Register)>),
+    /// What Git says of a file, as it was read.
+    Versions(Box<Versions>),
+    /// Open the picked file as it was in the version with this hash; that version as a file of
+    /// its own, ready to open.
+    OpenVersion(String),
+    VersionReady(Result<PathBuf, String>),
+    /// Save the open model into the project folder.
+    Save,
 }
 
 /// The folder of the tree that lists the documents whose file is gone: no file has this name.
 const MISSING: &str = "\0";
 /// The most files a folder shows; the rest is said as a number.
 const ROWS: usize = 500;
+/// A second click on a file within this time opens it.
+const SECOND_CLICK: Duration = Duration::from_millis(450);
+/// The most versions of a file that are asked of Git.
+const VERSIONS: usize = 30;
+
+/// What Git says of the file at `path` of the checkout at `root`.
+fn read_versions(root: &std::path::Path, path: &str) -> Result<(Vec<Commit>, GitStanding), String> {
+    Ok((bim_docs::git::history(root, path, VERSIONS)?, bim_docs::git::standing_of(root, path)?))
+}
+
+/// Asks Git on a thread of its own: a large history can take its time.
+#[cfg(not(target_arch = "wasm32"))]
+fn versions_task(root: PathBuf, inside: String, path: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            let asked = path.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Versions { result: read_versions(&root, &inside), path });
+            });
+            rx.await.unwrap_or_else(|_| Versions { path: asked, result: Err("the reading stopped".into()) })
+        },
+        |versions| Message::Docs(DocsMessage::Versions(Box::new(versions))),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn versions_task(_root: PathBuf, _inside: String, _path: String) -> Task<Message> {
+    Task::none()
+}
+
+/// Writes the file at `inside` of the checkout at `root` as it was in version `hash` to a file
+/// of its own, outside the project folder: `<name> @ <hash>.<extension>` in the temporary folder.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(super) fn version_file(root: &std::path::Path, inside: &str, hash: &str) -> Result<PathBuf, String> {
+    let bytes = bim_docs::git::content(root, inside, hash)?;
+    let name = inside.rsplit('/').next().unwrap_or(inside);
+    let short = hash.get(..7).unwrap_or(hash);
+    let named = match name.rsplit_once('.') {
+        Some((stem, extension)) => format!("{stem} @ {short}.{extension}"),
+        None => format!("{name} @ {short}"),
+    };
+    let folder = std::env::temp_dir().join("open-bim-suite").join("versions");
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let path = folder.join(named);
+    std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn version_task(root: PathBuf, inside: String, hash: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(version_file(&root, &inside, &hash));
+            });
+            rx.await.unwrap_or_else(|_| Err("the reading stopped".into()))
+        },
+        |ready| Message::Docs(DocsMessage::VersionReady(ready)),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn version_task(_root: PathBuf, _inside: String, _hash: String) -> Task<Message> {
+    Task::none()
+}
 
 /// Where Docs keeps the project folder that was chosen: beside the preferences.
 fn folder_file() -> Option<PathBuf> {
@@ -369,7 +467,10 @@ impl App {
                 self.docs = DocsTab { open: self.docs.open, shown: self.docs.shown, in_product: self.docs.in_product, ..DocsTab::empty() };
             }
             DocsMessage::Refresh => return self.docs_read(),
-            DocsMessage::Read(read) => self.docs_take(*read),
+            DocsMessage::Read(read) => {
+                self.docs_take(*read);
+                return self.docs_versions();
+            }
             DocsMessage::Folder(folder) => {
                 // a click on the folder that shows closes it in the tree; another one opens it
                 if self.docs.at == folder && self.docs.opened.contains(&folder) {
@@ -381,11 +482,19 @@ impl App {
                 self.docs.pick = None;
             }
             DocsMessage::Pick(path) => {
+                // a second click soon after the first opens the file, as in a file manager
+                let again = self.docs.clicked.take().is_some_and(|(before, at)| before == path && at.elapsed() < SECOND_CLICK);
+                if again && self.docs.pick.as_deref() == Some(path.as_str()) && self.docs.listing.file(&path).is_some() {
+                    let open = if suite_reads(&path) { DocsMessage::OpenModel { add: false } } else { DocsMessage::OpenOutside };
+                    return self.docs_update(open);
+                }
+                self.docs.clicked = Some((path.clone(), Instant::now()));
                 self.docs.title = self.docs.register.of(&path).map(|d| d.title.clone()).unwrap_or_default();
                 self.docs.code.clear();
                 self.docs.note.clear();
                 self.docs.notice = None;
                 self.docs.pick = Some(path);
+                return self.docs_versions();
             }
             DocsMessage::Title(title) => self.docs.title = title,
             DocsMessage::SaveTitle => {
@@ -456,6 +565,32 @@ impl App {
                     self.docs.known = true;
                 }
             }
+            DocsMessage::Versions(versions) => {
+                // still the picked file
+                if self.docs.pick.as_deref() == Some(versions.path.as_str()) {
+                    self.docs.versions = Some(*versions);
+                }
+            }
+            DocsMessage::OpenVersion(hash) => {
+                if let Some((root, inside)) = self.docs_in_git() {
+                    return version_task(root, inside, hash);
+                }
+            }
+            DocsMessage::VersionReady(Err(error)) => self.docs.notice = Some(Notice::Failed(error)),
+            DocsMessage::VersionReady(Ok(path)) => {
+                if suite_reads(&path.to_string_lossy()) {
+                    // beside the open model, so the two can be compared; alone when none is open
+                    self.docs.shown = false;
+                    let add = self.model.is_some();
+                    return self.open(crate::loaders::Source::File(path), add);
+                }
+                self.docs.notice = outside(&path, false).err().map(Notice::Failed);
+            }
+            DocsMessage::Save => {
+                if let Some((path, replace)) = self.docs_save_target() {
+                    return self.start_save(path, replace);
+                }
+            }
             DocsMessage::Go(key) => {
                 let Some(model) = self.model.clone() else { return Task::none() };
                 // the key is somewhere in the element's properties: only those are taken apart
@@ -486,7 +621,62 @@ impl App {
         self.docs_take(read_project(folder));
         if let Some(path) = pick.map(|p| p.replace('\\', "/")) {
             self.docs_go_to(&path);
+            self.docs_versions_now();
         }
+    }
+
+    /// The checkout the project folder is in and the picked file's path in it, when Git keeps
+    /// the folder.
+    fn docs_in_git(&self) -> Option<(PathBuf, String)> {
+        let docs = &self.docs;
+        let sync = docs.sync.as_ref().filter(|sync| sync.service.git())?;
+        let (folder, pick) = (docs.folder.as_ref()?, docs.pick.as_deref()?);
+        docs.listing.file(pick)?;
+        let above = folder.strip_prefix(&sync.root).ok()?.to_string_lossy().replace('\\', "/");
+        Some((sync.root.clone(), if above.is_empty() { pick.to_string() } else { format!("{above}/{pick}") }))
+    }
+
+    /// Asks Git for the versions of the picked file; what was known of another file goes.
+    fn docs_versions(&mut self) -> Task<Message> {
+        if self.docs.versions.as_ref().map(|v| v.path.as_str()) != self.docs.pick.as_deref() {
+            self.docs.versions = None;
+        }
+        match (self.docs_in_git(), self.docs.pick.clone()) {
+            (Some((root, inside)), Some(path)) => versions_task(root, inside, path),
+            _ => Task::none(),
+        }
+    }
+
+    /// Asks Git at once, where no message runs (the command line, a test).
+    pub(super) fn docs_versions_now(&mut self) {
+        self.docs.versions = match (self.docs_in_git(), self.docs.pick.clone()) {
+            (Some((root, inside)), Some(path)) => Some(Versions { result: read_versions(&root, &inside), path }),
+            _ => None,
+        };
+    }
+
+    /// Where saving puts the open model, and whether a file there is replaced. A model that was
+    /// opened from the project folder, in a format the suite writes, is saved where it is. Any
+    /// other is saved as a new IFCX file in the folder that shows, and never over a file.
+    pub fn docs_save_target(&self) -> Option<(PathBuf, bool)> {
+        let (model, folder) = (self.model.as_ref()?, self.docs.folder.as_ref()?);
+        let name = model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if model.path.starts_with(folder) && model.path.is_file() && crate::export::writer_for(&name).is_ok() {
+            return Some((model.path.clone(), true));
+        }
+        let stem = model.path.file_stem().map_or_else(|| "model".to_string(), |s| s.to_string_lossy().into_owned());
+        let at = if self.docs.at == MISSING { "" } else { self.docs.at.as_str() };
+        Some((folder.join(at).join(format!("{stem}.{}", crate::export::registry()[0].extensions()[0])), false))
+    }
+
+    /// A model was saved at `path`: when that is in the project folder, Docs goes to it and
+    /// reads the folder again.
+    pub(super) fn docs_saved(&mut self, path: &std::path::Path) -> Task<Message> {
+        let Some(inside) = self.docs.folder.as_ref().and_then(|folder| path.strip_prefix(folder).ok()) else { return Task::none() };
+        let inside = inside.to_string_lossy().replace('\\', "/");
+        self.docs.clicked = None;
+        self.docs_go_to(&inside);
+        self.docs_read()
     }
 
     /// Whether the register of the project folder is still to be read: a folder is chosen and
@@ -514,7 +704,9 @@ impl App {
             self.docs.opened.insert(folder.to_string());
             folder = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
+        self.docs.clicked = None;
         let _ = self.docs_update(DocsMessage::Pick(path.to_string()));
+        self.docs.clicked = None;
     }
 
     /// The documents of the project folder that are about element `id` of the model, for the
@@ -801,6 +993,31 @@ impl App {
         } else {
             docs.listing.files_in(&docs.at).map(|f| (f.path.as_str(), Some(f), docs.register.of(&f.path))).collect()
         };
+        // as in a file manager: the way up, then the folders of this folder, then its files
+        let folder_row = |path: &str, label: String, count: Option<usize>| -> Element<'_, Message> {
+            let line = row![
+                text(label).size(12).color(p.text).width(Fill).wrapping(Wrapping::None),
+                text(count.map_or_else(String::new, |n| format!("{n} {}", l.text("bestanden", "files")))).size(12).color(p.text_muted).width(changed_w + size_w + 8.0),
+            ]
+            .spacing(8)
+            .align_y(Center);
+            button(line).padding([3, 12]).width(Fill).style(move |_, s| p.row_button(s)).on_press(Message::Docs(DocsMessage::Folder(path.to_string()))).into()
+        };
+        let mut folders = 0;
+        if docs.at != MISSING {
+            if !docs.at.is_empty() {
+                body = body.push(folder_row(docs.at.rsplit_once('/').map_or("", |(parent, _)| parent), "▸ ..".to_string(), None));
+                folders += 1;
+            }
+            for folder in docs.listing.folders_in(&docs.at) {
+                let name = folder.rsplit('/').next().unwrap_or(folder);
+                body = body.push(folder_row(folder, format!("▸ {name}"), Some(docs.counts.get(folder).copied().unwrap_or(0))));
+                folders += 1;
+            }
+        }
+        if rows.is_empty() && folders > 0 {
+            return body.into();
+        }
         if rows.is_empty() {
             let empty = if docs.reading { l.text("De map wordt gelezen…", "Reading the folder…") } else { l.text("Geen bestanden in deze map", "No files in this folder") };
             return body.push(container(text(empty).size(12).color(p.text_muted)).padding(12)).into();
@@ -888,6 +1105,9 @@ impl App {
                     .spacing(4)
                     .wrap(),
                 );
+                if self.model.is_some() {
+                    content = content.push(action(l.text("Model opslaan in projectmap", "Save model in project folder"), DocsMessage::Save));
+                }
             }
         }
         match &docs.notice {
@@ -978,6 +1198,38 @@ impl App {
             content = content.push(text(format!("{} · {day} · {}", revision.code, revision.by)).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph));
             if !revision.note.is_empty() {
                 content = content.push(note(revision.note.clone()));
+            }
+        }
+
+        // the versions Git keeps of it, when the project folder is a checkout
+        if let Some(versions) = docs.versions.as_ref().filter(|v| v.path == path) {
+            content = content.push(section(l.text("Geschiedenis in Git", "History in Git")));
+            match &versions.result {
+                Err(error) => content = content.push(note(error.clone())),
+                Ok((commits, standing)) => {
+                    content = content.push(note(
+                        match standing {
+                            GitStanding::Same => l.text("Zoals de laatste versie in Git", "As the last version in Git"),
+                            GitStanding::Changed => l.text("Gewijzigd sinds de laatste versie in Git", "Changed since the last version in Git"),
+                            GitStanding::New => l.text("Staat nog niet in Git", "Not in Git yet"),
+                        }
+                        .to_string(),
+                    ));
+                    for commit in commits {
+                        let day = commit.date.get(..10).unwrap_or(&commit.date);
+                        content = content.push(
+                            row![
+                                text(format!("{} · {day} · {}", commit.short(), commit.by)).size(12).color(p.text).width(Fill).wrapping(Wrapping::WordOrGlyph),
+                                action(l.text("Openen", "Open"), DocsMessage::OpenVersion(commit.hash.clone())),
+                            ]
+                            .spacing(4)
+                            .align_y(Center),
+                        );
+                        if !commit.subject.is_empty() {
+                            content = content.push(note(commit.subject.clone()));
+                        }
+                    }
+                }
             }
         }
 
@@ -1240,6 +1492,110 @@ mod tests {
         app.selection_changed();
         assert!(shows(&app, "DOCUMENTS") && shows(&app, "A-101.pdf"));
         assert!(!app.docs.open, "Docs itself stays closed");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_second_click_on_a_file_opens_it_and_the_folders_stand_above_the_files() {
+        let root = project("click", &["model/kade12.ifc", "model/old/first.ifc", "report.docx"]);
+        let mut app = opened(&root);
+        // the way up shows in a folder, not in the project folder itself
+        assert!(!shows(&app, "▸ .."));
+        send(&mut app, DocsMessage::Folder("model".into()));
+        assert!(shows(&app, "▸ ..") && shows(&app, "▸ old"));
+        // one click picks, a second one soon after opens the model in the suite
+        send(&mut app, DocsMessage::Pick("model/kade12.ifc".into()));
+        assert!(app.docs.shown && !matches!(app.status, Status::Loading { .. }));
+        send(&mut app, DocsMessage::Pick("model/kade12.ifc".into()));
+        assert!(matches!(app.status, Status::Loading { .. }), "{:?}", app.status);
+        assert!(!app.docs.shown);
+        // a click long after the first only picks
+        let mut app = opened(&root);
+        send(&mut app, DocsMessage::Pick("report.docx".into()));
+        app.docs.clicked = Some(("report.docx".into(), Instant::now() - Duration::from_secs(2)));
+        send(&mut app, DocsMessage::Pick("report.docx".into()));
+        assert!(app.docs.shown && app.docs.notice.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_open_model_is_saved_in_the_folder_that_shows_or_where_it_came_from() {
+        let root = project("save", &["model/kade12.ifcx", "model/site.rvt", "report.docx"]);
+        let mut app = opened(&root);
+        // no model: nothing to save
+        assert_eq!(app.docs_save_target(), None);
+        assert!(!shows(&app, "Save model in project folder"));
+        // a model from elsewhere: a new IFCX file in the folder that shows, never over a file
+        app.model = Some(model());
+        assert!(shows(&app, "Save model in project folder"));
+        assert_eq!(app.docs_save_target(), Some((root.join("kade12.ifcx"), false)));
+        send(&mut app, DocsMessage::Folder("model".into()));
+        assert_eq!(app.docs_save_target(), Some((root.join("model").join("kade12.ifcx"), false)));
+        // a model opened from the project folder in a format the suite writes: where it is
+        let mut own = (*model()).clone();
+        own.path = root.join("model").join("kade12.ifcx");
+        app.model = Some(Arc::new(own));
+        send(&mut app, DocsMessage::Folder(String::new()));
+        assert_eq!(app.docs_save_target(), Some((root.join("model").join("kade12.ifcx"), true)));
+        // one in a format the suite only reads: a new IFCX file beside what shows
+        let mut read_only = (*model()).clone();
+        read_only.path = root.join("model").join("site.rvt");
+        app.model = Some(Arc::new(read_only));
+        assert_eq!(app.docs_save_target(), Some((root.join("site.ifcx"), false)));
+        // saving starts, and once saved Docs goes to the file
+        send(&mut app, DocsMessage::Save);
+        assert!(matches!(app.status, Status::Saving { .. }), "{:?}", app.status);
+        std::fs::write(root.join("site.ifcx"), b"{}").unwrap();
+        let _ = app.update(Message::Saved(Ok((root.join("site.ifcx"), 0.1))));
+        read(&mut app);
+        assert_eq!((app.docs.pick.as_deref(), app.docs.at.as_str()), (Some("site.ifcx"), ""));
+        assert!(app.docs.listing.file("site.ifcx").is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Against the `git` program itself; a computer without it has nothing to check.
+    #[test]
+    fn a_git_checkout_shows_the_versions_of_the_picked_file_and_gives_an_older_one() {
+        let root = project("git", &["Kade 12/model/kade12.ifc"]);
+        let git = |arguments: &[&str]| std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().is_ok_and(|o| o.status.success());
+        if !git(&["init", "-q"]) {
+            return;
+        }
+        let commit = |message: &str| {
+            assert!(git(&["add", "-A"]));
+            assert!(git(&["-c", "user.name=An", "-c", "user.email=an@firm.example", "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]));
+        };
+        commit("The first model");
+        std::fs::write(root.join("Kade 12/model/kade12.ifc"), b"second").unwrap();
+        commit("Windows on the first floor");
+        assert!(git(&["remote", "add", "origin", "git@github.com:firm/kade-12.git"]));
+
+        // the project folder is a folder of the checkout, not the checkout itself
+        let mut app = opened(&root.join("Kade 12"));
+        assert_eq!(app.docs.sync.as_ref().map(|s| (s.service, s.site.as_deref())), Some((Service::GitHub, Some("https://github.com/firm/kade-12"))));
+        assert!(shows(&app, "synced with GitHub"));
+        send(&mut app, DocsMessage::Folder("model".into()));
+        send(&mut app, DocsMessage::Pick("model/kade12.ifc".into()));
+        app.docs_versions_now();
+        let versions = app.docs.versions.clone().expect("asked of Git");
+        let (commits, standing) = versions.result.expect("git answers");
+        assert_eq!(commits.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["Windows on the first floor", "The first model"]);
+        assert_eq!(standing, GitStanding::Same);
+        assert!(shows(&app, "History in Git") && shows(&app, "Windows on the first floor") && shows(&app, "As the last version in Git"));
+        // the first version, as a file of its own outside the project folder
+        let (checkout, inside) = app.docs_in_git().expect("in a checkout");
+        assert_eq!(inside, "Kade 12/model/kade12.ifc");
+        let older = version_file(&checkout, &inside, &commits[1].hash).expect("the older version");
+        assert_eq!(std::fs::read(&older).unwrap(), b"Kade 12/model/kade12.ifc");
+        assert!(older.file_name().unwrap().to_string_lossy().starts_with("kade12 @ ") && !older.starts_with(&root));
+        // another file picked: what Git said of the first no longer shows
+        std::fs::write(root.join("Kade 12/model/new.ifc"), b"new").unwrap();
+        read(&mut app);
+        send(&mut app, DocsMessage::Pick("model/new.ifc".into()));
+        assert!(app.docs.versions.is_none());
+        app.docs_versions_now();
+        assert!(shows(&app, "Not in Git yet"));
+        let _ = std::fs::remove_file(older);
         let _ = std::fs::remove_dir_all(root);
     }
 

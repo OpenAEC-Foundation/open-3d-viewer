@@ -1907,6 +1907,8 @@ impl App {
             Message::SavePicked(Some(path)) => return self.start_save(path, true),
             Message::Saved(result) => {
                 self.remote_saved(&result);
+                // a file saved into the project folder shows in Docs
+                let docs = result.as_ref().map_or_else(|_| Task::none(), |(path, _)| self.docs_saved(path));
                 self.status = match result {
                     Ok((path, secs)) => {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1914,6 +1916,7 @@ impl App {
                     }
                     Err(e) => Status::Error(e),
                 };
+                return docs;
             }
             Message::TakeShot => {
                 return window::latest().and_then(window::screenshot).map(Message::Shot);

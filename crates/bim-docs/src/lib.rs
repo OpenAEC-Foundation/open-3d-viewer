@@ -10,6 +10,7 @@
 //! - [`folder`]: what is in the project folder, and what the sync tool is doing to each file
 //!   (only online, a conflict copy).
 //! - [`service`]: which sync tool keeps the folder.
+//! - [`git`]: a folder that is a Git checkout (GitHub among them), and the versions Git keeps.
 //! - [`register`]: what is said about each document (title, status, revisions, the elements it is
 //!   about), one small IFCX file per document, so two people working on different documents never
 //!   write the same file.
@@ -22,6 +23,7 @@
 //! - No project file is moved, renamed or deleted.
 
 pub mod folder;
+pub mod git;
 pub mod register;
 pub mod service;
 

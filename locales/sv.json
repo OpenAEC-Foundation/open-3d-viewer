@@ -1130,6 +1130,11 @@
     "Party": "Part",
     "Take in BCF": "Läs in BCF",
     "Send BCF": "Skicka BCF",
-    "Send open issues only": "Skicka bara öppna ärenden"
+    "Send open issues only": "Skicka bara öppna ärenden",
+    "History in Git": "Historik i Git",
+    "As the last version in Git": "Som den senaste versionen i Git",
+    "Changed since the last version in Git": "Ändrad sedan den senaste versionen i Git",
+    "Not in Git yet": "Inte i Git ännu",
+    "Save model in project folder": "Spara modellen i projektmappen"
   }
 }

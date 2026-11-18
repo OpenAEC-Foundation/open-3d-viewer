@@ -118,15 +118,17 @@ The window opens in the product used last; `--product viewer|modeller|validator`
 
 A project is more than its models. **Docs** is a product of its own on the switch at the top of the window. It shows the project folder: its folders in the left pane and its files beside them, with the title, the status and the revision that were recorded of each document.
 
-- **No server and no account.** The project is a folder your team already shares: Dropbox, SharePoint (through OneDrive), Synology Drive, or any network folder. Who can reach the folder takes part.
+- **No server and no account.** The project is a folder your team already shares: Dropbox, SharePoint (through OneDrive), Synology Drive, a GitHub repository you cloned, or any network folder. Who can reach the folder takes part.
 - **It sees what the sync tool does.** A file that is only online is marked, and is not downloaded by listing it. A conflict copy, made when two people changed a file at once, is marked too.
 - **Revisions.** Record the file as it is now as a revision (a code such as P01, a note). Docs then says when the file changed since, from its size and time.
 - **Status.** Work in progress, shared, published or archived.
 - **Linked to the model.** Link a document to the selected elements; a link selects its element again. The properties of a selected element list the documents about it, and a click on one opens it in Docs.
 - **IFCX.** What is said about a document is one small IFCX file per document, in `_openaec/docs` of the project folder, so two people working on different documents never write the same file. A linked element of an IFCX model carries its documents when that file is layered over the model.
-- **Open.** A model opens in the suite; any other file opens in the program your computer opens it with.
+- **As a file manager.** The folders of a folder stand above its files; a click goes in. A double click opens a file: a model or a point cloud in the suite, any other file in the program your computer opens it with.
+- **Save.** The open model is saved into the project folder: where it came from when that is a format the suite writes, otherwise as a new IFCX file in the folder that shows, never over a file that is there.
+- **GitHub.** A project folder that is a Git checkout (cloned from GitHub or another Git server) works the same way. The picked file shows the versions Git keeps of it (who, when, why) and whether it changed since; an older version opens beside the present model. Docs never commits or pushes: that stays with your own Git tool.
 
-Docs works in the desktop app; a browser has no synced folders. It never writes unless you do something, and never moves, renames or deletes a project file. The design: [`docs/superpowers/specs/2026-11-17-docs-design.md`](docs/superpowers/specs/2026-11-17-docs-design.md).
+Docs works in the desktop app; a browser has no synced folders. It never writes unless you do something, and never moves, renames or deletes a project file; the only project file it writes is the model you save. The design: [`docs/superpowers/specs/2026-11-17-docs-design.md`](docs/superpowers/specs/2026-11-17-docs-design.md).
 
 ## GIS (a first step)
 

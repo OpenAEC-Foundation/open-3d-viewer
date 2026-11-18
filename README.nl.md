@@ -120,15 +120,17 @@ Het venster opent in het product dat het laatst gebruikt is; `--product viewer|m
 
 Een project is meer dan zijn modellen. **Docs** is een eigen product op de schakelaar bovenin het venster. Het toont de projectmap: de mappen in het linkerpaneel en de bestanden ernaast, met de titel, de status en de versie die van elk document zijn vastgelegd.
 
-- **Geen server en geen account.** Het project is een map die je team al deelt: Dropbox, SharePoint (via OneDrive), Synology Drive of een netwerkmap. Wie bij de map kan, doet mee.
+- **Geen server en geen account.** Het project is een map die je team al deelt: Dropbox, SharePoint (via OneDrive), Synology Drive, een GitHub-repository die je gekloond hebt, of een netwerkmap. Wie bij de map kan, doet mee.
 - **Het ziet wat de synctool doet.** Een bestand dat alleen online staat is gemarkeerd, en wordt niet opgehaald door het in de lijst te tonen. Een conflictkopie, ontstaan toen twee mensen een bestand tegelijk wijzigden, is ook gemarkeerd.
 - **Versies.** Leg het bestand zoals het nu is vast als versie (een code zoals P01, een opmerking). Docs zegt daarna wanneer het bestand sindsdien gewijzigd is, aan de hand van grootte en tijd.
 - **Status.** In bewerking, gedeeld, gepubliceerd of gearchiveerd.
 - **Gekoppeld aan het model.** Koppel een document aan de geselecteerde elementen; een koppeling selecteert haar element weer. De eigenschappen van een geselecteerd element noemen de documenten die erover gaan, en een klik op een document opent het in Docs.
 - **IFCX.** Wat over een document gezegd is, is één klein IFCX-bestand per document, in `_openaec/docs` van de projectmap, zodat twee mensen die aan verschillende documenten werken nooit hetzelfde bestand schrijven. Een gekoppeld element van een IFCX-model draagt zijn documenten als dat bestand als laag over het model ligt.
-- **Openen.** Een model opent in de suite; elk ander bestand opent in het programma waarmee je computer het opent.
+- **Als een bestandsbeheerder.** De mappen van een map staan boven de bestanden; een klik gaat erin. Een dubbelklik opent een bestand: een model of een puntenwolk in de suite, elk ander bestand in het programma waarmee je computer het opent.
+- **Opslaan.** Het open model wordt in de projectmap opgeslagen: waar het vandaan kwam als dat een formaat is dat de suite schrijft, anders als nieuw IFCX-bestand in de map die getoond wordt, nooit over een bestaand bestand heen.
+- **GitHub.** Een projectmap die een Git-checkout is (gekloond van GitHub of een andere Git-server) werkt op dezelfde manier. Het gekozen bestand toont de versies die Git ervan bewaart (wie, wanneer, waarom) en of het sindsdien gewijzigd is; een oudere versie opent naast het huidige model. Docs commit of pusht nooit: dat blijft bij je eigen Git-programma.
 
-Docs werkt in de desktop-app; een browser heeft geen gesynchroniseerde mappen. Het schrijft nooit iets tenzij jij iets doet, en verplaatst, hernoemt of verwijdert nooit een projectbestand. Het ontwerp: [`docs/superpowers/specs/2026-11-17-docs-design.md`](docs/superpowers/specs/2026-11-17-docs-design.md).
+Docs werkt in de desktop-app; een browser heeft geen gesynchroniseerde mappen. Het schrijft nooit iets tenzij jij iets doet, en verplaatst, hernoemt of verwijdert nooit een projectbestand; het enige projectbestand dat het schrijft is het model dat je opslaat. Het ontwerp: [`docs/superpowers/specs/2026-11-17-docs-design.md`](docs/superpowers/specs/2026-11-17-docs-design.md).
 
 ## GIS (een eerste stap)
 

@@ -115,6 +115,46 @@ from the file's size and time against the revision's. Nothing is written for it.
   only.
 - The folder chosen is kept in the settings folder (`docs-folder.txt`), per person.
 
+## Second slice (2026-11-18): files as in a file manager, saving, Git
+
+Docs should feel like working with files: go into a folder, open a model or a point cloud straight
+in the suite, save it back, and see its versions. And a project can be shared through GitHub as
+well as through a sync tool.
+
+### As a file manager
+
+- The folders of the folder that shows stand above its files, with a way up (`..`). A click goes in.
+- A second click on a file soon after the first opens it: what the suite reads (a model, a point
+  cloud) in the suite, anything else in the program the computer opens it with.
+
+### Saving
+
+- "Save model in project folder" (the ribbon, and the project folder's section of the right pane).
+- A model that was opened from the project folder, in a format the suite writes (IFCX, IFC), is
+  saved where it is. Any other model is saved as a new IFCX file in the folder that shows, and
+  never over a file that is there.
+- After the save Docs reads the folder again and picks the file, ready to record a revision.
+- This is a person's act, so the rule that Docs never writes on its own holds.
+
+### Git and GitHub
+
+- A project folder that is (in) a Git checkout is known by its `.git`; where it comes from is
+  read from the checkout's own config (`origin`), without any name, password or token in the
+  address. From `github.com` it is called GitHub, otherwise Git.
+- For the picked file Docs asks the `git` program for the versions it keeps (who, when, the first
+  line of why) and how the file stands against the last one: the same, changed, or not in Git yet.
+  Only for the picked file, on a thread of its own.
+- "Open" on a version writes that version to a file of its own in the temporary folder
+  (`<name> @ <hash>.<extension>`) and opens it: beside the open model, so the two can be compared.
+- Docs never commits, fetches, pulls or pushes. Sharing the work stays with the person's own Git
+  tool, as it stays with the sync tool for the other services.
+
+### Not in this slice
+
+- Committing and pushing from Docs; signing in to GitHub; a repository that is not cloned yet.
+- The version history that Dropbox, SharePoint and Synology Drive keep at their own side.
+- New folder, rename, move and delete: Docs still changes no project file but the one it saves.
+
 ## Left to the builder
 
 Column widths, icons, the wording of marks, how many files a scan takes before it says there are

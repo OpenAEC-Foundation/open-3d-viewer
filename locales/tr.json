@@ -1130,6 +1130,11 @@
     "Party": "Taraf",
     "Take in BCF": "BCF al",
     "Send BCF": "BCF gönder",
-    "Send open issues only": "Yalnızca açık sorunları gönder"
+    "Send open issues only": "Yalnızca açık sorunları gönder",
+    "History in Git": "Git geçmişi",
+    "As the last version in Git": "Git'teki son sürümle aynı",
+    "Changed since the last version in Git": "Git'teki son sürümden beri değişti",
+    "Not in Git yet": "Henüz Git'te değil",
+    "Save model in project folder": "Modeli proje klasörüne kaydet"
   }
 }

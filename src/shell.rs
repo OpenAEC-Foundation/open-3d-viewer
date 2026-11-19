@@ -1331,6 +1331,15 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // in an environment with Blender (the web app): a render of the file opened from Docs
+        #[cfg(target_arch = "wasm32")]
+        if crate::host::renders() {
+            list.push(
+                Command::new("file.render-blender", l.text("Renderen met Blender", "Render with Blender"), go(Message::BlenderRender))
+                    .icon(small("mesh.surface"), large("mesh.surface"))
+                    .enabled(crate::host::can_render()),
+            );
+        }
         // through the clashes with the keys: the next and the one before, accept, reject, issue
         // (the Validator's, which the web build leaves out)
         #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
@@ -1661,7 +1670,7 @@ impl Studio {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
                 };
-                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveIfcDialog(_)) {
+                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveIfcDialog(_) | Message::BlenderRender) {
                     self.backstage = false;
                 }
                 if let Some(path) = opened {
@@ -2361,6 +2370,10 @@ impl Studio {
         let groups: Vec<(&'static str, Vec<RibbonPart>)> = match page {
             RibbonPage::Home => {
                 let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])])];
+                #[cfg(target_arch = "wasm32")]
+                if crate::host::renders() {
+                    groups[0].1.push(large("file.render-blender"));
+                }
                 groups.extend(view_groups());
                 groups
             }
@@ -2526,7 +2539,8 @@ impl Studio {
         let l = self.l();
         let c = look.color;
         let loaded = self.app.model.is_some();
-        let nav = column![
+        #[allow(unused_mut)]
+        let mut nav = column![
             t::file_nav_row(look, small("file.new"), l.text("Nieuw", "New"), false, Some(Msg::App(Message::NewModel(l.text("Niveau 0", "Level 0"))))),
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
             t::file_nav_row(look, small("file.open"), l.text("Map openen", "Open folder"), false, Some(Msg::App(Message::OpenFolderDialog))),
@@ -2536,6 +2550,10 @@ impl Studio {
             t::file_nav_row(look, small("ui.settings"), l.text("Instellingen", "Settings"), false, Some(Msg::Dialog(Some(Dialog::Settings)))),
         ]
         .width(260);
+        #[cfg(target_arch = "wasm32")]
+        if crate::host::renders() {
+            nav = nav.push(t::file_nav_row(look, small("mesh.surface"), l.text("Renderen met Blender", "Render with Blender"), false, crate::host::can_render().then_some(Msg::App(Message::BlenderRender))));
+        }
         let files: Vec<t::RecentFile<'_, Msg>> = self
             .prefs
             .recent
@@ -2718,14 +2736,16 @@ impl Studio {
     fn right_body(&self, look: Look) -> Element<'_, Msg> {
         let (app, l) = (&self.app, self.l());
         let p = palette(look);
+        // the GIS and Geo tabs belong to GIC
+        let geo = self.product() == Product::Gis;
         if self.product() != Product::Modeller {
-            return Self::pane(app.properties_body(p, l));
+            return Self::pane(app.properties_body_for(p, l, geo));
         }
         column![
             container(w::mono_label(look, l.text("Modelverkenner", "Model explorer"))).padding([4, 8]),
             container(app.model_explorer(p, l).map(Msg::App)).padding([0, 4]).width(Length::Fill).height(Length::FillPortion(2)),
             iced::widget::rule::horizontal(1),
-            container(Self::pane(app.properties_body(p, l))).height(Length::FillPortion(3)),
+            container(Self::pane(app.properties_body_for(p, l, geo))).height(Length::FillPortion(3)),
         ]
         .into()
     }
@@ -3446,6 +3466,22 @@ mod tests {
         for label in ["MODEL EXPLORER", "Storeys", "Grid lines", "Properties"] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
+    }
+
+    #[test]
+    fn the_gis_and_geo_tabs_of_the_right_pane_are_only_in_gic() {
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(Msg::App(Message::NewModel("Level 0")));
+        for (product, there) in [(Product::Validator, false), (Product::Viewer, false), (Product::Gis, true)] {
+            studio.set_product(product);
+            let mut ui = iced_test::simulator(studio.view());
+            assert_eq!(ui.find("Geo").is_ok(), there, "{product:?}");
+        }
+        // GIC opened its tab; elsewhere the pane shows the properties instead
+        assert_eq!(studio.app.side_tab, crate::app::SideTab::Gis);
+        studio.set_product(Product::Validator);
+        assert!(iced_test::simulator(studio.view()).find("Properties").is_ok());
     }
 
     #[test]

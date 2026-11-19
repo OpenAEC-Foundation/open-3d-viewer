@@ -21,7 +21,7 @@
 //! perspective view is the section the model opens with.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
-use crate::model::{DraftFill, Layer, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
+use crate::model::{DraftFill, Layer, ModelDot, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 use crate::section::SectionPlane;
 use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -45,15 +45,15 @@ impl Loader for RhinoLoader {
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
         let data = source.read()?;
-        let file = threedm_read::read_with(&data, &threedm_read::Options { font: Some(crate::INTER_REGULAR) })?;
+        let file = threedm_read::read_with(&data, &threedm_read::Options { font: Some(crate::INTER_REGULAR), resolve_font: system_font_resolver() })?;
         progress.set(Phase::Convert);
-        let (layers, info, section, views, sheets) = convert(&file);
+        let (layers, info, section, views, sheets, dots) = convert(&file);
         if layers.iter().all(|l| l.indices.is_empty() && l.lines.is_empty() && !(l.points && !l.positions.is_empty())) {
             // say why, e.g. polysurfaces saved without their render meshes
             let left_out = info.iter().find(|(k, _)| k == "Rhino objects left out").map_or("no objects", |(_, v)| v.as_str());
             return Err(format!("{}: nothing to draw in this Rhino file ({left_out})", source.name()));
         }
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, sheets, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, sheets, dots, ..ProjectData::default() } })
     }
 }
 
@@ -93,6 +93,8 @@ struct Scene<'f> {
     hiding: bool,
     /// What the layouts hold, by the id of their page viewport.
     pages: HashMap<Uuid, PageContent>,
+    /// The text dots, as labels.
+    dots: Vec<ModelDot>,
     /// Hidden objects drawn (on those layers).
     hidden_objects: usize,
     next_id: u64,
@@ -207,6 +209,7 @@ impl<'f> Scene<'f> {
             meshes: BTreeMap::new(),
             hiding: false,
             pages: HashMap::new(),
+            dots: Vec::new(),
             hidden_objects: 0,
             points: BTreeMap::new(),
             next_id: 1,
@@ -553,6 +556,17 @@ impl<'f> Scene<'f> {
                     if self.draw(geometry, a.layer, root, color, id, &mut first) {
                         *self.drawn.entry(plural(kind)).or_default() += 1;
                         self.hidden_objects += usize::from(self.hiding);
+                        // a text dot: its text on a label at its point, as Rhino draws it
+                        if let (Geometry::Points { points, .. }, Some((_, text))) = (geometry, object.user.iter().find(|(k, _)| k == "Text")) {
+                            if points.len() >= 24 {
+                                let f = |k: usize| f64::from_le_bytes(points[8 * k..8 * k + 8].try_into().unwrap());
+                                let at = root.transform_point3(DVec3::new(f(0), f(1), f(2))) - self.origin(None);
+                                let layer = self.viewer_layer(a.layer, true).name.clone();
+                                if at.is_finite() && !text.is_empty() {
+                                    self.dots.push(ModelDot { at: at.as_vec3().to_array(), text: text.clone(), color: [color[0], color[1], color[2]], layer });
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -816,7 +830,7 @@ impl<'f> Scene<'f> {
             .collect()
     }
 
-    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>) {
+    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>, Vec<ModelDot>) {
         // first the layouts, which count what they hold
         let mut views = self.views();
         let sheets = self.sheets(&mut views);
@@ -839,6 +853,9 @@ impl<'f> Scene<'f> {
         info.push(("Rhino units".into(), if file.meters == 1.0 { file.unit.to_string() } else { format!("{} (converted to metres)", file.unit) }));
         if let Some(o) = self.origin.filter(|o| *o != DVec3::ZERO) {
             info.push(("Rhino world origin (metres)".into(), format!("{}, {}, {}", o.x, o.y, o.z)));
+        }
+        if let Some(anchor) = &file.settings.earth_anchor {
+            info.extend(georeference(anchor, file.meters, self.origin.unwrap_or(DVec3::ZERO)));
         }
         let list = |m: &BTreeMap<&str, usize>| m.iter().map(|(k, n)| format!("{n} {k}")).collect::<Vec<_>>().join(", ");
         if !self.drawn.is_empty() {
@@ -869,7 +886,8 @@ impl<'f> Scene<'f> {
             };
             info.push(("Rhino clipping planes of the perspective view".into(), how));
         }
-        (layers, info, section, views, sheets)
+        let dots = std::mem::take(&mut self.dots);
+        (layers, info, section, views, sheets, dots)
     }
 }
 
@@ -990,7 +1008,144 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
     }
 }
 
-fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>) {
+/// Texts in the font the file names, from the system's fonts (the desktop app): none on the web.
+fn system_font_resolver() -> Option<fn(&threedm_read::Font) -> Option<&'static [u8]>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Some(system_fonts::font)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// The fonts of the system by family and style, found once; each loaded when a text asks for it
+/// and kept for the rest of the run.
+#[cfg(not(target_arch = "wasm32"))]
+mod system_fonts {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    /// (family in lower case, bold, italic) → file and face index.
+    type Index = HashMap<(String, bool, bool), (PathBuf, u32)>;
+
+    fn folders() -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Some(windows) = std::env::var_os("WINDIR") {
+            out.push(PathBuf::from(windows).join("Fonts"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            out.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+        }
+        out.extend(["/usr/share/fonts", "/usr/local/share/fonts", "/Library/Fonts", "/System/Library/Fonts"].map(PathBuf::from));
+        if let Some(home) = std::env::var_os("HOME") {
+            out.push(PathBuf::from(&home).join(".fonts"));
+            out.push(PathBuf::from(&home).join("Library").join("Fonts"));
+        }
+        out
+    }
+
+    fn files(dir: &std::path::Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() && depth < 3 {
+                files(&p, depth + 1, out);
+            } else if p.extension().is_some_and(|x| ["ttf", "otf", "ttc"].iter().any(|t| x.eq_ignore_ascii_case(t))) {
+                out.push(p);
+            }
+        }
+    }
+
+    fn index() -> &'static Index {
+        static INDEX: OnceLock<Index> = OnceLock::new();
+        INDEX.get_or_init(|| {
+            let mut map = Index::new();
+            let mut paths = Vec::new();
+            for dir in folders() {
+                files(&dir, 0, &mut paths);
+            }
+            for path in paths {
+                // large fonts (East Asian scripts) are left out of the search: reading them all
+                // would take long
+                if std::fs::metadata(&path).map_or(true, |m| m.len() > 20_000_000) {
+                    continue;
+                }
+                let Ok(data) = std::fs::read(&path) else { continue };
+                let faces = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+                for k in 0..faces {
+                    let Ok(face) = ttf_parser::Face::parse(&data, k) else { continue };
+                    let family = face
+                        .names()
+                        .into_iter()
+                        .filter(|n| n.name_id == ttf_parser::name_id::FAMILY || n.name_id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+                        .find_map(|n| n.to_string());
+                    let Some(family) = family else { continue };
+                    let key = (family.to_lowercase(), face.is_bold(), face.is_italic());
+                    map.entry(key).or_insert((path.clone(), k));
+                }
+            }
+            map
+        })
+    }
+
+    /// The font file of a family in a style: that style, else its regular face.
+    pub(super) fn font(font: &threedm_read::Font) -> Option<&'static [u8]> {
+        static LOADED: OnceLock<Mutex<HashMap<PathBuf, Option<&'static [u8]>>>> = OnceLock::new();
+        let family = font.family.trim().to_lowercase();
+        if family.is_empty() {
+            return None;
+        }
+        let index = index();
+        let (path, face) = index.get(&(family.clone(), font.bold, font.italic)).or_else(|| index.get(&(family, false, false)))?;
+        if *face != 0 {
+            // a face of a collection: the setter takes the first face of what it is given
+            return None;
+        }
+        let mut loaded = LOADED.get_or_init(Default::default).lock().ok()?;
+        *loaded.entry(path.clone()).or_insert_with(|| std::fs::read(path).ok().map(|d| &*Box::leak(d.into_boxed_slice())))
+    }
+}
+
+/// The georeference of the scene's origin from the file's earth anchor point: the latitude and
+/// longitude of a point of the model, and which way north is in it. In the Netherlands as a map
+/// conversion to RD New (EPSG:28992): the eastings, northings and height of the scene's origin
+/// (the Rhino origin, or the local origin a model far from zero moves to) and how the model is
+/// turned on the grid; elsewhere its latitude and longitude.
+fn georeference(anchor: &threedm_read::EarthAnchor, meters: f64, origin: DVec3) -> Vec<(String, String)> {
+    let (lat, lon) = (anchor.latitude, anchor.longitude);
+    if !(lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0) || (lat == 0.0 && lon == 0.0) {
+        return Vec::new();
+    }
+    // the model turned by `turn` on the grid: its north at (sin, cos) of it in the model
+    let north = anchor.model_north;
+    let turn = if north.x.hypot(north.y) > 1e-12 { north.x.atan2(north.y) } else { 0.0 };
+    let d = origin - anchor.model_point * meters;
+    let (east, northward) = (d.x * turn.cos() - d.y * turn.sin(), d.x * turn.sin() + d.y * turn.cos());
+    let height = anchor.elevation + d.z;
+    let mut out = Vec::new();
+    if !anchor.name.is_empty() {
+        out.push(("Georeference name".to_string(), anchor.name.clone()));
+    }
+    let rd = bim_gis::LatLon::new(lat, lon).to_rd();
+    if rd.valid() {
+        let at = bim_gis::Rd::new(rd.x + east, rd.y + northward);
+        let place = at.to_wgs84();
+        out.push(("Georeference coordinate system".into(), "EPSG:28992".into()));
+        out.push(("Georeference eastings, northings (m)".into(), format!("{:.3}, {:.3}", at.x, at.y)));
+        out.push(("Georeference height (m)".into(), format!("{height:.3}")));
+        out.push(("Georeference rotation (degrees)".into(), format!("{:.4}", turn.to_degrees())));
+        out.push(("Georeference latitude, longitude".into(), format!("{:.6}, {:.6}", place.lat, place.lon)));
+    } else {
+        out.push(("Georeference latitude, longitude".into(), format!("{lat:.6}, {lon:.6}")));
+        out.push(("Georeference height (m)".into(), format!("{:.3}", anchor.elevation)));
+    }
+    out
+}
+
+fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>, Vec<ModelDot>) {
     let mut scene = Scene::new(file);
     scene.run();
     scene.finish()
@@ -1406,6 +1561,8 @@ mod tests {
                 ..Mesh::default()
             }], "Mesh"),
             user: Vec::new(),
+            font: None,
+            stroke: None,
         };
         let mut file = File::default();
         file.meters = 1.0;
@@ -1413,7 +1570,7 @@ mod tests {
         let mut scene = Scene::new(&file);
         scene.triangles = MAX_TRIANGLES - 1;
         scene.run();
-        let (layers, info, _, _, _) = scene.finish();
+        let (layers, info, _, _, _, _) = scene.finish();
         let visible = layers.iter().find(|l| !l.hidden).unwrap();
         assert_eq!(visible.triangle_count(), 1);
         assert_eq!(visible.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
@@ -1475,6 +1632,63 @@ mod tests {
         assert!(!view.camera.unwrap().perspective);
         assert!(model.views[sheets[1].viewports[0].view.unwrap()].camera.unwrap().perspective);
         assert!(!sheets[0].lines.is_empty() && !sheets[0].fills.is_empty(), "the line and the text on the plan");
+    }
+
+    /// Text dots (`dots.3dm`, from make_dots.py, millimetres): labels at their points in their
+    /// colour, following their layer: "A1" red at the box's far corner, "Hidden note" on the
+    /// layer that is off.
+    #[test]
+    fn text_dots_are_labels_at_their_points() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, _) = load("dots.3dm", std::fs::read(dir.join("dots.3dm")).unwrap());
+        let dots = &model.project.dots;
+        assert_eq!(dots.len(), 2);
+        let a1 = dots.iter().find(|d| d.text == "A1").expect("A1");
+        assert!((glam::Vec3::from_array(a1.at) - glam::Vec3::new(1.0, 0.6, 0.3)).length() < 1e-5, "{:?}", a1.at);
+        assert_eq!(a1.color, [200, 30, 30]);
+        let hidden = dots.iter().find(|d| d.text == "Hidden note").expect("hidden");
+        let layer = model.layers.iter().find(|l| l.name == hidden.layer).expect("its layer");
+        assert!(layer.hidden, "{}", layer.name);
+    }
+
+    /// The earth anchor point (`settings.3dm`, from make_settings.py: Delft, 52.011577 N
+    /// 4.357068 E, at (100, 200, 0) m of the model, its north at (0.6, 0.8)) as a map
+    /// conversion to RD New of the scene's origin, which IFC keeps: saved and opened again, the
+    /// same georeference.
+    #[test]
+    fn the_earth_anchor_is_the_georeference_and_ifc_keeps_it() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, info) = load("settings.3dm", std::fs::read(dir.join("settings.3dm")).unwrap());
+        assert_eq!(entry(&info, "Georeference coordinate system"), "EPSG:28992");
+        let turn: f64 = entry(&info, "Georeference rotation (degrees)").parse().unwrap();
+        assert!((turn - 0.6f64.atan2(0.8).to_degrees()).abs() < 1e-3, "{turn}");
+        // the anchor point, taken from the scene's origin to the model point, is where its
+        // latitude and longitude are on the grid
+        let (e, n) = entry(&info, "Georeference eastings, northings (m)").split_once(',').unwrap();
+        let (e, n): (f64, f64) = (e.trim().parse().unwrap(), n.trim().parse().unwrap());
+        let origin = model.project.info.iter().find(|(k, _)| k == "Rhino world origin (metres)").map_or(DVec3::ZERO, |(_, v)| {
+            let c: Vec<f64> = v.split(',').map(|x| x.trim().parse().unwrap()).collect();
+            DVec3::new(c[0], c[1], c[2])
+        });
+        let d = DVec3::new(100.0, 200.0, 0.0) - origin;
+        let (sin, cos) = turn.to_radians().sin_cos();
+        let anchor = bim_gis::LatLon::new(52.011577, 4.357068).to_rd();
+        assert!((e + d.x * cos - d.y * sin - anchor.x).abs() < 1e-3 && (n + d.x * sin + d.y * cos - anchor.y).abs() < 1e-3, "{e} {n}");
+        // through IFC and back
+        let out = std::env::temp_dir().join(format!("rhino-georef-{}.ifc", std::process::id()));
+        crate::export::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert!(text.contains("IFCPROJECTEDCRS('EPSG:28992'") && text.contains("=IFCMAPCONVERSION("), "no map conversion");
+        let back = crate::loaders::load(&out).unwrap();
+        let _ = std::fs::remove_file(&out);
+        let again = |k: &str| back.project.info.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+        assert_eq!(again("Georeference coordinate system"), "EPSG:28992");
+        let (e2, n2) = again("Georeference eastings, northings (m)").split_once(',').map(|(a, b)| (a.trim().parse::<f64>().unwrap(), b.trim().parse::<f64>().unwrap())).unwrap();
+        // the IFC's world origin is the scene's origin plus the anchor the IFC loader takes off
+        let anchor_back = back.origins.first().and_then(|o| o.anchor).unwrap_or(DVec3::ZERO);
+        let (rs, rc) = again("Georeference rotation (degrees)").parse::<f64>().unwrap().to_radians().sin_cos();
+        let (e2, n2) = (e2 + anchor_back.x * rc - anchor_back.y * rs, n2 + anchor_back.x * rs + anchor_back.y * rc);
+        assert!((e2 - e).abs() < 1e-3 && (n2 - n).abs() < 1e-3, "{e} {n} -> {e2} {n2}");
     }
 
     /// Lights (`lights.3dm`, from make_lights.py): the point, spot, directional, linear and

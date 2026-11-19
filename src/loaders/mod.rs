@@ -35,6 +35,7 @@ mod vwx;
 #[cfg(not(target_arch = "wasm32"))]
 mod smc;
 mod tekla;
+mod tekla_analysis;
 mod tbp;
 mod ply;
 mod cityjson;
@@ -72,6 +73,7 @@ mod sam;
 mod rhino;
 mod blend;
 mod fcstd;
+mod dicom;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -295,7 +297,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -583,6 +585,24 @@ mod tests {
         let source = Source::Bytes { name: "test.RVT".into(), data: Arc::new(Vec::new()) };
         let error = load_with(&source, &Progress::default()).unwrap_err();
         assert!(error.contains("Revit files open in the desktop app only"), "{error}");
+    }
+
+    #[test]
+    fn loads_the_model_a_dicom_file_carries() {
+        // an Encapsulated STL of a 40 x 20 x 10 mm block: millimetres become metres
+        let stl = load(&repo_file("test-models/dicom-implant-stl.dcm")).expect("DICOM STL");
+        assert_eq!(stl.format, "DICOM");
+        assert_eq!(stl.triangle_count(), 12);
+        let size = stl.bounds.size();
+        assert!((size[0] - 0.04).abs() < 1e-6 && (size[1] - 0.02).abs() < 1e-6 && (size[2] - 0.01).abs() < 1e-6, "{size:?}");
+        // an Encapsulated OBJ, coloured by the material library beside it, kept in its own frame
+        let obj = load(&repo_file("test-models/dicom-obj/model.dcm")).expect("DICOM OBJ");
+        assert_eq!(obj.triangle_count(), 4);
+        assert_eq!(obj.layers[0].color, [0.89, 0.85, 0.72]);
+        assert!((obj.bounds.max[2] - 0.03).abs() < 1e-6 && obj.bounds.min[1] >= 0.0, "{:?}", obj.bounds);
+        // the library alone says what it is
+        let error = load(&repo_file("test-models/dicom-obj/material.dcm")).unwrap_err();
+        assert!(error.contains("material library"), "{error}");
     }
 
     #[test]

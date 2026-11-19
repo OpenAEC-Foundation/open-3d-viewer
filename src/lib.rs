@@ -9,6 +9,7 @@
 //!
 //! Independent reader crates provide format support; the desktop build includes Revit.
 
+pub mod align;
 mod annotations;
 mod b2;
 pub mod app;
@@ -62,6 +63,8 @@ pub mod views3d;
 mod units;
 mod view_cube;
 mod viewport;
+#[cfg(target_arch = "wasm32")]
+mod host;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 

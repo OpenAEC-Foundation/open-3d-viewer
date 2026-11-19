@@ -159,6 +159,8 @@ pub struct App {
     add_queue: Vec<loaders::Source>,
     /// Models read from the queue that the scene does not show yet.
     scene_stale: bool,
+    /// What laying the added models on the first by their grids did, for the status bar.
+    aligned: Vec<String>,
     /// The files of the last model when they layer over each other (IFCX) and that model: a
     /// file of the same kind added next composes with them into that model.
     layer_stack: (Vec<loaders::Source>, Option<u64>),
@@ -236,6 +238,9 @@ pub struct App {
     pub plane_placed: Option<SectionPlane>,
     /// Waiting for a click on a face to place the section plane.
     pub plane_picking: bool,
+    /// Moving a model by two points picked in the 3D view: the model, and how many measurements
+    /// there were when it began (the line drawn between the two points is not kept).
+    pub moving_model: Option<(usize, usize)>,
     /// The saved view last shown.
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
@@ -464,6 +469,8 @@ pub enum Message {
     ModelVisible(usize, bool),
     /// Pick a model in the explorer (its project data show); picked already: fold or unfold it.
     PickModel(usize),
+    /// Move the picked model by two points picked in the 3D view: from, then to.
+    MoveModelByPoints,
     /// Open or close a folder of views in the explorer (by its path).
     ToggleFolder(String),
     /// Order the views of the files in the explorer: see [`App::view_order`].
@@ -481,6 +488,10 @@ pub enum Message {
     SavePicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
+    /// Lets Blender in the environment render the file opened from Docs (the web app); and its
+    /// answer, the name of the picture.
+    BlenderRender,
+    BlenderRendered(Result<String, String>),
     Mode(RenderMode),
     ToggleGrid,
     ToggleFlipUp,
@@ -902,6 +913,7 @@ impl Default for App {
             adding_model: false,
             add_queue: Vec::new(),
             scene_stale: false,
+            aligned: Vec::new(),
             layer_stack: (Vec::new(), None),
             loading_stack: (Vec::new(), false),
             visible: Vec::new(),
@@ -942,6 +954,7 @@ impl Default for App {
             plane: None,
             plane_placed: None,
             plane_picking: false,
+            moving_model: None,
             active_view: None,
             show_grids: true,
             picked_grid: None,
@@ -1225,7 +1238,8 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: 
     )
 }
 
-/// Saves the model in the browser: written in memory and handed over as a download.
+/// Saves the model in the browser: written in memory and handed over as a download, or stored
+/// in Docs when the app runs in an environment.
 #[cfg(target_arch = "wasm32")]
 pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace: bool, ifc: export::IfcSchema) -> Task<Message> {
     Task::perform(
@@ -1234,7 +1248,11 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace:
             let start = Instant::now();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let bytes = export::to_bytes_schema(&model, &document, &name, ifc)?;
-            crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
+            if crate::host::present() {
+                crate::host::save(&name, &bytes).await?;
+            } else {
+                crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
+            }
             Ok((path, start.elapsed().as_secs_f32()))
         },
         Message::Saved,
@@ -1599,9 +1617,45 @@ impl App {
         }
         let first = self.models.last().map_or(0, |entry| entry.layers.end);
         self.models.push(ModelEntry::new(model, first));
+        self.align_added();
+        self.combine_models();
+    }
+
+    /// Lays the model added last on the first by the grids they share (see [`crate::align`]): the
+    /// architect's and the structural engineer's model often each have their own zero point. The
+    /// move is the model's own, as when typed in the right pane, so it shows there and can be
+    /// changed.
+    fn align_added(&mut self) {
+        let [reference, .., added] = self.models.as_slice() else { return };
+        if reference.placed.turned != 0.0 || added.placed.moved != glam::DVec3::ZERO {
+            return;
+        }
+        let Some(aligned) = crate::align::on_grids(&reference.model.project.grids, &added.model.project.grids) else { return };
+        let by = aligned.by + reference.placed.moved;
+        if by.length() < 0.001 {
+            return;
+        }
+        let name = added.model.file_name();
+        self.aligned.push(format!("{name} laid on the first model by {} grids ({:.3}, {:.3} m)", aligned.grids, by.x, by.y));
+        if let Some(added) = self.models.last_mut() {
+            added.placed.moved = by;
+        }
+    }
+
+    /// Builds the scene of the open models, each at its place, and says what was aligned.
+    fn combine_models(&mut self) {
         let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
-        self.set_scene(Arc::new(Model::combine(&sources)));
+        let moves: Vec<glam::DVec3> = self.models.iter().map(|entry| entry.placed.moved).collect();
+        let turns: Vec<f64> = self.models.iter().map(|entry| entry.placed.turned).collect();
+        self.set_scene(Arc::new(Model::combine_placed(&sources, &moves, &turns)));
         self.restore_model_visibility();
+        if !self.aligned.is_empty() {
+            let said = std::mem::take(&mut self.aligned).join(" · ");
+            if let Status::Loaded(loaded) = &mut self.status {
+                loaded.push_str(" · ");
+                loaded.push_str(&said);
+            }
+        }
     }
 
     /// Files to add after the one that is loading (see `add_queue`).
@@ -1619,15 +1673,14 @@ impl App {
         }
         let first = self.models.last().map_or(0, |entry| entry.layers.end);
         self.models.push(ModelEntry::new(model, first));
+        self.align_added();
         self.scene_stale = true;
     }
 
     /// Builds the scene again from the open models.
     fn rebuild_scene(&mut self) {
-        let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
-        if sources.len() > 1 {
-            self.set_scene(Arc::new(Model::combine(&sources)));
-            self.restore_model_visibility();
+        if self.models.len() > 1 {
+            self.combine_models();
         }
     }
 
@@ -1982,6 +2035,19 @@ impl App {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         Status::Loaded(format!("Saved {file} in {secs:.2} s"))
                     }
+                    Err(e) => Status::Error(e),
+                };
+            }
+            Message::BlenderRender => {
+                #[cfg(target_arch = "wasm32")]
+                if crate::host::can_render() {
+                    self.status = Status::Loaded("Blender renders the model as it is stored in Docs…".to_string());
+                    return Task::perform(crate::host::render(), Message::BlenderRendered);
+                }
+            }
+            Message::BlenderRendered(result) => {
+                self.status = match result {
+                    Ok(name) => Status::Loaded(format!("Blender rendered {name}: it is next to the model in Docs")),
                     Err(e) => Status::Error(e),
                 };
             }
@@ -2617,7 +2683,20 @@ impl App {
                 self.explode = [0.0; 3];
                 self.update_explode();
             }
+            Message::MoveModelByPoints => {
+                if let Some(i) = self.picked_model.filter(|&i| i < self.models.len() && self.model.is_some()) {
+                    self.moving_model = Some((i, self.measure.results.len()));
+                    self.measure.picks.clear();
+                    self.measure.tool = Some(Tool::Line);
+                    self.plane_picking = false;
+                    if self.explode_on {
+                        self.explode_on = false;
+                        self.update_explode();
+                    }
+                }
+            }
             Message::Measure(tool) => {
+                self.moving_model = None;
                 self.measure.toggle(tool);
                 if self.measure.tool.is_some() {
                     self.plane_picking = false;
@@ -2684,6 +2763,12 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.moving_model.is_some() => {
+                self.moving_model = None;
+                self.measure.picks.clear();
+                self.measure.hover = None;
+                self.measure.tool = None;
+            }
             Message::Escape if self.modeller.grab.is_some() => {
                 self.drop_grab();
             }
@@ -2811,6 +2896,31 @@ impl App {
         self.context_menu = Some(Vec2::new(x, y));
     }
 
+    /// Moving a model by two points: once the line between them is drawn, the model moves by it
+    /// (its zero point along) and the line is not kept.
+    fn move_model_by_line(&mut self) {
+        let Some((i, before)) = self.moving_model else { return };
+        if self.measure.results.len() <= before {
+            return;
+        }
+        let line = match self.measure.results.pop() {
+            Some(crate::measure::Measurement::Mark { points, .. }) if points.len() == 2 => Some((points[0], points[1])),
+            _ => None,
+        };
+        self.moving_model = None;
+        self.measure.tool = None;
+        self.measure.picks.clear();
+        self.measure.hover = None;
+        let Some((from, to)) = line else { return };
+        // the scene's frame: the points are in the view's, which may be turned up
+        let by = self.model_matrix().inverse().transform_vector3(to - from).as_dvec3();
+        let Some(entry) = self.models.get_mut(i) else { return };
+        entry.placed.moved += by;
+        let name = entry.model.file_name();
+        self.replace_models();
+        self.status = Status::Loaded(format!("{name} moved by {:.3}, {:.3}, {:.3} m", by.x, by.y, by.z));
+    }
+
     /// Something is selected: elements or layers, or structural objects picked by a click.
     pub(crate) fn has_selection(&self) -> bool {
         !self.sel.is_empty() || !self.structural.selected.is_empty()
@@ -2852,6 +2962,10 @@ impl App {
             }
             let Some(hover) = self.measure.hover.clone() else { return };
             self.measure.click(&model, &hover, &self.model_matrix());
+            if self.moving_model.is_some() {
+                self.move_model_by_line();
+                return;
+            }
             // the measured element is also selected (shows its properties)
             if tool == Tool::Volume {
                 self.click(Some(pickable_at(&model, hover.layer, hover.triangle)), false);
@@ -4043,9 +4157,10 @@ impl App {
 
     /// The 3D viewport with its overlays; the shell's workspace.
     pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        // a picture for a report: the model alone, without the cube, the grids and the hints
+        // a picture for a report or an issue: the model alone, without the cube, the grids, the
+        // handles and the hints
         #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
-        let clean = self.collab.report_job.is_some();
+        let clean = self.collab.picturing();
         #[cfg(not(all(feature = "validator", not(target_arch = "wasm32"))))]
         let clean = false;
         let settings = RenderSettings {
@@ -4058,7 +4173,7 @@ impl App {
             section: self.active_section(),
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
-            grids: self.grids_shown() || (self.levels_3d && !clean),
+            grids: (self.grids_shown() || self.levels_3d) && !clean,
             ambient: self.ambient,
             point_size: self.point_size,
             cloud_depth: self.cloud_depth,
@@ -4142,7 +4257,7 @@ impl App {
                 .align_top(Fill)
         });
         // a view's tab keeps its box without the handles: its crop is set on the sheet
-        let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none()).map(|section| {
+        let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none() && !clean).map(|section| {
             canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {
@@ -4203,10 +4318,23 @@ impl App {
         let hover = self.measure.hover.as_ref().filter(|h| {
             self.measure.tool.is_some_and(|t| t != Tool::Volume) && h.screen.view_proj == view_proj && self.hover_scene_holds()
         });
+        // the model's labels (Rhino's text dots) on the layers that show
+        let dots: Vec<(Vec3, String, Color)> = self
+            .model
+            .as_ref()
+            .map(|m| {
+                m.project
+                    .dots
+                    .iter()
+                    .filter(|d| m.layers.iter().position(|l| l.name == d.layer).is_none_or(|i| self.visible.get(i).copied().unwrap_or(true)))
+                    .map(|d| (Vec3::from_array(d.at), d.text.clone(), Color::from_rgb8(d.color[0], d.color[1], d.color[2])))
+                    .collect()
+            })
+            .unwrap_or_default();
         // hidden while the model is taken apart: they belong to the model as it is
         let measures = (overlay.is_none()
             && !self.explode_on
-            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some()))
+            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some() || !dots.is_empty()))
         .then(|| {
             canvas(crate::measure::overlay::MeasureOverlay {
                 results: &self.measure.results,
@@ -4219,6 +4347,7 @@ impl App {
                 ink: p.accent,
                 label_bg: p.surface,
                 label_text: p.text,
+                dots,
             })
             .width(Fill)
             .height(Fill)
@@ -5256,6 +5385,55 @@ mod tests {
             ..Layer::default()
         };
         Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn a_picked_model_moves_by_two_points_its_zero_point_along() {
+        let mut app = App::default();
+        app.set_model(named_square("architect", 7, 0.0));
+        app.add_model(named_square("structure", 8, 5.0));
+        let _ = app.update(Message::PickModel(1));
+        let _ = app.update(Message::MoveModelByPoints);
+        assert_eq!(app.moving_model, Some((1, 0)));
+        assert_eq!(app.measure.tool, Some(Tool::Line));
+        // the line from a corner of the second square to the first square's corner
+        app.measure.results.push(crate::measure::Measurement::Mark { kind: crate::measure::MarkKind::Line, points: vec![Vec3::new(5.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 0.0)] });
+        app.move_model_by_line();
+        assert_eq!(app.models[1].placed.moved, glam::DVec3::new(-5.0, 0.0, 0.0));
+        assert!(app.moving_model.is_none() && app.measure.tool.is_none() && app.measure.results.is_empty(), "the line is not kept");
+        let scene = app.model.clone().unwrap();
+        assert_eq!(scene.layers[1].positions[0], scene.layers[0].positions[0], "the squares lie on each other");
+        let Status::Loaded(said) = &app.status else { panic!("{:?}", app.status) };
+        assert!(said.contains("structure.rvt moved by -5.000"), "{said}");
+        // Esc stops a move begun
+        let _ = app.update(Message::MoveModelByPoints);
+        let _ = app.update(Message::Escape);
+        assert!(app.moving_model.is_none() && app.measure.tool.is_none());
+    }
+
+    #[test]
+    fn an_added_model_is_laid_on_the_first_by_the_grids_they_share() {
+        use crate::model::GridLine;
+        let with_grids = |name: &str, id: u64, x: f32, off: [f32; 2]| {
+            let mut model = (*named_square(name, id, x)).clone();
+            let g = |n: &str, a: [f32; 2], b: [f32; 2]| GridLine { name: n.into(), a: [a[0] + off[0], a[1] + off[1], 0.0], b: [b[0] + off[0], b[1] + off[1], 0.0] };
+            model.project.grids = vec![g("1", [0.0, -5.0], [0.0, 5.0]), g("A", [-5.0, 0.0], [5.0, 0.0]), g("2", [6.0, -5.0], [6.0, 5.0])];
+            Arc::new(model)
+        };
+        let mut app = App::default();
+        // the architect's square at x 10 with its grids from 10; the structural engineer's the same
+        // square at x 0 with its grids from 0: once laid on each other the squares coincide
+        app.set_model(with_grids("architect", 7, 10.0, [10.0, 3.0]));
+        app.add_model(with_grids("structure", 8, 0.0, [0.0, 0.0]));
+        assert_eq!(app.models[1].placed.moved, glam::DVec3::new(10.0, 3.0, 0.0));
+        let Status::Loaded(said) = &app.status else { panic!("{:?}", app.status) };
+        assert!(said.contains("structure.rvt laid on the first model by 3 grids"), "{said}");
+        let scene = app.model.clone().unwrap();
+        let x = |layer: usize| scene.layers[layer].positions[0];
+        assert_eq!(x(1), x(0), "the squares lie on each other");
+        // a model without shared grids stays where it is
+        app.add_model(named_square("other", 9, 40.0));
+        assert_eq!(app.models[2].placed.moved, glam::DVec3::ZERO);
     }
 
     /// Two unit squares facing +Z, element 10 at z = 0 under element 20 at z = 1.

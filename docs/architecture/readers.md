@@ -86,6 +86,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | Compressed glTF (Draco, meshopt, mesh quantization, KTX2/Basis) | glue in `gltf.rs` | `3d-tiles-dll`: `tiles-gltf` | Decodes into plain glTF before the published glTF crate reads it; 3D Tiles content uses it too. |
 | Smithsonian Voyager scene (`.svx.json`) | 114 (`svx.rs`) | `svx-dll`: `svx-model`, `svx-read` | Laid out as the model from the start (2026-11-18). Both adapters place the glTF the readers hand over through `placed.rs` and the glTF adapter. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
+| DICOM with an embedded model (`.dcm`) | 73 | `crates/dcm-read`, on the published `dicom-object` (MIT OR Apache-2.0): it takes the STL, OBJ or MTL document out of the file and says what other files hold | A crate in the suite for now, as the other new readers of 2026-11-18; it uses nothing of the app and moves one to one into a repository of its own (`dicom-dll`) later. The adapter reads the document with the app's STL and OBJ readers. |
 
 ## Moved so far
 
@@ -124,3 +125,7 @@ it; the owner sets those.
   files a slice takes.
 - The readers' tests and sample files move with them; what stays here tests the adapter with a
   small file.
+- The readers of MagicaVoxel, URDF, OpenDRIVE and DICOM models (2026-11-18) are crates in this
+  repository's `crates/` for now, by the owner's choice, not repositories of their own. Each uses
+  nothing of the app and has the name it will keep (`vox-read`, `urdf-read`, `xodr-read`,
+  `dcm-read`), so it moves one to one into its own `-dll` repository later.

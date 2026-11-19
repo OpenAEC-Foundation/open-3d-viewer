@@ -311,6 +311,7 @@
     "Rooms": "Rum",
     "Save": "Spara",
     "Save BCF": "Spara BCF",
+    "Render with Blender": "Rendera med Blender",
     "Save as": "Spara som",
     "Save as…": "Spara som…",
     "Export IFC 4x3": "Exportera som IFC 4x3",
@@ -1211,6 +1212,16 @@
     "Load borings": "Läs in borrhål",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Hämtar de geotekniska borrhålen runt platsen från det nederländska markregistret och lägger dem i modellen.",
     "Opens borings from GEF files and puts them in the model.": "Öppnar borrhål från GEF-filer och lägger dem i modellen.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Skapar en 3D-modell av marken från de inlästa borrhålen: varje plats får lagren från det närmaste borrhålet."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Skapar en 3D-modell av marken från de inlästa borrhålen: varje plats får lagren från det närmaste borrhålet.",
+    "Frame steel": "Karmstål",
+    "In walls": "I väggar",
+    "Steel is missing around the frame:": "Stål saknas runt karmen:",
+    "all; e.g. *sandwich*": "alla; t.ex. *sandwich*",
+    "no": "ingen",
+    "without steel in": "utan stål i",
+    "Move by two points": "Flytta med två punkter",
+    "Moving…": "Flyttar…",
+    "Pick model": "Välj modell",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Klicka på en punkt i modellen och sedan dit den ska (till exempel där två axlar korsas). Esc avbryter."
   }
 }

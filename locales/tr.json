@@ -311,6 +311,7 @@
     "Rooms": "Mahaller",
     "Save": "Kaydet",
     "Save BCF": "BCF kaydet",
+    "Render with Blender": "Blender ile işle",
     "Save as": "Farklı kaydet",
     "Save as…": "Farklı kaydet…",
     "Export IFC 4x3": "IFC 4x3 olarak dışa aktar",
@@ -1211,6 +1212,16 @@
     "Load borings": "Sondajları yükle",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Yerin çevresindeki jeoteknik sondajları Hollanda yer altı kayıt sisteminden alır ve modele ekler.",
     "Opens borings from GEF files and puts them in the model.": "GEF dosyalarından sondajları açar ve modele ekler.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Yüklenen sondajlardan zeminin 3D modelini oluşturur: her yer, en yakın sondajın katmanlarını alır."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Yüklenen sondajlardan zeminin 3D modelini oluşturur: her yer, en yakın sondajın katmanlarını alır.",
+    "Frame steel": "Kasa çeliği",
+    "In walls": "Duvarlarda",
+    "Steel is missing around the frame:": "Kasanın çevresinde çelik eksik:",
+    "all; e.g. *sandwich*": "tümü; örn. *sandwich*",
+    "no": "yok",
+    "without steel in": "çeliksiz, içinde",
+    "Move by two points": "İki noktayla taşı",
+    "Moving…": "Taşınıyor…",
+    "Pick model": "Modeli seç",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Modelin bir noktasını, sonra gideceği yeri tıklayın (örneğin iki aksın kesiştiği yer). Esc durdurur."
   }
 }

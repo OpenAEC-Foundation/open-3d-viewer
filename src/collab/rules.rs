@@ -102,6 +102,11 @@ pub fn matches(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// The layers that hold openings and steel: Revit categories and IFC classes, as the readers
+/// name them.
+const OPENINGS: [&str; 6] = ["*Windows", "*Doors", "*IfcWindow*", "*IfcDoor*", "*Ramen", "*Deuren"];
+const STEEL: [&str; 6] = ["*Structural framing", "*Columns", "*Structural columns", "*IfcBeam*", "*IfcColumn*", "*IfcMember*"];
+
 /// What a clash test looks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -114,6 +119,9 @@ pub enum ClashKind {
     /// Elements that have to be seen (signs, or what a camera watches from: the camera) with
     /// something standing in the line of sight to them.
     Sight,
+    /// Openings (the first side) that lack steel (the second side) around them: a post at each
+    /// side, a lintel above and, a window, a sill member below.
+    Frame,
 }
 
 /// A clash test: the elements of `a` against those of `b`.
@@ -150,11 +158,15 @@ pub struct ClashRule {
     /// A sight-line test: only the elements whose name fits one of these have to be seen
     /// (`*exit*, *vlucht*`; several with a comma between; empty: all the first side takes).
     pub sight_names: String,
+    /// A frame test: how far steel may stand from the edge of the opening (millimetres), and
+    /// the walls whose openings are tested, by their type or name (`*sandwich*`; empty: all).
+    pub frame_reach_mm: f32,
+    pub frame_walls: String,
 }
 
 impl Default for ClashRule {
     fn default() -> Self {
-        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false, storeys: String::new(), property: String::new(), value: String::new(), pair_tolerances: String::new(), sight_m: 20.0, sight_blocked_pct: 50.0, sight_names: String::new() }
+        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false, storeys: String::new(), property: String::new(), value: String::new(), pair_tolerances: String::new(), sight_m: 20.0, sight_blocked_pct: 50.0, sight_names: String::new(), frame_reach_mm: 250.0, frame_walls: String::new() }
     }
 }
 
@@ -166,6 +178,8 @@ impl ClashRule {
             ClashKind::Clearance => super::clash::Test::Clearance { distance: self.clearance_mm.max(0.0) / 1000.0 },
             // a sight-line test looks along lines, not at crossings
             ClashKind::Sight => super::clash::Test::Hard { tolerance: 0.0 },
+            // a frame test looks for what is missing, not at crossings
+            ClashKind::Frame => super::clash::Test::Hard { tolerance: 0.0 },
         }
     }
 
@@ -183,6 +197,12 @@ impl ClashRule {
     /// Whether an element of this name is one a sight-line test wants seen.
     pub fn takes_sight_name(&self, name: &str) -> bool {
         let wanted: Vec<&str> = self.sight_names.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        wanted.is_empty() || wanted.iter().any(|pattern| matches(pattern, name))
+    }
+
+    /// Whether a wall of this type or name has its openings tested by a frame test.
+    pub fn takes_frame_wall(&self, name: &str) -> bool {
+        let wanted: Vec<&str> = self.frame_walls.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
         wanted.is_empty() || wanted.iter().any(|pattern| matches(pattern, name))
     }
 
@@ -547,6 +567,24 @@ impl RuleSet {
                     "Free height of rooms, door sizes, thresholds, walk to a way out and turning circle, with the values usual for a new dwelling. Guide values: set them to what holds for the project.",
                 ),
                 rooms: RoomRules { on: true, compartment_area: 500.0, ..RoomRules::default() },
+                ..RuleSet::default()
+            },
+            RuleSet {
+                name: t("Hulpstaal rond kozijnen", "Steel around frames"),
+                description: t(
+                    "Per raam en deur in een wand van sandwichpanelen: een stijl links en rechts, een latei erboven en onder een raam een onderregel, binnen 250 mm van het kozijn. Leg het architectmodel en het constructiemodel samen open.",
+                    "Per window and door in a wall of sandwich panels: a post left and right, a lintel above and below a window a sill member, within 250 mm of the frame. Open the architect's and the structural model together.",
+                ),
+                model_checks: false,
+                clashes: vec![ClashRule {
+                    name: t("Stalen omranding van kozijnen", "Steel around frames"),
+                    a: Selector { layers: OPENINGS.iter().map(|s| s.to_string()).collect(), ..Selector::default() },
+                    b: Selector { layers: STEEL.iter().map(|s| s.to_string()).collect(), ..Selector::default() },
+                    kind: ClashKind::Frame,
+                    frame_reach_mm: 250.0,
+                    frame_walls: "*sandwich*".into(),
+                    ..ClashRule::default()
+                }],
                 ..RuleSet::default()
             },
             RuleSet {

@@ -37,7 +37,7 @@ impl App {
             for view in &views {
                 self.cut_view(view);
             }
-            return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned(), &|path| self.view_datums(path));
+            return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned(), &|path| self.view_datums(path), &|path| self.view_rules(path));
         }
         // a sheet read from the file, with the views it places cut first
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i).cloned()) {
@@ -49,7 +49,7 @@ impl App {
         }
         let view = self.shown_view()?.to_string();
         self.cut_view(&view);
-        let mut drawing = view_drawing(&self.document, &view, self.cuts.get(&view)?)?;
+        let mut drawing = view_drawing(&self.document, &view, self.cuts.get(&view)?, &self.view_rules(&view))?;
         drawing.datums(&self.view_datums(&view));
         Some(drawing)
     }

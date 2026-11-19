@@ -1,0 +1,27 @@
+{
+  "source": "Project Ocondat, OpenAEC Foundation: Libraries/Netherlands/data/hout.py (https://github.com/OpenAEC-Foundation/project-ocondat)",
+  "commit": "85a78eef15aaae9ed746569fd12db36331a5f3fb",
+  "licence": "LGPL-3.0",
+  "units": "strengths (fm_k, ft_0_k, ft_90_k, fc_0_k, fc_90_k, fv_k) and moduli (e_0_u_k, e_0_mean, e_90_mean, g_mean) in N/mm2; rho_k in kN/m3",
+  "grades": [
+    {"grade": "C14", "kind": "softwood", "fm_k": 14, "rho_k": 2.9, "ft_0_k": 8, "ft_90_k": 0.4, "fc_0_k": 16, "fc_90_k": 2.0, "fv_k": 3.0, "e_0_u_k": 4700, "e_0_mean": 7000, "e_90_mean": 230, "g_mean": 440},
+    {"grade": "C16", "kind": "softwood", "fm_k": 16, "rho_k": 3.1, "ft_0_k": 10, "ft_90_k": 0.5, "fc_0_k": 17, "fc_90_k": 2.2, "fv_k": 3.2, "e_0_u_k": 5400, "e_0_mean": 8000, "e_90_mean": 270, "g_mean": 500},
+    {"grade": "C18", "kind": "softwood", "fm_k": 18, "rho_k": 3.2, "ft_0_k": 11, "ft_90_k": 0.5, "fc_0_k": 18, "fc_90_k": 2.2, "fv_k": 3.4, "e_0_u_k": 6000, "e_0_mean": 9000, "e_90_mean": 300, "g_mean": 560},
+    {"grade": "C20", "kind": "softwood", "fm_k": 20, "rho_k": 3.3, "ft_0_k": 12, "ft_90_k": 0.5, "fc_0_k": 19, "fc_90_k": 2.3, "fv_k": 3.6, "e_0_u_k": 6400, "e_0_mean": 9500, "e_90_mean": 320, "g_mean": 590},
+    {"grade": "C22", "kind": "softwood", "fm_k": 22, "rho_k": 3.4, "ft_0_k": 13, "ft_90_k": 0.5, "fc_0_k": 20, "fc_90_k": 2.4, "fv_k": 3.8, "e_0_u_k": 6700, "e_0_mean": 10000, "e_90_mean": 330, "g_mean": 630},
+    {"grade": "C24", "kind": "softwood", "fm_k": 24, "rho_k": 3.5, "ft_0_k": 14, "ft_90_k": 0.5, "fc_0_k": 21, "fc_90_k": 2.5, "fv_k": 4.0, "e_0_u_k": 7400, "e_0_mean": 11000, "e_90_mean": 370, "g_mean": 690},
+    {"grade": "C27", "kind": "softwood", "fm_k": 27, "rho_k": 3.7, "ft_0_k": 16, "ft_90_k": 0.6, "fc_0_k": 22, "fc_90_k": 2.6, "fv_k": 4.0, "e_0_u_k": 7700, "e_0_mean": 11500, "e_90_mean": 380, "g_mean": 720},
+    {"grade": "C30", "kind": "softwood", "fm_k": 30, "rho_k": 3.8, "ft_0_k": 18, "ft_90_k": 0.6, "fc_0_k": 23, "fc_90_k": 2.7, "fv_k": 4.0, "e_0_u_k": 8000, "e_0_mean": 12000, "e_90_mean": 400, "g_mean": 750},
+    {"grade": "C35", "kind": "softwood", "fm_k": 35, "rho_k": 4.0, "ft_0_k": 21, "ft_90_k": 0.6, "fc_0_k": 25, "fc_90_k": 2.8, "fv_k": 4.0, "e_0_u_k": 8700, "e_0_mean": 13000, "e_90_mean": 430, "g_mean": 810},
+    {"grade": "D30", "kind": "hardwood", "fm_k": 30, "rho_k": 5.3, "ft_0_k": 18, "ft_90_k": 0.6, "fc_0_k": 23, "fc_90_k": 4.0, "fv_k": 3.0, "e_0_u_k": 8000, "e_0_mean": 10000, "e_90_mean": 640, "g_mean": 600},
+    {"grade": "D35", "kind": "hardwood", "fm_k": 35, "rho_k": 5.6, "ft_0_k": 21, "ft_90_k": 0.6, "fc_0_k": 25, "fc_90_k": 4.2, "fv_k": 3.4, "e_0_u_k": 8700, "e_0_mean": 10000, "e_90_mean": 690, "g_mean": 650},
+    {"grade": "D40", "kind": "hardwood", "fm_k": 40, "rho_k": 5.9, "ft_0_k": 24, "ft_90_k": 0.6, "fc_0_k": 26, "fc_90_k": 8.8, "fv_k": 3.8, "e_0_u_k": 9400, "e_0_mean": 11000, "e_90_mean": 750, "g_mean": 700},
+    {"grade": "D50", "kind": "hardwood", "fm_k": 50, "rho_k": 6.5, "ft_0_k": 30, "ft_90_k": 0.6, "fc_0_k": 29, "fc_90_k": 4.85, "fv_k": 4.6, "e_0_u_k": 11800, "e_0_mean": 14000, "e_90_mean": 930, "g_mean": 880},
+    {"grade": "D60", "kind": "hardwood", "fm_k": 60, "rho_k": 7.0, "ft_0_k": 36, "ft_90_k": 0.6, "fc_0_k": 32, "fc_90_k": 10.5, "fv_k": 5.3, "e_0_u_k": 14300, "e_0_mean": 17000, "e_90_mean": 1130, "g_mean": 1060},
+    {"grade": "D70", "kind": "hardwood", "fm_k": 70, "rho_k": 9.0, "ft_0_k": 42, "ft_90_k": 0.6, "fc_0_k": 34, "fc_90_k": 13.5, "fv_k": 6.0, "e_0_u_k": 16800, "e_0_mean": 20000, "e_90_mean": 1330, "g_mean": 1250},
+    {"grade": "GL24h", "kind": "glulam", "fm_k": 24, "rho_k": 3.8, "ft_0_k": 17, "ft_90_k": 0.4, "fc_0_k": 24.0, "fc_90_k": 2.7, "fv_k": 2.7, "e_0_u_k": 9400, "e_0_mean": 11600, "e_90_mean": 390, "g_mean": 720},
+    {"grade": "GL28h", "kind": "glulam", "fm_k": 28, "rho_k": 4.1, "ft_0_k": 20, "ft_90_k": 0.5, "fc_0_k": 26.5, "fc_90_k": 3.0, "fv_k": 3.2, "e_0_u_k": 10200, "e_0_mean": 12600, "e_90_mean": 420, "g_mean": 780},
+    {"grade": "GL32h", "kind": "glulam", "fm_k": 32, "rho_k": 4.3, "ft_0_k": 23, "ft_90_k": 0.5, "fc_0_k": 29.0, "fc_90_k": 3.3, "fv_k": 3.8, "e_0_u_k": 11100, "e_0_mean": 13700, "e_90_mean": 460, "g_mean": 850},
+    {"grade": "GL36h", "kind": "glulam", "fm_k": 36, "rho_k": 4.5, "ft_0_k": 26, "ft_90_k": 0.6, "fc_0_k": 31.0, "fc_90_k": 3.6, "fv_k": 4.3, "e_0_u_k": 11900, "e_0_mean": 14700, "e_90_mean": 490, "g_mean": 910}
+  ]
+}

@@ -8,6 +8,13 @@
 //! Taken from the standards Open BIM Studio cites, where it drew a simpler shape: IPN and UPN have
 //! tapered flanges, angles a toe radius of half the root radius, and hot-finished hollow sections
 //! an inner corner radius of the wall thickness besides the outer one of 1.5 times it.
+//!
+//! Beside it stand the steel profiles of Project Ocondat (`data/ocondat-steel.json`, see the
+//! file's `source` and `licence`; extracted by `tools/ocondat-steel/extract.py`), compiled in:
+//! the series the table lacks (HEAA, HD, UAP, cold-formed hollow sections of EN 10219, flat and
+//! round bars, the old Differdinger beams) and more sizes of angles, tees and hollow sections.
+//! A designation the table has stays the table's. Ocondat's corner radii of hollow sections are
+//! not taken over: they follow the wall thickness as the product standards have it.
 
 use crate::material::Material;
 use crate::{Lang, LibraryError};
@@ -84,6 +91,70 @@ impl ProfileShape {
         matches!(self, ProfileShape::Circle { .. } | ProfileShape::Chs { .. })
     }
 
+    /// The parametric profile definitions of IFC a profile can be.
+    pub const IFC: [&'static str; 8] = [
+        "IfcRectangleProfileDef",
+        "IfcCircleProfileDef",
+        "IfcIShapeProfileDef",
+        "IfcUShapeProfileDef",
+        "IfcLShapeProfileDef",
+        "IfcTShapeProfileDef",
+        "IfcRectangleHollowProfileDef",
+        "IfcCircleHollowProfileDef",
+    ];
+
+    /// The profile as IFC has it: the name of its parametric profile definition, and that
+    /// definition's attributes by their IFC names and in IFC's order. Lengths are in metres; an
+    /// attribute whose name ends in "Slope" is an angle in radians. IFC has a circle by its
+    /// radius, and the width of a rectangle and of an I shape before its depth.
+    pub fn ifc(&self) -> (&'static str, Vec<(&'static str, f64)>) {
+        let (definition, values) = match *self {
+            ProfileShape::Rectangle { width, depth } => ("IfcRectangleProfileDef", vec![width, depth]),
+            ProfileShape::Circle { diameter } => ("IfcCircleProfileDef", vec![diameter / 2.0]),
+            ProfileShape::I { h, b, tw, tf, r, slope } => ("IfcIShapeProfileDef", vec![b, h, tw, tf, r, slope]),
+            ProfileShape::U { h, b, tw, tf, r, slope } => ("IfcUShapeProfileDef", vec![h, b, tw, tf, r, slope]),
+            ProfileShape::L { h, b, t, r1, r2 } => ("IfcLShapeProfileDef", vec![h, b, t, r1, r2]),
+            ProfileShape::T { h, b, tw, tf, r } => ("IfcTShapeProfileDef", vec![h, b, tw, tf, r]),
+            ProfileShape::Rhs { h, b, t, r_out, r_in } => ("IfcRectangleHollowProfileDef", vec![b, h, t, r_in, r_out]),
+            ProfileShape::Chs { d, t } => ("IfcCircleHollowProfileDef", vec![d / 2.0, t]),
+        };
+        let names = Self::ifc_attributes(definition).unwrap_or_default();
+        (definition, names.iter().copied().zip(values).collect())
+    }
+
+    /// The attributes of IFC's parametric profile definition `definition` that a profile holds,
+    /// by their IFC names and in IFC's order; none for a definition the library does not hold.
+    pub fn ifc_attributes(definition: &str) -> Option<&'static [&'static str]> {
+        Some(match definition {
+            "IfcRectangleProfileDef" => &["XDim", "YDim"],
+            "IfcCircleProfileDef" => &["Radius"],
+            "IfcIShapeProfileDef" => &["OverallWidth", "OverallDepth", "WebThickness", "FlangeThickness", "FilletRadius", "FlangeSlope"],
+            "IfcUShapeProfileDef" => &["Depth", "FlangeWidth", "WebThickness", "FlangeThickness", "FilletRadius", "FlangeSlope"],
+            "IfcLShapeProfileDef" => &["Depth", "Width", "Thickness", "FilletRadius", "EdgeRadius"],
+            "IfcTShapeProfileDef" => &["Depth", "FlangeWidth", "WebThickness", "FlangeThickness", "FilletRadius"],
+            "IfcRectangleHollowProfileDef" => &["XDim", "YDim", "WallThickness", "InnerFilletRadius", "OuterFilletRadius"],
+            "IfcCircleHollowProfileDef" => &["Radius", "WallThickness"],
+            _ => return None,
+        })
+    }
+
+    /// The profile of IFC's parametric profile definition `definition` with these values of its
+    /// attributes, in the order of [`ifc`](Self::ifc); none for a definition the library does not
+    /// hold or another number of values.
+    pub fn from_ifc(definition: &str, values: &[f64]) -> Option<ProfileShape> {
+        Some(match (definition, values) {
+            ("IfcRectangleProfileDef", &[width, depth]) => ProfileShape::Rectangle { width, depth },
+            ("IfcCircleProfileDef", &[radius]) => ProfileShape::Circle { diameter: 2.0 * radius },
+            ("IfcIShapeProfileDef", &[b, h, tw, tf, r, slope]) => ProfileShape::I { h, b, tw, tf, r, slope },
+            ("IfcUShapeProfileDef", &[h, b, tw, tf, r, slope]) => ProfileShape::U { h, b, tw, tf, r, slope },
+            ("IfcLShapeProfileDef", &[h, b, t, r1, r2]) => ProfileShape::L { h, b, t, r1, r2 },
+            ("IfcTShapeProfileDef", &[h, b, tw, tf, r]) => ProfileShape::T { h, b, tw, tf, r },
+            ("IfcRectangleHollowProfileDef", &[b, h, t, r_in, r_out]) => ProfileShape::Rhs { h, b, t, r_out, r_in },
+            ("IfcCircleHollowProfileDef", &[radius, t]) => ProfileShape::Chs { d: 2.0 * radius, t },
+            _ => return None,
+        })
+    }
+
     /// Its outline and holes, each a closed polygon (the closing point not repeated) with its arcs
     /// within `chord` metres; the outline counter-clockwise, holes clockwise.
     pub fn rings(&self, chord: f64) -> Result<(Vec<DVec2>, Vec<Vec<DVec2>>), LibraryError> {
@@ -133,34 +204,58 @@ impl ProfileShape {
 pub enum Series {
     Ipe,
     Ipn,
+    /// The light H sections (HE AA).
+    Heaa,
     Hea,
     Heb,
     Hem,
+    /// The wide flange columns.
+    Hd,
     Upn,
     Upe,
+    /// The French channels with parallel flanges.
+    Uap,
     LEqual,
     LUnequal,
     T,
     Shs,
     Rhs,
+    /// Cold-formed square hollow sections.
+    CfShs,
+    /// Cold-formed rectangular hollow sections.
+    CfRhs,
     Chs,
+    /// Flat bars.
+    Flat,
+    /// Round bars.
+    Round,
+    /// The old Differdinger beams (DIE, DIL, DIN, DIR), for existing buildings.
+    Differdinger,
 }
 
 impl Series {
-    pub const ALL: [Series; 13] = [
+    pub const ALL: [Series; 21] = [
         Series::Ipe,
         Series::Ipn,
+        Series::Heaa,
         Series::Hea,
         Series::Heb,
         Series::Hem,
+        Series::Hd,
         Series::Upn,
         Series::Upe,
+        Series::Uap,
         Series::LEqual,
         Series::LUnequal,
         Series::T,
         Series::Shs,
         Series::Rhs,
+        Series::CfShs,
+        Series::CfRhs,
         Series::Chs,
+        Series::Flat,
+        Series::Round,
+        Series::Differdinger,
     ];
 
     /// Its name in a designation.
@@ -168,11 +263,20 @@ impl Series {
         match self {
             Series::Ipe => "IPE",
             Series::Ipn => "IPN",
+            Series::Heaa => "HEAA",
             Series::Hea => "HEA",
             Series::Heb => "HEB",
             Series::Hem => "HEM",
             Series::Upn => "UPN",
             Series::Upe => "UPE",
+            Series::Hd => "HD",
+            Series::Uap => "UAP",
+            Series::CfShs => "CFSHS",
+            Series::CfRhs => "CFRHS",
+            Series::Flat => "FL",
+            Series::Round => "RD",
+            // DIE, DIL, DIN and DIR
+            Series::Differdinger => "DI",
             Series::LEqual | Series::LUnequal => "L",
             Series::T => "T",
             Series::Shs => "SHS",
@@ -184,7 +288,12 @@ impl Series {
     /// The standard its dimensions come from.
     pub fn standard(self) -> &'static str {
         match self {
-            Series::Ipe | Series::Ipn | Series::Hea | Series::Heb | Series::Hem | Series::Upn | Series::Upe => "EN 10365",
+            Series::Ipe | Series::Ipn | Series::Heaa | Series::Hea | Series::Heb | Series::Hem | Series::Hd | Series::Upn | Series::Upe => "EN 10365",
+            Series::Uap => "NF A 45-255",
+            Series::CfShs | Series::CfRhs => "EN 10219",
+            Series::Flat => "EN 10058",
+            Series::Round => "EN 10060",
+            Series::Differdinger => "Differdange (historic)",
             Series::LEqual | Series::LUnequal => "EN 10056-1",
             Series::T => "EN 10055",
             Series::Shs | Series::Rhs | Series::Chs => "EN 10210",
@@ -194,7 +303,12 @@ impl Series {
     /// Whether its profiles are columns too (beams take every profile): the H sections and the
     /// hollow sections.
     pub fn column(self) -> bool {
-        matches!(self, Series::Hea | Series::Heb | Series::Hem | Series::Shs | Series::Rhs | Series::Chs)
+        matches!(self, Series::Heaa | Series::Hea | Series::Heb | Series::Hem | Series::Hd | Series::Shs | Series::Rhs | Series::CfShs | Series::CfRhs | Series::Chs | Series::Differdinger)
+    }
+
+    /// Whether its profiles are hollow.
+    pub fn hollow(self) -> bool {
+        matches!(self, Series::Shs | Series::Rhs | Series::CfShs | Series::CfRhs | Series::Chs)
     }
 }
 
@@ -205,6 +319,55 @@ pub struct SteelProfile {
     /// "HEA 200", "L 80x80x8", "SHS 100x100x5", "CHS 114.3x5".
     pub designation: String,
     pub shape: ProfileShape,
+    /// Whether it was taken from Project Ocondat, and is not a row of the suite's own table.
+    pub ocondat: bool,
+}
+
+impl SteelProfile {
+    /// Where its dimensions come from: its series' standard, and Ocondat when taken from there.
+    pub fn source(&self) -> String {
+        if self.ocondat {
+            format!("{}, Ocondat", self.series.standard())
+        } else {
+            self.series.standard().to_string()
+        }
+    }
+}
+
+/// The steel profiles taken from Project Ocondat: per series the rows `designation, h, b, tw,
+/// tf, r1, r2` in millimetres.
+const OCONDAT: &str = include_str!("../data/ocondat-steel.json");
+
+#[derive(Deserialize)]
+struct Ocondat {
+    series: std::collections::HashMap<Series, Vec<(String, f64, f64, f64, f64, f64, f64)>>,
+}
+
+/// The shape of a row of `series`, from millimetres: `r2` is an angle's toe radius, half its
+/// root radius when the row has none.
+fn row_shape(series: Series, h: f64, b: f64, tw: f64, tf: f64, r: f64, r2: Option<f64>) -> ProfileShape {
+    let (h, b, tw, tf, r) = (h / 1000.0, b / 1000.0, tw / 1000.0, tf / 1000.0, r / 1000.0);
+    match series {
+        Series::Ipe | Series::Heaa | Series::Hea | Series::Heb | Series::Hem | Series::Hd | Series::Differdinger => ProfileShape::I { h, b, tw, tf, r, slope: 0.0 },
+        // DIN 1025-1: flanges taper at 14 %
+        Series::Ipn => ProfileShape::I { h, b, tw, tf, r, slope: 0.14f64.atan() },
+        // DIN 1026-1: 8 % up to 300 mm deep, 5 % above
+        Series::Upn => ProfileShape::U { h, b, tw, tf, r, slope: if h <= 0.3 + 1e-9 { 0.08f64.atan() } else { 0.05f64.atan() } },
+        Series::Upe | Series::Uap => ProfileShape::U { h, b, tw, tf, r, slope: 0.0 },
+        Series::LEqual | Series::LUnequal => ProfileShape::L { h, b, t: tw, r1: r, r2: r2.map_or(r / 2.0, |r2| r2 / 1000.0) },
+        Series::T => ProfileShape::T { h, b, tw, tf, r },
+        // hot finished (EN 10210-2): the table holds the wall as tw and the outer radius (1.5 t)
+        // as tf; a row without one gets it from its wall
+        Series::Shs | Series::Rhs => ProfileShape::Rhs { h, b, t: tw, r_out: if tf > 0.0 { tf } else { 1.5 * tw }, r_in: tw },
+        // cold formed (EN 10219-2): the radii its section properties are computed with
+        Series::CfShs | Series::CfRhs => {
+            let outer = if tw <= 0.006 + 1e-9 { 2.0 } else if tw <= 0.010 + 1e-9 { 2.5 } else { 3.0 };
+            ProfileShape::Rhs { h, b, t: tw, r_out: outer * tw, r_in: (outer - 1.0) * tw }
+        }
+        Series::Chs => ProfileShape::Chs { d: b, t: tw },
+        Series::Flat => ProfileShape::Rectangle { width: b, depth: h },
+        Series::Round => ProfileShape::Circle { diameter: b },
+    }
 }
 
 /// Millimetres in a steel designation: whole, or to one decimal ("114.3").
@@ -217,36 +380,42 @@ fn size(metres: f64) -> String {
     }
 }
 
-/// Every profile of the steel table, in table order, read once.
+/// Every profile of the steel table, series by series in the order of [`Series::ALL`], read
+/// once: the rows of the suite's own table, and with them the rows of Ocondat whose designation
+/// the table does not have, by size.
 pub fn steel_profiles() -> &'static [SteelProfile] {
     static PROFILES: OnceLock<Vec<SteelProfile>> = OnceLock::new();
     PROFILES.get_or_init(|| {
+        let ocondat: Ocondat = serde_json::from_str(OCONDAT).expect("the steel profiles of Ocondat");
         let mut profiles = Vec::new();
-        for &(series, rows) in TABLE {
-            for row in rows.split(';').map(str::trim).filter(|r| !r.is_empty()) {
-                // nominal size, h, b, tw, tf, r (mm), column flag
-                let v: Vec<f64> = row.split_whitespace().map(|f| f.parse().expect("a number in the steel table")).collect();
-                let (nominal, h, b, tw, tf, r) = (v[0], v[1] / 1000.0, v[2] / 1000.0, v[3] / 1000.0, v[4] / 1000.0, v[5] / 1000.0);
-                let shape = match series {
-                    Series::Ipe | Series::Hea | Series::Heb | Series::Hem => ProfileShape::I { h, b, tw, tf, r, slope: 0.0 },
-                    // DIN 1025-1: flanges taper at 14 %
-                    Series::Ipn => ProfileShape::I { h, b, tw, tf, r, slope: 0.14f64.atan() },
-                    // DIN 1026-1: 8 % up to 300 mm deep, 5 % above
-                    Series::Upn => ProfileShape::U { h, b, tw, tf, r, slope: if h <= 0.3 + 1e-9 { 0.08f64.atan() } else { 0.05f64.atan() } },
-                    Series::Upe => ProfileShape::U { h, b, tw, tf, r, slope: 0.0 },
-                    Series::LEqual | Series::LUnequal => ProfileShape::L { h, b, t: tw, r1: r, r2: r / 2.0 },
-                    Series::T => ProfileShape::T { h, b, tw, tf, r },
-                    // the table holds the wall as tw and the outer radius (1.5 t) as tf
-                    Series::Shs | Series::Rhs => ProfileShape::Rhs { h, b, t: tw, r_out: tf, r_in: tw },
-                    Series::Chs => ProfileShape::Chs { d: b, t: tw },
-                };
-                let designation = match series {
-                    Series::LEqual | Series::LUnequal | Series::Shs | Series::Rhs => format!("{} {}x{}x{}", series.name(), size(h), size(b), size(tw)),
-                    Series::Chs => format!("CHS {}x{}", size(b), size(tw)),
-                    _ => format!("{} {}", series.name(), nominal),
-                };
-                profiles.push(SteelProfile { series, designation, shape });
+        for series in Series::ALL {
+            // each with its h, b and tw to sort by
+            let mut of: Vec<([f64; 3], SteelProfile)> = Vec::new();
+            for &(_, rows) in TABLE.iter().filter(|(s, _)| *s == series) {
+                for row in rows.split(';').map(str::trim).filter(|r| !r.is_empty()) {
+                    // nominal size, h, b, tw, tf, r (mm), column flag
+                    let v: Vec<f64> = row.split_whitespace().map(|f| f.parse().expect("a number in the steel table")).collect();
+                    let (nominal, h, b, tw) = (v[0], v[1] / 1000.0, v[2] / 1000.0, v[3] / 1000.0);
+                    let designation = match series {
+                        Series::LEqual | Series::LUnequal | Series::Shs | Series::Rhs => format!("{} {}x{}x{}", series.name(), size(h), size(b), size(tw)),
+                        Series::Chs => format!("CHS {}x{}", size(b), size(tw)),
+                        _ => format!("{} {}", series.name(), nominal),
+                    };
+                    of.push(([v[1], v[2], v[3]], SteelProfile { series, designation, shape: row_shape(series, v[1], v[2], v[3], v[4], v[5], None), ocondat: false }));
+                }
             }
+            let own = of.len();
+            for (designation, h, b, tw, tf, r1, r2) in ocondat.series.get(&series).into_iter().flatten() {
+                if of.iter().any(|(_, p)| p.designation == *designation) {
+                    continue;
+                }
+                let shape = row_shape(series, *h, *b, *tw, *tf, *r1, Some(*r2));
+                of.push(([*h, *b, *tw], SteelProfile { series, designation: designation.clone(), shape, ocondat: true }));
+            }
+            if own > 0 && of.len() > own {
+                of.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("sizes are numbers"));
+            }
+            profiles.extend(of.into_iter().map(|(_, p)| p));
         }
         profiles
     })
@@ -330,17 +499,20 @@ pub struct LinearType {
     /// A name of its own, shown in place of the rule's (a type of a catalogue).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// An NL-SfB code of its own, in place of the rule's ("21.22").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl LinearType {
     pub fn new(id: &str, role: LinearRole, material: &str, profile: ProfileShape) -> Self {
-        Self { id: id.into(), role, material: material.into(), profile, designation: None, name: None }
+        Self { id: id.into(), role, material: material.into(), profile, designation: None, name: None, code: None }
     }
 
     /// A type of `role` of the steel profile `designation`, of steel.
     pub fn steel(id: &str, role: LinearRole, designation: &str) -> Option<Self> {
         let p = steel(designation)?;
-        Some(Self { id: id.into(), role, material: "steel".into(), profile: p.shape.clone(), designation: Some(p.designation.clone()), name: None })
+        Some(Self { id: id.into(), role, material: "steel".into(), profile: p.shape.clone(), designation: Some(p.designation.clone()), name: None, code: None })
     }
 
     /// Checks it against `materials`: an id, a known material, a profile that checks.
@@ -514,7 +686,8 @@ mod tests {
     #[test]
     fn the_steel_table_has_every_series_and_every_row_checks() {
         let profiles = steel_profiles();
-        assert_eq!(profiles.len(), 323);
+        assert_eq!(profiles.iter().filter(|p| !p.ocondat).count(), 323);
+        assert_eq!(profiles.len(), 1050);
         let designations: HashSet<&str> = profiles.iter().map(|p| p.designation.as_str()).collect();
         assert_eq!(designations.len(), profiles.len(), "designations are unique");
         for series in Series::ALL {
@@ -524,6 +697,38 @@ mod tests {
             p.shape.check().unwrap_or_else(|e| panic!("{}: {e}", p.designation));
             assert!(p.shape.props().unwrap().area > 0.0, "{}", p.designation);
         }
+    }
+
+    #[test]
+    fn the_profiles_of_ocondat_stand_beside_the_table() {
+        // the series the table lacks
+        for name in ["HEAA 200", "HD 260x54.1", "UAP 200", "CFSHS 100x100x5", "CFRHS 200x100x6", "FL 40x4", "RD 8", "DIE 10", "DIN 42.5"] {
+            let p = steel(name).unwrap_or_else(|| panic!("{name}"));
+            assert!(p.ocondat, "{name}");
+        }
+        // a designation of the table stays the table's: EN 10056-1 has a root radius of 10
+        let angle = steel("L 80x80x8").unwrap();
+        assert!(!angle.ocondat);
+        assert_eq!(angle.shape, ProfileShape::L { h: 0.08, b: 0.08, t: 0.008, r1: 0.01, r2: 0.005 });
+        assert_eq!((angle.source(), steel("HEAA 200").unwrap().source()), ("EN 10056-1".to_string(), "EN 10365, Ocondat".to_string()));
+        // more sizes in a series of the table, by size among its own
+        let angles: Vec<&str> = steel_profiles().iter().filter(|p| p.series == Series::LEqual).map(|p| p.designation.as_str()).collect();
+        assert!(steel("L 16x16x3").unwrap().ocondat);
+        assert_eq!(angles[..4], ["L 16x16x3", "L 16x16x4", "L 20x20x3", "L 20x20x4"]);
+        // a flat bar lies flat, a round bar is a circle
+        assert_eq!(steel("FL 40x4").unwrap().shape, ProfileShape::Rectangle { width: 0.04, depth: 0.004 });
+        assert_eq!(steel("RD 8").unwrap().shape, ProfileShape::Circle { diameter: 0.008 });
+        // cold-formed corners by EN 10219-2: 2 t outside up to 6 mm, 2.5 t up to 10 mm, 3 t above
+        for (name, outer, inner) in [("CFSHS 100x100x5", 0.010, 0.005), ("CFSHS 100x100x8", 0.020, 0.012), ("CFSHS 200x200x12.5", 0.0375, 0.025)] {
+            let ProfileShape::Rhs { r_out, r_in, .. } = steel(name).unwrap_or_else(|| panic!("{name}")).shape else { panic!() };
+            assert!((r_out - outer).abs() < 1e-12 && (r_in - inner).abs() < 1e-12, "{name}: {r_out} {r_in}");
+        }
+        // cm² from the product tables
+        for (name, cm2, tolerance) in [("HEAA 200", 44.1, 0.01), ("HD 260x54.1", 69.0, 0.01), ("UAP 200", 32.0, 0.01), ("CFSHS 100x100x5", 18.4, 0.01), ("FL 40x4", 1.6, 1e-9), ("RD 8", 0.503, 0.001)] {
+            let area = steel(name).unwrap().shape.props().unwrap().area * 1e4;
+            assert!((area - cm2).abs() / cm2 <= tolerance, "{name}: {area:.2} cm² vs {cm2}");
+        }
+        assert!(Series::CfShs.hollow() && Series::Chs.hollow() && !Series::Flat.hollow());
     }
 
     #[test]
@@ -638,5 +843,31 @@ mod tests {
         assert!(hea.same(&ProfileShape::I { h: h + 5e-6, b, tw, tf, r, slope }));
         assert!(!hea.same(&ProfileShape::I { h: h + 2e-5, b, tw, tf, r, slope }));
         assert!(!hea.same(&ProfileShape::U { h, b, tw, tf, r, slope }));
+    }
+
+    #[test]
+    fn a_profile_is_an_ifc_parametric_profile_definition() {
+        // every profile of the steel table and of the starter types, to IFC's attributes and back
+        let mut definitions = HashSet::new();
+        for shape in steel_profiles().iter().map(|p| &p.shape).chain(starter().iter().map(|t| &t.profile)) {
+            let (definition, attributes) = shape.ifc();
+            assert!(ProfileShape::IFC.contains(&definition), "{definition}");
+            definitions.insert(definition);
+            let values: Vec<f64> = attributes.iter().map(|(_, value)| *value).collect();
+            assert_eq!(ProfileShape::from_ifc(definition, &values).as_ref(), Some(shape));
+        }
+        assert_eq!(definitions.len(), ProfileShape::IFC.len(), "the table and the starter types hold every definition");
+        // by IFC's names and in its order: an I shape's width before its depth, a circle by its
+        // radius, a hollow section's inner radius before its outer one
+        let (definition, attributes) = steel("HEA 200").unwrap().shape.ifc();
+        assert_eq!(definition, "IfcIShapeProfileDef");
+        assert_eq!(attributes[..2], [("OverallWidth", 0.2), ("OverallDepth", 0.19)]);
+        assert_eq!(attributes[5].0, "FlangeSlope");
+        assert_eq!(ProfileShape::Circle { diameter: 0.3 }.ifc(), ("IfcCircleProfileDef", vec![("Radius", 0.15)]));
+        let (_, hollow) = steel("SHS 100x100x5").unwrap().shape.ifc();
+        assert_eq!(hollow[2..], [("WallThickness", 0.005), ("InnerFilletRadius", 0.005), ("OuterFilletRadius", 0.0075)]);
+        // another definition, or another number of values, is no profile
+        assert_eq!(ProfileShape::from_ifc("IfcCircleProfileDef", &[0.15, 0.01]), None);
+        assert_eq!(ProfileShape::from_ifc("IfcZShapeProfileDef", &[0.1, 0.1, 0.01, 0.01]), None);
     }
 }

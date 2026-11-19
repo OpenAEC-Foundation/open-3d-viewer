@@ -9,7 +9,7 @@ use super::{prop_row, App, Message};
 use crate::document::parse_elevation;
 use crate::theme::Palette;
 use iced::widget::text::Wrapping;
-use iced::widget::{column, row, text, text_input};
+use iced::widget::{button, column, pick_list, row, text, text_input};
 use iced::{Center, Element, Length};
 use openaec_ui::Language;
 
@@ -119,12 +119,60 @@ impl App {
                 .push(row(l.text("Soort", "Kind"), l.text("3D-weergave", "3D view").into()))
                 .push(row(l.text("Projectie", "Projection"), if perspective { l.text("Perspectief", "Perspective") } else { l.text("Parallel", "Parallel") }.into()));
         }
+        // its kind of drawing: picked from those of the drawing standard that are its kind of
+        // view, with the scale it is drawn at and what the kind gives it
+        if let Some(kind) = self.view_kind(&path) {
+            let lang = super::library::lang(l);
+            let kinds: Vec<Choice> = self.view_kinds(&path).iter().map(|k| Choice { key: k.key.clone(), label: k.names.get(lang).to_string() }).collect();
+            let now = kinds.iter().find(|c| c.key == kind.key).cloned();
+            let picked = pick_list(kinds, now, |c: Choice| Message::ViewKind(c.key)).text_size(12).padding([2, 6]).width(Length::FillPortion(3));
+            rows = rows.push(pick_row(p, l.text("Tekeningsoort", "Kind of drawing"), picked.into()));
+            let scale = self.document.view_scale(&path).unwrap_or(crate::document::SHEET_SCALE).round() as u32;
+            let mut scales = kind.scales.clone();
+            if !scales.contains(&scale) {
+                scales.push(scale);
+            }
+            let scales: Vec<Choice> = scales.iter().map(|s| Choice { key: s.to_string(), label: bim_library::drawing::scale_text(*s) }).collect();
+            let now = scales.iter().find(|c| c.key == scale.to_string()).cloned();
+            let picked = pick_list(scales, now, |c: Choice| Message::ViewScale(c.key.parse().unwrap_or(100))).text_size(12).padding([2, 6]).width(Length::FillPortion(3));
+            rows = rows.push(pick_row(p, l.text("Schaal", "Scale"), picked.into()));
+            let rules = self.view_rules(&path);
+            rows = rows.push(row(l.text("Lijndiktes", "Line weights"), format!("{} / {} mm", rules.cut, rules.beyond)));
+            // the kind's own fields open under the view's: what is set there holds for every
+            // drawing of the kind
+            let open = self.standard_view.picked == Some(super::standards::Setting::Kind(kind.key.clone()));
+            let label = if open { l.text("Soort sluiten", "Close the kind") } else { l.text("Soort bewerken", "Edit the kind") };
+            rows = rows.push(button(text(label).size(12).color(p.text_secondary)).padding([3, 8]).style(move |_, s| p.row_button(s)).on_press(Message::ViewKindEdit(!open)));
+            if open {
+                rows = rows
+                    .push(text(l.text("Wat je hier instelt, geldt voor elke tekening van deze soort.", "What is set here holds for every drawing of this kind.")).size(11).color(p.text_muted).wrapping(Wrapping::Word))
+                    .push(self.standard_pane(p, l));
+            }
+        }
         let own = self.document.view_layers(&path).map_or(0, |o| o.len());
         let own = if own == 0 { l.text("zoals het model", "as the model").to_string() } else { own.to_string() };
         let hidden = self.document.view_hidden(&path).map_or(0, |h| h.len());
         let hidden = if hidden == 0 { l.text("geen", "none").to_string() } else { super::format_count(hidden) };
         Some(rows.push(row(l.text("Eigen lagen", "Own layers"), own)).push(row(l.text("Verborgen elementen", "Hidden elements"), hidden)).into())
     }
+}
+
+/// One of a list to pick from: what it stands for, and how it is named.
+#[derive(Debug, Clone, PartialEq)]
+struct Choice {
+    key: String,
+    label: String,
+}
+
+impl std::fmt::Display for Choice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// A property to pick: its label, and the list it is picked from.
+fn pick_row<'a>(p: Palette, label: &str, pick: Element<'a, Message>) -> Element<'a, Message> {
+    row![text(label.to_string()).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)), pick].spacing(8).align_y(Center).into()
 }
 
 /// A property to type in: its label, and a field that sends what is typed.

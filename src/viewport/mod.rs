@@ -15,6 +15,7 @@ pub mod box_select;
 pub mod camera;
 pub mod chunks;
 pub mod render;
+pub mod splats;
 pub mod structural;
 
 use crate::explode::ExplodeIndex;

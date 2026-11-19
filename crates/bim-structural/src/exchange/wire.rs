@@ -771,6 +771,38 @@ pub struct ResultSet {
     /// Inline result blocks, base64, by table name.
     #[serde(default)]
     pub inline: Option<Inline>,
+    /// The mesh the surfaces were computed on, with its results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_mesh: Option<SurfaceMesh>,
+}
+
+/// The mesh of the surfaces: its nodes with their displacements, its elements, and fields.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceMesh {
+    /// Where the mesh nodes are, world metres.
+    pub points: Vec<V3>,
+    /// How far each moved, metres; as many as there are points.
+    pub displacements: Vec<V3>,
+    /// The mesh nodes of each element, three or four, in order around it.
+    pub elements: Vec<Vec<u32>>,
+    /// Per element: the surface member it is of.
+    pub surface: Vec<u64>,
+    /// Per element: its thickness, metres.
+    pub thickness: Vec<f64>,
+    #[serde(default)]
+    pub fields: Vec<SurfaceField>,
+}
+
+/// One quantity over the mesh, a value per mesh node in SI units.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceField {
+    pub name: String,
+    pub unit: String,
+    pub values: Vec<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

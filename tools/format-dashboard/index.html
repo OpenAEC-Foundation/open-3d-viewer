@@ -507,7 +507,7 @@ footer code { font-size: 12.5px; }
   },
   ".ply": {
    "pct": 85,
-   "note": "Meshes (ASCII en binair) met vertexkleuren en puntenwolken met kleur, intensiteit en classificatie werken (Wuson, cube_binary, cube_uv, float-color, pond.0 met 70k punten). Textures (TextureFile/texcoords), edge-elementen en extra vertex-eigenschappen worden niet getoond."
+   "note": "Meshes (ASCII en binair) met vertexkleuren en puntenwolken met kleur, intensiteit en classificatie werken (Wuson, cube_binary, cube_uv, float-color, pond.0 met 70k punten). Textures (TextureFile/texcoords), edge-elementen en extra vertex-eigenschappen worden niet getoond. Een PLY met de eigenschappen van 3D Gaussian splatting (f_dc, f_rest, opacity, scale, rot) opent als splatscène; de gecomprimeerde splat-PLY niet."
   },
   ".3mf": {
    "pct": 78,
@@ -521,13 +521,17 @@ footer code { font-size: 12.5px; }
    "pct": 93,
    "note": "ASCII OFF/COFF/NOFF met polygonen en kleuren werkt (Cube, Wuson). Alleen binaire OFF en 4D-varianten ontbreken, en die zijn zeldzaam. Er is geen naam of hiërarchie, maar het formaat heeft die ook niet."
   },
+  ".spz": {
+   "pct": 85,
+   "note": "Gaussian-splatscènes in SPZ versie 1 t/m 4 (gzip en zstd) openen: middens, schalen, rotaties (ook smallest-three), opaciteit, kleur en de kijkrichtingafhankelijke kleur tot graad 3, getekend als gesorteerde, gemengde splats, ook in de browser. Graad 4 van SPZ 4 en de extensierecords (georeferentie, camera) worden niet gelezen. Getest met zelf geschreven bestanden van versie 2, 3 en 4, nog niet met een echte opname."
+  },
   ".las": {
    "pct": 86,
    "note": "Alle geteste LAS 1.2/1.4-bestanden openen: PDRF 1, 3, 6 en 7, met extra bytes en EPSG/WKT (PDAL: autzen_trim, 4_1, 4_6, autzen_trim_7, test1_4, extrabytes en nog 5). XYZ, RGB (8 of 16 bit), intensiteit en classificatie (laag per ASPRS-klasse) worden gebruikt, en CRS/versie/software staan in de info. Niet gebruikt: extra bytes, returninfo, NIR, golfvormen (PDRF 4/5/9/10), GPS-tijd en scanhoek. Punten met de vlag withheld/overlap worden niet weggefilterd."
   },
   ".laz": {
    "pct": 82,
-   "note": "13 van de 15 LAZ-bestanden openen correct, ook LAZ 1.4 PDRF 8 met gelaagde chunks (697k punten, 7 klassen) en COPC (autzen.copc.laz). Het oude LASzip-pointwise-bestand simple-laszip-compressor-version-1.2r0.laz laat de laz-crate in paniek crashen ('Variable-size chunks, but no chunk table'). no-points-1.3.laz (0 punten) geeft 'no geometry'. Verder gelden dezelfde ontbrekende attributen als bij LAS."
+   "note": "13 van de 15 LAZ-bestanden openen correct, ook LAZ 1.4 PDRF 8 met gelaagde chunks (697k punten, 7 klassen) en COPC (autzen.copc.laz), dat via zijn octree gelezen wordt: de grove niveaus heel en het volgende uitgedund tot de puntengrens, zodat een grote AHN6-tegel snel opent. Het oude LASzip-pointwise-bestand simple-laszip-compressor-version-1.2r0.laz laat de laz-crate in paniek crashen ('Variable-size chunks, but no chunk table'). no-points-1.3.laz (0 punten) geeft 'no geometry'. Verder gelden dezelfde ontbrekende attributen als bij LAS."
   },
   ".e57": {
    "pct": 78,
@@ -573,7 +577,7 @@ const GROUPS = [
   ["Constructieve analyse", ["samjson", "e2k", "ifcfemresults", "ifcfem"]],
   ["GIS en terrein", ["json", "cityjson", "jsonl", "cityjsonl", "gml", "citygml", "geojson", "shp", "xml", "landxml", "asc"]],
   ["Meshes en uitwisseling", ["gltf", "glb", "usd", "usda", "usdc", "usdz", "dae", "wrl", "wrz", "x3d", "x3dv", "x3dz", "x3dvz", "fbx", "3ds", "obj", "stl", "ply", "3mf", "amf", "off"]],
-  ["Puntenwolken", ["las", "laz", "e57", "pts", "ptx", "pcd", "xyz", "txt", "csv"]],
+  ["Puntenwolken", ["las", "laz", "e57", "pts", "ptx", "pcd", "xyz", "txt", "csv", "spz"]],
 ];
 
 // Saved data: the block in this file, or the browser's copy when that is newer (typed while the

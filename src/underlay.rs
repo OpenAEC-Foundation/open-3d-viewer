@@ -609,7 +609,7 @@ mod tests {
             name: "A01".into(),
             space: Space::Paper,
             paper: Some([0.42, 0.297]),
-            lines: vec![Line2d { pen: Pen::Cut, a: [0.05, 0.05], b: [0.30, 0.05] }],
+            lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05])],
             texts: Vec::new(),
             dimensions: Vec::new(),
         };

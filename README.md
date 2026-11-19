@@ -143,7 +143,7 @@ The sources, picked in the left pane or on the ribbon:
 
 - **General.** What every project starts with: the suite's own hatches, and the starter library with its materials, walls, floors, roofs, ceilings, linear types, systems and the steel table.
 - **Country.** The content of a country: the hatches of its drawing standard (the Netherlands NEN 47, Germany DIN 1356, the United Kingdom ISO 128 / BS 1192, the United States ANSI), and for the Netherlands the signs of NEN 47, the suite's coloured hatches and the types of the Dutch template, its two foundation piles among them (driven, square, 220 mm; the template gives them no material, so they are of precast concrete here).
-- **Company.** The house style of a company: logo, colours and fonts, title block and templates. It shows the suite's own colours and font as the example.
+- **Company.** The house style of a company: who it is, its colours and fonts, its sheet formats, its title block and how it writes dimensions, set in the right pane under a sample sheet. It starts as the suite's own, to make an office's.
 - **Project.** The library of the open project, as the Modeller's Library tab lists it.
 
 **The drawing standard (the Netherlands).** The tree has the drawing standard under Country, the Netherlands, and under Project, and every part of it can be set:
@@ -181,7 +181,7 @@ In the View section of the right pane you pick the view's kind and its scale, an
 
 **Search.** The field at the top of the left pane looks in every library at once: materials, walls, floors, roofs, ceilings, columns and beams, systems, steel profiles, kinds of drawing and settings. What it finds shows as the same tiles. A click shows the thing where it lives: one of the project in its editor, one of another library on its page with the button to edit a copy, a kind of drawing or a setting in its standard, a steel profile in the steel table with a button that makes a beam type of it.
 
-Each kind of content is a card with its count and a first look (colours or the first names). What the suite does not hold yet (symbols, title blocks, products of manufacturers, a house style of your own) is named on its card as "to come". The cards do not open yet. The design and the next steps: [`docs/superpowers/specs/2026-11-18-library-design.md`](docs/superpowers/specs/2026-11-18-library-design.md).
+Each kind of content is a card with its count and a first look (colours or the first names). What the suite does not hold yet (symbols, products of manufacturers) is named on its card as "to come". The cards do not open yet. The design and the next steps: [`docs/superpowers/specs/2026-11-18-library-design.md`](docs/superpowers/specs/2026-11-18-library-design.md).
 
 ## GIC: GIS, infrastructure and civil (a first step)
 

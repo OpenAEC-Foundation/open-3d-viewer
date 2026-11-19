@@ -145,7 +145,7 @@ De bronnen, te kiezen in het linkerpaneel of op het lint:
 
 - **Algemeen.** Waar elk project mee begint: de eigen arceringen van de suite, en de startbibliotheek met materialen, wanden, vloeren, daken, plafonds, lijntypen, systemen en de staaltabel.
 - **Land.** De inhoud van een land: de arceringen van de tekennorm (Nederland NEN 47, Duitsland DIN 1356, Verenigd Koninkrijk ISO 128 / BS 1192, Verenigde Staten ANSI), en voor Nederland de tekens van NEN 47, de gekleurde arceringen van de suite en de types van de Nederlandse template, waaronder haar twee funderingspalen (geheid, vierkant, 220 mm; de template geeft ze geen materiaal, hier zijn ze van prefab beton).
-- **Bedrijf.** De huisstijl van een bedrijf: logo, kleuren en lettertypen, titelblok en sjablonen. Als voorbeeld staan er de kleuren en het lettertype van de suite zelf.
+- **Bedrijf.** De huisstijl van een bedrijf: wie het is, zijn kleuren en lettertypen, zijn bladformaten, zijn titelblok en hoe het maten schrijft, in te stellen in het rechterpaneel onder een voorbeeldblad. Hij begint als die van de suite zelf, om er die van een bureau van te maken.
 - **Project.** De bibliotheek van het open project, zoals het tabblad Bibliotheek van de Modeller die toont.
 
 **De tekenstandaard (Nederland).** De boom heeft de tekenstandaard onder Land, Nederland, en onder Project, en elk onderdeel daarvan is in te stellen:
@@ -183,7 +183,7 @@ In het deel Aanzicht van het rechterpaneel kies je de soort en de schaal van het
 
 **Zoeken.** Het veld bovenin het linkerpaneel zoekt in alle bibliotheken tegelijk: materialen, wanden, vloeren, daken, plafonds, kolommen en balken, systemen, staalprofielen, tekeningsoorten en instellingen. Wat het vindt, staat als dezelfde tegels. Een klik toont het object waar het thuishoort: een object van het project in de editor, een object uit een andere bibliotheek op zijn pagina met de knop om een kopie te bewerken, een tekeningsoort of instelling in haar standaard, een staalprofiel in de staaltabel met een knop die er een balktype van maakt.
 
-Elke soort inhoud is een kaart met het aantal en een eerste blik (kleuren of de eerste namen). Wat de suite nog niet heeft (symbolen, titelblokken, producten van fabrikanten, een eigen huisstijl) staat op zijn kaart als "volgt". De kaarten openen nog niet. Het ontwerp en de volgende stappen: [`docs/superpowers/specs/2026-11-18-library-design.md`](docs/superpowers/specs/2026-11-18-library-design.md).
+Elke soort inhoud is een kaart met het aantal en een eerste blik (kleuren of de eerste namen). Wat de suite nog niet heeft (symbolen, producten van fabrikanten) staat op zijn kaart als "volgt". De kaarten openen nog niet. Het ontwerp en de volgende stappen: [`docs/superpowers/specs/2026-11-18-library-design.md`](docs/superpowers/specs/2026-11-18-library-design.md).
 
 ## GIC: GIS, infra en civiel (een eerste stap)
 

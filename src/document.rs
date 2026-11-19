@@ -98,6 +98,55 @@ impl PlanKind {
     }
 }
 
+/// What the lines of a shape drawn on a view are together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShapeKind {
+    /// Lines on from each other, open or closed.
+    Polyline,
+    Rectangle,
+    Circle,
+    Arc,
+    Ellipse,
+}
+
+impl ShapeKind {
+    pub const ALL: [ShapeKind; 5] = [ShapeKind::Polyline, ShapeKind::Rectangle, ShapeKind::Circle, ShapeKind::Arc, ShapeKind::Ellipse];
+
+    /// Its name in IFCX (`shapes` of a view).
+    pub fn key(self) -> &'static str {
+        match self {
+            ShapeKind::Polyline => "polyline",
+            ShapeKind::Rectangle => "rectangle",
+            ShapeKind::Circle => "circle",
+            ShapeKind::Arc => "arc",
+            ShapeKind::Ellipse => "ellipse",
+        }
+    }
+
+    /// The kind named `key` in IFCX.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.key() == key)
+    }
+}
+
+/// A shape drawn on a view: a run of the view's lines that is one thing, picked and removed
+/// together. A line alone needs none. The lines stay what is drawn, exported and read by a
+/// program that knows no shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
+    pub kind: ShapeKind,
+    /// Its first line among the view's lines, and how many it has.
+    pub first: usize,
+    pub count: usize,
+}
+
+impl Shape {
+    /// The places of its lines among the view's.
+    pub fn run(&self) -> std::ops::Range<usize> {
+        self.first..self.first + self.count
+    }
+}
+
 /// A plan of a level: the model seen from above (or from below, a ceiling plan), cut at
 /// [`PlanView::cut`] above its level.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +173,8 @@ pub struct PlanView {
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (x, y, metres).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// Which runs of those lines are one shape each (a rectangle, a circle).
+    pub shapes: Vec<Shape>,
     /// What the modelled project says on it by itself, made again after every change of the
     /// model and not kept in the file: the names and areas of its spaces.
     pub tags: Vec<Note>,
@@ -202,6 +253,8 @@ pub struct SectionView {
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (u, v).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// Which runs of those lines are one shape each (a rectangle, a circle).
+    pub shapes: Vec<Shape>,
     /// The regions drawn on it in one colour that are no model, under its lines.
     pub fills: Vec<Fill>,
     /// What it shows, in its drawing's (u, v); `None`: all of it.
@@ -657,6 +710,13 @@ impl Document {
             };
             n.iter().map(note).collect::<Vec<_>>()
         };
+        // the shapes of a view's lines, where it has any: kind, first line, how many
+        let shaped = |mut view: Value, shapes: &[Shape]| -> Value {
+            if !shapes.is_empty() {
+                view["shapes"] = shapes.iter().map(|s| json!([s.kind.key(), s.first, s.count])).collect::<Vec<_>>().into();
+            }
+            view
+        };
         let mut nodes = Vec::new();
         let mut children = serde_json::Map::new();
         for (i, p) in self.plans.iter().enumerate() {
@@ -666,6 +726,7 @@ impl Document {
             let view = json!({
                 "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
+            let view = shaped(view, &p.shapes);
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(with_drawing(view, &p.drawing), &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
@@ -674,6 +735,7 @@ impl Document {
             let view = json!({
                 "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "fills": fills(&s.fills), "layers": s.layers,
             });
+            let view = shaped(view, &s.shapes);
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(with_drawing(view, &s.drawing), &s.hidden)}}));
         }
         for (i, v) in self.views_3d.iter().enumerate() {
@@ -731,6 +793,26 @@ impl Document {
             let all = v.and_then(Value::as_array).into_iter().flatten();
             all.filter_map(|l| Some([pair(l.get(0)?)?, pair(l.get(1)?)?])).filter(|l| l.iter().flatten().all(|x| x.is_finite())).collect()
         };
+        // the shapes of a view's lines: runs within them, one after the other; none where a line
+        // of the file was left out, since the runs then count other lines
+        let shapes = |view: &Value| -> Vec<Shape> {
+            let written = view.get("lines").and_then(Value::as_array).map_or(0, Vec::len);
+            if lines(view.get("lines")).len() != written {
+                return Vec::new();
+            }
+            let all = view.get("shapes").and_then(Value::as_array).into_iter().flatten();
+            let mut read: Vec<Shape> = all.filter_map(|s| Some(Shape { kind: ShapeKind::from_key(s.get(0)?.as_str()?)?, first: s.get(1)?.as_u64()? as usize, count: s.get(2)?.as_u64()? as usize })).collect();
+            read.sort_by_key(|s| s.first);
+            let mut end = 0;
+            read.retain(|s| {
+                let fits = s.count >= 1 && s.first >= end && s.first + s.count <= written;
+                if fits {
+                    end = s.first + s.count;
+                }
+                fits
+            });
+            read
+        };
         let layers = |v: Option<&Value>| -> LayerSwitches {
             let all = v.and_then(Value::as_object).into_iter().flatten();
             all.filter_map(|(name, on)| Some((name.clone(), on.as_bool()?))).collect()
@@ -766,6 +848,7 @@ impl Document {
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     lines: lines(p.get("lines")),
+                    shapes: shapes(p),
                     fills: Fill::from_ifcx(p.get("fills")),
                     crop: rect(p.get("crop")),
                     layers: layers(p.get("layers")),
@@ -785,6 +868,7 @@ impl Document {
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
                     lines: lines(s.get("lines")),
+                    shapes: shapes(s),
                     fills: Fill::from_ifcx(s.get("fills")),
                     crop: rect(s.get("crop")),
                     layers: layers(s.get("layers")),
@@ -918,7 +1002,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -971,7 +1055,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1303,29 +1387,109 @@ impl Document {
         self.section(path).map_or(&[], |s| &s.lines[..])
     }
 
-    fn lines_mut(&mut self, path: &str) -> Option<&mut Vec<[[f64; 2]; 2]>> {
-        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
-            return Some(&mut p.lines);
+    /// The shapes drawn on a view: the runs of its lines that are one thing each.
+    pub fn view_shapes(&self, path: &str) -> &[Shape] {
+        if let Some(p) = self.plan(path) {
+            return &p.shapes;
         }
-        self.sections.iter_mut().find(|s| s.path == path).map(|s| &mut s.lines)
+        self.section(path).map_or(&[], |s| &s.shapes[..])
     }
 
-    /// Adds lines to a view's drawing (its own points, metres); one without length or with a
-    /// point that is not finite is left out. How many were added.
+    /// A view's lines and the shapes among them.
+    fn drawn_mut(&mut self, path: &str) -> Option<(&mut Vec<[[f64; 2]; 2]>, &mut Vec<Shape>)> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some((&mut p.lines, &mut p.shapes));
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| (&mut s.lines, &mut s.shapes))
+    }
+
+    /// Adds lines to a view's drawing (its own points, metres), each a line of its own; one
+    /// without length or with a point that is not finite is left out. How many were added.
     pub fn add_view_lines(&mut self, view: &str, lines: &[[[f64; 2]; 2]]) -> usize {
-        let Some(own) = self.lines_mut(view) else { return 0 };
+        let Some((own, _)) = self.drawn_mut(view) else { return 0 };
         let before = own.len();
         own.extend(lines.iter().filter(|l| l.iter().flatten().all(|v| v.is_finite()) && l[0] != l[1]));
         own.len() - before
     }
 
-    /// Removes a line of a view's drawing.
-    pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
-        let Some(own) = self.lines_mut(view) else { return false };
-        if index >= own.len() {
+    /// Adds a shape to a view's drawing: its lines, kept together as one thing. A shape of one
+    /// line is that line. How many lines were added.
+    pub fn add_view_shape(&mut self, view: &str, kind: ShapeKind, lines: &[[[f64; 2]; 2]]) -> usize {
+        let Some((own, shapes)) = self.drawn_mut(view) else { return 0 };
+        let first = own.len();
+        own.extend(lines.iter().filter(|l| l.iter().flatten().all(|v| v.is_finite()) && l[0] != l[1]));
+        let count = own.len() - first;
+        if count > 1 {
+            shapes.push(Shape { kind, first, count });
+        }
+        count
+    }
+
+    /// The lines of a view that are one thing with its line `index`: the run of its shape and
+    /// what that is, or the line alone.
+    pub fn shape_of(&self, view: &str, index: usize) -> (std::ops::Range<usize>, Option<ShapeKind>) {
+        match self.view_shapes(view).iter().find(|s| s.run().contains(&index)) {
+            Some(s) => (s.run(), Some(s.kind)),
+            None => (index..index + 1, None),
+        }
+    }
+
+    /// Puts the lines `run` of a view's drawing through `map`: where they are, or (`copy`) as new
+    /// lines after the others, a shape again when they were one. The run they are in now.
+    pub fn map_view_lines(&mut self, view: &str, run: std::ops::Range<usize>, copy: bool, map: &dyn Fn([f64; 2]) -> [f64; 2]) -> Option<std::ops::Range<usize>> {
+        let kind = self.view_shapes(view).iter().find(|s| s.run() == run).map(|s| s.kind);
+        let (own, shapes) = self.drawn_mut(view)?;
+        if run.is_empty() || run.end > own.len() {
+            return None;
+        }
+        let mapped: Vec<[[f64; 2]; 2]> = own[run.clone()].iter().map(|l| [map(l[0]), map(l[1])]).collect();
+        if !mapped.iter().flatten().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
+        if !copy {
+            own[run.clone()].copy_from_slice(&mapped);
+            return Some(run);
+        }
+        let first = own.len();
+        own.extend(mapped);
+        if let Some(kind) = kind {
+            shapes.push(Shape { kind, first, count: run.len() });
+        }
+        Some(first..first + run.len())
+    }
+
+    /// Gives line `index` of a view's drawing other ends. False for a line that is none.
+    pub fn set_view_line(&mut self, view: &str, index: usize, line: [[f64; 2]; 2]) -> bool {
+        let Some((own, _)) = self.drawn_mut(view) else { return false };
+        if index >= own.len() || line[0] == line[1] || !line.iter().flatten().all(|v| v.is_finite()) {
             return false;
         }
-        own.remove(index);
+        own[index] = line;
+        true
+    }
+
+    /// Makes the shape that line `index` of a view is part of loose lines again. False when the
+    /// line is of no shape.
+    pub fn explode_view_shape(&mut self, view: &str, index: usize) -> bool {
+        let Some((_, shapes)) = self.drawn_mut(view) else { return false };
+        let before = shapes.len();
+        shapes.retain(|s| !s.run().contains(&index));
+        shapes.len() != before
+    }
+
+    /// Removes a line of a view's drawing, with the shape it is part of.
+    pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
+        let (run, _) = self.shape_of(view, index);
+        let Some((own, shapes)) = self.drawn_mut(view) else { return false };
+        if run.end > own.len() {
+            return false;
+        }
+        own.drain(run.clone());
+        shapes.retain(|s| s.first != run.start || s.count != run.len());
+        // the shapes after it count their lines from where they are now
+        for s in shapes.iter_mut().filter(|s| s.first >= run.end) {
+            s.first -= run.len();
+        }
         true
     }
 
@@ -1977,6 +2141,57 @@ mod tests {
         assert!(document.remove_dimension(&plan, 0));
         assert!(!document.remove_dimension(&plan, 5));
         assert_eq!(document.plan(&plan).unwrap().dimensions.len(), 1);
+    }
+
+    #[test]
+    fn the_shapes_drawn_on_a_view_are_runs_of_its_lines_and_are_saved_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        let square = [[[0.0, 0.0], [1.0, 0.0]], [[1.0, 0.0], [1.0, 1.0]], [[1.0, 1.0], [0.0, 1.0]], [[0.0, 1.0], [0.0, 0.0]]];
+        assert_eq!(document.add_view_lines(&plan, &[[[5.0, 5.0], [6.0, 5.0]]]), 1);
+        assert_eq!(document.add_view_shape(&plan, ShapeKind::Rectangle, &square), 4);
+        // a shape of one line is that line, and a line without length is no line
+        assert_eq!(document.add_view_shape(&plan, ShapeKind::Polyline, &[[[7.0, 7.0], [8.0, 7.0]], [[8.0, 7.0], [8.0, 7.0]]]), 1);
+        assert_eq!(document.add_view_shape(&plan, ShapeKind::Arc, &square[..2]), 2);
+        assert_eq!(document.add_view_shape(&section, ShapeKind::Polyline, &square[..3]), 3);
+        assert_eq!(document.add_view_shape("no view", ShapeKind::Circle, &square), 0);
+        let runs = |d: &Document, view: &str| d.view_shapes(view).iter().map(|s| (s.kind, s.run())).collect::<Vec<_>>();
+        assert_eq!(runs(&document, &plan), [(ShapeKind::Rectangle, 1..5), (ShapeKind::Arc, 6..8)]);
+        assert_eq!(document.shape_of(&plan, 5), (5..6, None));
+        assert_eq!(document.shape_of(&plan, 7), (6..8, Some(ShapeKind::Arc)));
+        // saved with the drawings and taken over again; the lines are what a reader without
+        // shapes sees
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let written = &nodes.iter().find(|(path, _)| *path == plan).unwrap().1["o3v::view::plan"];
+        assert_eq!(written["shapes"], json!([["rectangle", 1, 4], ["arc", 6, 2]]));
+        assert_eq!(written["lines"].as_array().unwrap().len(), 8);
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(runs(&again, &plan), runs(&document, &plan));
+        assert_eq!(runs(&again, &section), [(ShapeKind::Polyline, 0..3)]);
+        assert_eq!(again.view_lines(&plan), document.view_lines(&plan));
+        // a view without shapes writes none, and runs that do not fit its lines are not read
+        let bare = document.add_plan(&level).unwrap();
+        let nodes = document.ifcx_drawing_nodes();
+        let node = nodes.iter().find(|n| n["path"] == bare.as_str()).unwrap();
+        assert!(node["attributes"]["o3v::view::plan"].get("shapes").is_none());
+        let mut odd: Vec<(String, Value)> = nodes.iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let at = odd.iter().position(|(path, _)| *path == plan).unwrap();
+        odd[at].1["o3v::view::plan"]["shapes"] = json!([["rectangle", 1, 4], ["circle", 3, 2], ["arc", 6, 9], ["blob", 5, 1]]);
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&odd);
+        assert_eq!(runs(&again, &plan), [(ShapeKind::Rectangle, 1..5)], "one that overlaps, one past the end and one of no kind are left out");
+        // removing a line of a shape removes the shape; the ones after it count on
+        assert!(document.remove_view_line(&plan, 2));
+        assert_eq!(runs(&document, &plan), [(ShapeKind::Arc, 2..4)]);
+        assert!(document.remove_view_line(&plan, 0));
+        assert_eq!(runs(&document, &plan), [(ShapeKind::Arc, 1..3)]);
+        assert!(document.remove_view_line(&plan, 2));
+        assert!(document.view_shapes(&plan).is_empty() && document.view_lines(&plan).len() == 1);
+        assert!(!document.remove_view_line(&plan, 4));
     }
 
     #[test]

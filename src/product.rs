@@ -141,7 +141,7 @@ impl Product {
     pub fn pages(self) -> &'static [RibbonPage] {
         match self {
             Product::Viewer => &[RibbonPage::Home],
-            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View, RibbonPage::Ifcx],
+            Product::Modeller => &[RibbonPage::Model, RibbonPage::Draw, RibbonPage::Project, RibbonPage::View, RibbonPage::Ifcx],
             Product::Validator => &[RibbonPage::Collaborate, RibbonPage::View],
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
@@ -252,8 +252,9 @@ pub enum RibbonPage {
     Model,
     /// The Modeller's levels, views, sheets and library.
     Project,
-    /// The Modeller's dimensions, texts and sections, in a floor plan or on a sheet.
-    Annotate,
+    /// The Modeller's drawing in a floor plan, a section or on a sheet: selecting, the lines and
+    /// shapes that are no model, dimensions and texts, and changing what is selected.
+    Draw,
     /// Display, camera, section and measure, without the file group: the Viewer's tools in the
     /// Modeller and the Validator.
     View,
@@ -288,7 +289,7 @@ impl RibbonPage {
             RibbonPage::Home => l.text("Start", "Home"),
             RibbonPage::Model => l.text("Modelleren", "Model"),
             RibbonPage::Project => l.text("Project", "Project"),
-            RibbonPage::Annotate => l.text("Annoteren", "Annotate"),
+            RibbonPage::Draw => l.text("Tekenen", "Draw"),
             RibbonPage::View => l.text("Beeld", "View"),
             RibbonPage::Collaborate => l.text("Samenwerken", "Collaborate"),
             RibbonPage::Ifcx => "IFCX",

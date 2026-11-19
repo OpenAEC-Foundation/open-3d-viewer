@@ -1214,6 +1214,16 @@
     "Load borings": "Carica sondaggi",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Recupera i sondaggi geotecnici intorno al luogo dal registro olandese del sottosuolo e li inserisce nel modello.",
     "Opens borings from GEF files and puts them in the model.": "Apre sondaggi da file GEF e li inserisce nel modello.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modello 3D del sottosuolo dai sondaggi caricati: ogni luogo prende gli strati del sondaggio più vicino."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modello 3D del sottosuolo dai sondaggi caricati: ogni luogo prende gli strati del sondaggio più vicino.",
+    "Frame steel": "Acciaio del telaio",
+    "In walls": "Nei muri",
+    "Steel is missing around the frame:": "Manca acciaio attorno al telaio:",
+    "all; e.g. *sandwich*": "tutti; es. *sandwich*",
+    "no": "senza",
+    "without steel in": "senza acciaio in",
+    "Move by two points": "Sposta con due punti",
+    "Moving…": "Spostamento…",
+    "Pick model": "Scegli modello",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Fai clic su un punto del modello, poi dove deve andare (ad esempio dove si incrociano due assi). Esc interrompe."
   }
 }

@@ -60,6 +60,7 @@ fn kind(c: &ClashRow, l: Language) -> String {
         Kind::Inside => l.text("ligt erin", "lies inside").to_string(),
         Kind::Near => format!("{mm} mm {}", l.text("ertussen", "apart")),
         Kind::Hidden => format!("{:.0}% {}", c.distance * 100.0, l.text("niet te zien", "out of sight")),
+        Kind::Unframed => format!("{}: {}", l.text("geen", "no"), crate::collab::frame::words(c.distance as u8, l == Language::Dutch)),
     }
 }
 

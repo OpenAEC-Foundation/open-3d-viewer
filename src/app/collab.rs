@@ -204,7 +204,7 @@ impl Reach {
     pub fn of(kind: Kind, depth: f32, a: (Vec3, Vec3), b: (Vec3, Vec3)) -> Reach {
         match kind {
             Kind::Near => Reach::Near,
-            Kind::Hidden => Reach::Partly,
+            Kind::Hidden | Kind::Unframed => Reach::Partly,
             Kind::Inside => Reach::Through,
             Kind::Crossing => {
                 let size = |x: (Vec3, Vec3)| x.1 - x.0;
@@ -424,6 +424,10 @@ pub struct State {
     /// of the clashes share (a floor many pipes go through), drawn lighter.
     clash_near: std::collections::HashSet<u64>,
     clash_shared: Option<u64>,
+    /// The issues made of clashes still to get their picture: the issue, and the clashes it
+    /// shows; with the view as it was before the first, to come back to.
+    clash_shots: Vec<(String, Vec<ClashRow>)>,
+    clash_shot_back: Option<ShotBack>,
     /// The boxes of the elements, for the model with this id: worked out once for a report.
     boxes: Option<(u64, Arc<HashMap<u64, crate::model::Bounds>>)>,
     /// The amounts of the room checks as typed.
@@ -533,6 +537,8 @@ impl Default for State {
             clash_shown: None,
             clash_near: Default::default(),
             clash_shared: None,
+            clash_shots: Vec::new(),
+            clash_shot_back: None,
             boxes: None,
             room_amounts: Vec::new(),
             sight_shares: Vec::new(),
@@ -567,6 +573,11 @@ impl Default for State {
 }
 
 impl State {
+    /// Pictures are being taken, for a report or for issues made of clashes.
+    pub fn picturing(&self) -> bool {
+        self.report_job.is_some() || self.clash_shot_back.is_some()
+    }
+
     /// The rule set in use.
     pub fn rules(&self) -> Option<&RuleSet> {
         self.rule_sets.get(self.rule_set)
@@ -631,7 +642,7 @@ impl State {
         if names != self.rule_names {
             self.rule_names = names;
         }
-        let amounts: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| match c.kind { ClashKind::Hard => c.tolerance_mm, ClashKind::Clearance => c.clearance_mm, ClashKind::Sight => c.sight_m }).collect()).unwrap_or_default();
+        let amounts: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| match c.kind { ClashKind::Hard => c.tolerance_mm, ClashKind::Clearance => c.clearance_mm, ClashKind::Sight => c.sight_m, ClashKind::Frame => c.frame_reach_mm }).collect()).unwrap_or_default();
         // what is typed stays as typed while it says the same amount
         let same = |typed: &String, amount: f32| typed.trim().replace(',', ".").parse::<f32>().ok() == Some(amount);
         if amounts.len() != self.amounts.len() || !self.amounts.iter().zip(&amounts).all(|(t, a)| same(t, *a) || t.trim().is_empty() || t.ends_with(['.', ','])) {
@@ -739,6 +750,15 @@ pub enum Report {
     OwnIds,
 }
 
+/// The view as it was before the pictures of issues made of clashes were taken.
+#[derive(Debug, Clone)]
+struct ShotBack {
+    camera: crate::viewport::camera::Camera,
+    selection: Vec<Pickable>,
+    section: Option<crate::section::SectionBox>,
+    section_on: bool,
+}
+
 /// A picture a report takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shot {
@@ -782,6 +802,8 @@ pub enum Event {
     Viewpoint(String, usize),
     NewIssue,
     Shot(Arc<iced::window::Screenshot>),
+    /// The picture of the clashes of an issue made of them.
+    ClashShot(Arc<iced::window::Screenshot>),
     Title(String),
     Description(String),
     Status(&'static str),
@@ -839,6 +861,8 @@ pub enum Event {
     ClashProperty(usize, String),
     ClashValue(usize, String),
     ClashSightNames(usize, String),
+    /// The walls a frame test takes, by type or name, as typed.
+    ClashFrameWalls(usize, String),
     ClashSightShare(usize, String),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
@@ -1050,6 +1074,57 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         };
         let (a, b): (Vec<usize>, Vec<usize>) = (side(&rule.a).into_iter().filter(in_scope).collect(), side(&rule.b).into_iter().filter(in_scope).collect());
         let solids = |side: &[usize]| side.iter().map(|&k| items[k].solid.clone()).collect::<Vec<_>>();
+        if rule.kind == ClashKind::Frame {
+            // each opening of the first side in a wall the test takes: the sides no steel of the
+            // second side frames; a pane within another opening is that opening's
+            let lower = |k: usize| format!("{} {}", items[k].class, model.layers[items[k].layer].name).to_ascii_lowercase();
+            let walls: Vec<usize> = (0..items.len()).filter(|&k| { let l = lower(k); l.starts_with("ifcwall") || l.ends_with("/ walls") || l.ends_with(" walls") || l.starts_with("swall") }).collect();
+            let bounds = |k: usize| (items[k].solid.min, items[k].solid.max);
+            let steel: Vec<crate::collab::frame::Bounds> = b.iter().map(|&k| bounds(k)).collect();
+            let reach = rule.frame_reach_mm.max(0.0) / 1000.0;
+            for &o in &a {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let (lo, hi) = bounds(o);
+                if (hi.x - lo.x).max(hi.y - lo.y) < 0.2 || a.iter().any(|&p| p != o && crate::collab::frame::within(bounds(o), bounds(p))) {
+                    continue;
+                }
+                // the wall it is in: the smallest whose box holds its middle
+                let mid = (lo + hi) / 2.0;
+                let host = walls.iter().copied().filter(|&w| { let (wl, wh) = bounds(w); mid.cmpge(wl - Vec3::splat(0.15)).all() && mid.cmple(wh + Vec3::splat(0.15)).all() })
+                    .min_by(|&x, &y| { let v = |k: usize| { let (l, h) = bounds(k); (h - l).x * (h - l).y * (h - l).z }; v(x).total_cmp(&v(y)) });
+                let wall_name = host.and_then(|w| model.props.get(&items[w].id).and_then(|p| field(p, "type").or_else(|| field(p, "Name")))).unwrap_or("");
+                if !rule.frame_walls.trim().is_empty() && (host.is_none() || !rule.takes_frame_wall(wall_name)) {
+                    continue;
+                }
+                let door = lower(o).contains("door") || lower(o).contains("deur");
+                let missing = crate::collab::frame::missing((lo, hi), host.map(bounds), &steel, reach, !door);
+                if missing == 0 {
+                    continue;
+                }
+                let ia = &items[o];
+                let ib = host.map_or(ia, |w| &items[w]);
+                rows.push(ClashRow {
+                    rule: rule.name.clone(),
+                    a: ia.id,
+                    b: ib.id,
+                    a_name: element_name(model, ia.id),
+                    b_name: element_name(model, ib.id),
+                    kind: Kind::Unframed,
+                    at: mid.to_array(),
+                    // the sides that are missing, as bits
+                    distance: missing as f32,
+                    decision: Decision::Open,
+                    group: rows.len(),
+                    copy: false,
+                    key: String::new(),
+                    fresh: false,
+                    reach: Reach::Partly,
+                });
+            }
+            continue;
+        }
         if rule.kind == ClashKind::Sight {
             // each element of the first side has to be seen from the room it is in: from places
             // at eye height all over it (or, without a room, around it), no further off than the
@@ -1586,6 +1661,7 @@ impl App {
             Kind::Inside => l.text("Het ene element ligt binnen het andere", "One element lies inside the other").to_string(),
             Kind::Near => format!("{} {mm} mm", l.text("De elementen liggen op", "The elements are apart by")),
             Kind::Hidden => format!("{} {:.0}% {}", l.text("Het eerste element is vanaf", "The first element is out of sight from"), row.distance * 100.0, l.text("van de plekken in zijn ruimte niet te zien: het tweede staat ervoor", "of the places in its room: the second stands before it")),
+            Kind::Unframed => format!("{} {}", l.text("Om het kozijn ontbreekt staal:", "Steel is missing around the frame:"), crate::collab::frame::words(row.distance as u8, l == Language::Dutch)),
         };
         let reach = self.model.as_ref().and_then(|m| Some(m.element_bounds(row.a)?.radius().max(m.element_bounds(row.b)?.radius()))).unwrap_or(2.0);
         topic.viewpoints.push(self.collab_viewpoint_at(Vec3::from_array(row.at), reach.min(6.0), &[row.a, row.b]));
@@ -1875,12 +1951,168 @@ impl App {
         wait.then(|_| iced::window::latest().and_then(iced::window::screenshot)).map(|shot| Message::Collab(Event::ReportShot(Arc::new(shot))))
     }
 
-    /// Shows the clashes of group `g` as an issue of them shows: the camera on where they
-    /// clash, as near as their smaller elements ask, looking the way it looked; their elements
-    /// red (the first of each clash) and blue, everything else see-through.
+    /// Where a clash is to be looked at: around where it clashes, as far as the smaller of its
+    /// two elements reaches (the window, not the wall it stands in), at least a metre across.
+    pub(super) fn collab_clash_focus(&self, row: &ClashRow) -> Option<crate::model::Bounds> {
+        let model = self.model.as_ref()?;
+        let (a, b) = (model.element_bounds(row.a), model.element_bounds(row.b));
+        let small = match (a, b) {
+            (Some(a), Some(b)) => {
+                if a.radius() <= b.radius() {
+                    a
+                } else {
+                    b
+                }
+            }
+            (a, b) => a.or(b)?,
+        };
+        let at = Vec3::from_array(row.at);
+        // the smaller element, cut down to a few metres about the clash when it is long
+        let reach = Vec3::splat(2.5);
+        let lo = Vec3::from_array(small.min).max(at - reach).min(at);
+        let hi = Vec3::from_array(small.max).min(at + reach).max(at);
+        let grow = Vec3::splat(0.3).max((Vec3::splat(1.0) - (hi - lo)) * 0.5);
+        Some(crate::model::Bounds { min: (lo - grow).to_array(), max: (hi + grow).to_array() })
+    }
+
+    /// The section box for a clash and the camera that looks into it: the box around where it
+    /// clashes, cut through the middle of the clash across the thin side of the smaller element
+    /// (the depth of a window or a door, the thickness of a wall), on the side the camera is
+    /// on; the camera turned to look at the cut face, a little from the side and from above.
+    /// The turn is the camera's yaw and pitch (radians).
+    pub(super) fn collab_clash_cut(&self, row: &ClashRow) -> Option<(crate::section::SectionBox, f32, f32)> {
+        let model = self.model.as_ref()?;
+        let focus = self.collab_clash_focus(row)?;
+        let mut cut = crate::section::SectionBox::around(&focus);
+        let small = [row.a, row.b].iter().filter_map(|&id| model.element_bounds(id)).min_by(|x, y| x.radius().total_cmp(&y.radius()))?;
+        let size = Vec3::from_array(small.max) - Vec3::from_array(small.min);
+        let k = if size.x <= size.y { 0 } else { 1 };
+        // the side the camera is on: towards it the box is cut away
+        let looks = self.camera.target - self.camera.eye();
+        let side = if looks[k] >= 0.0 { 1.0 } else { -1.0 };
+        // what stands behind it (steel behind a facade) and beside it comes along
+        let other = 1 - k;
+        cut.min[other] -= 0.3;
+        cut.max[other] += 0.3;
+        if side > 0.0 {
+            cut.min[k] = row.at[k];
+            cut.max[k] += 0.8;
+        } else {
+            cut.max[k] = row.at[k];
+            cut.min[k] -= 0.8;
+        }
+        // the eye on that side, a little along the element
+        let mut from = Vec3::ZERO;
+        from[k] = -side;
+        from[1 - k] = if looks[1 - k] > 0.0 { -0.4 } else { 0.4 };
+        Some((cut, from.y.atan2(from.x), 22f32.to_radians()))
+    }
+
+    /// The camera on where a clash is; a section box that is on moves to it.
+    fn collab_look_at_clash(&mut self, row: &ClashRow) {
+        let Some(focus) = self.collab_clash_focus(row) else { return };
+        if self.section_on && self.section.is_some() {
+            if let Some((cut, yaw, pitch)) = self.collab_clash_cut(row) {
+                self.section = Some(cut);
+                let mut to = self.camera;
+                (to.yaw, to.pitch) = (yaw, pitch);
+                to.fit(&focus, self.aspect());
+                self.anim = Some((self.camera, to, Instant::now()));
+                return;
+            }
+        }
+        let mut to = self.camera;
+        to.fit(&focus, self.aspect());
+        self.anim = Some((self.camera, to, Instant::now()));
+    }
+
+    /// The viewport out of a picture of the window, as PNG.
+    fn viewport_png(&self, shot: &iced::window::Screenshot) -> Option<Vec<u8>> {
+        let s = shot.scale_factor;
+        let (w, h) = (shot.size.width, shot.size.height);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let x = ((self.viewport_origin.0 * s).round().max(0.0) as u32).min(w.saturating_sub(1));
+        let y = ((self.viewport_origin.1 * s).round().max(0.0) as u32).min(h.saturating_sub(1));
+        let (cw, ch) = (((self.viewport_size.0 * s).round() as u32).clamp(1, w - x), ((self.viewport_size.1 * s).round() as u32).clamp(1, h - y));
+        let mut rgba = Vec::with_capacity((cw * ch * 4) as usize);
+        for row in y..y + ch {
+            let from = ((row * w + x) * 4) as usize;
+            rgba.extend_from_slice(shot.rgba.get(from..from + (cw * 4) as usize).unwrap_or(&[]));
+        }
+        if rgba.len() != (cw * ch * 4) as usize {
+            return None;
+        }
+        rgba.chunks_exact_mut(4).for_each(|px| px[3] = 255);
+        crate::remote::encode_png(cw, ch, &rgba).ok()
+    }
+
+    /// The next picture of an issue made of clashes: its clashes shown as a report shows them,
+    /// then the picture. When all are taken the view comes back as it was.
+    fn collab_clash_shot_next(&mut self) -> Task<Message> {
+        if self.model.is_none() || self.collab.report_job.is_some() {
+            self.collab.clash_shots.clear();
+        }
+        let Some((_, rows)) = self.collab.clash_shots.first().cloned() else {
+            if let Some(back) = self.collab.clash_shot_back.take() {
+                self.collab.clash_shown = None;
+                self.camera = back.camera;
+                self.anim = None;
+                self.section = back.section;
+                self.section_on = back.section_on;
+                self.sel.clear();
+                self.sel.extend(back.selection);
+                self.selection_changed();
+                self.update_units();
+                self.refresh_overlay();
+            }
+            return Task::none();
+        };
+        if self.collab.clash_shot_back.is_none() {
+            self.finish_animation();
+            self.collab.clash_shot_back = Some(ShotBack { camera: self.camera, selection: self.sel.items().to_vec(), section: self.section, section_on: self.section_on });
+        }
+        // nothing selected: the clashing elements in their own colours; one clash in section
+        self.sel.clear();
+        self.selection_changed();
+        let cut = match rows.as_slice() {
+            [one] => self.collab_clash_cut(one),
+            _ => None,
+        };
+        let restore = self.collab.clash_shot_back.as_ref().map(|b| (b.section, b.section_on));
+        match (cut, restore) {
+            (Some((cut, yaw, pitch)), _) => {
+                self.section = Some(cut);
+                self.section_on = true;
+                (self.camera.yaw, self.camera.pitch) = (yaw, pitch);
+            }
+            (None, Some((section, on))) => {
+                self.section = section;
+                self.section_on = on;
+            }
+            (None, None) => {}
+        }
+        self.collab_show_rows(rows);
+        self.refresh_overlay();
+        #[cfg(not(target_arch = "wasm32"))]
+        let wait = Task::perform(async { std::thread::sleep(std::time::Duration::from_millis(60)) }, |_| ());
+        #[cfg(target_arch = "wasm32")]
+        let wait = Task::done(());
+        wait.then(|_| iced::window::latest().and_then(iced::window::screenshot)).map(|shot| Message::Collab(Event::ClashShot(Arc::new(shot))))
+    }
+
+    /// Shows the clashes of group `g` as an issue of them shows.
     fn collab_show_clashes(&mut self, g: usize) {
-        let Some(model) = self.model.clone() else { return };
         let rows: Vec<ClashRow> = self.collab.clashes.iter().filter(|c| c.group == g).cloned().collect();
+        self.collab_show_rows(rows);
+    }
+
+    /// Shows clashes as an issue of them shows: the camera on where they clash, as near as
+    /// their smaller elements ask, looking the way it looked; their elements red (the first of
+    /// each clash) and blue, everything else see-through.
+    fn collab_show_rows(&mut self, rows: Vec<ClashRow>) {
+        let Some(model) = self.model.clone() else { return };
         // clashes spread over the building make a picture of nothing: of such a group the
         // picture shows those within a few metres of the one with the most others near it
         let near = |c: &ClashRow, d: &ClashRow| Vec3::from_array(c.at).distance(Vec3::from_array(d.at)) <= 4.0;
@@ -1960,6 +2192,22 @@ impl App {
 
     /// The remote's PDF report: it begins, and the answer says so; the pictures and the file
     /// follow, while `collab_state` says `report: true`.
+    /// An issue made of a clash, or one of each group, over the remote control: the answer, and
+    /// the pictures of the clashes still to take.
+    pub(crate) fn collab_clash_issue_remote(&mut self, a: &serde_json::Value) -> (Result<serde_json::Value, String>, Task<Message>) {
+        use serde_json::json;
+        self.collab.refresh();
+        if a.get("action").and_then(|v| v.as_str()) == Some("issues") {
+            let task = self.collab_handle(Event::IssuesFromClashes);
+            return (Ok(json!({ "issues": self.collab.issues.topics.len(), "pictures": self.collab.clash_shots.len() })), task);
+        }
+        let Some(k) = a.get("index").and_then(|v| v.as_u64()).map(|k| k as usize).filter(|&k| k < self.collab.clashes.len()) else {
+            return (Err("give the clash's index".into()), Task::none());
+        };
+        let task = self.collab_handle(Event::IssueFromClash(k));
+        (Ok(json!({ "guid": self.collab.topic, "issues": self.collab.issues.topics.len(), "pictures": self.collab.clash_shots.len() })), task)
+    }
+
     pub(crate) fn collab_pdf_remote(&mut self, a: &serde_json::Value) -> (Result<serde_json::Value, String>, Task<Message>) {
         let Some(path) = a.get("path").and_then(|v| v.as_str()).map(PathBuf::from) else { return (Err("give the path".into()), Task::none()) };
         let kind = if a.get("kind").and_then(|v| v.as_str()) == Some("issues_pdf") { Report::IssuesPdf } else { Report::Pdf };
@@ -2026,11 +2274,12 @@ impl App {
                         Kind::Inside => "inside",
                         Kind::Near => "clearance",
                         Kind::Hidden => "out of sight",
+                        Kind::Unframed => "steel missing",
                     };
                     let at = self.collab_to_world(Vec3::from_array(c.at));
                     let guid = |id| self.collab_guid_of(id).unwrap_or_default();
                     out.push_str(&format!("{},{},{kind},{:.0},{},{},{},{},{},{:.3},{:.3},{:.3}
-", quote(&c.rule), c.group + 1, c.distance * 1000.0, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
+", quote(&c.rule), c.group + 1, if c.kind == Kind::Unframed { 0.0 } else { c.distance * 1000.0 }, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
                 }
                 out
             }
@@ -2242,21 +2491,25 @@ impl App {
                     return iced::window::latest().and_then(iced::window::screenshot).map(|shot| Message::Collab(Event::Shot(Arc::new(shot))));
                 }
             }
+            Event::ClashShot(shot) => {
+                if self.collab.clash_shots.is_empty() {
+                    return Task::none();
+                }
+                let (guid, _) = self.collab.clash_shots.remove(0);
+                let png = self.viewport_png(&shot);
+                let now = self.collab_viewpoint_now();
+                if let Some(view) = self.collab.issues.topics.iter_mut().find(|t| t.guid == guid).and_then(|t| t.viewpoints.first_mut()) {
+                    // the viewpoint looks as the picture does
+                    view.camera = now.camera;
+                    if let Some(png) = png {
+                        view.snapshot = Some(("snapshot.png".into(), png));
+                    }
+                }
+                return self.collab_clash_shot_next();
+            }
             Event::Shot(shot) => {
                 let Some(guid) = self.collab.shot_for.take() else { return Task::none() };
-                // the viewport out of the window's picture
-                let s = shot.scale_factor;
-                let (w, h) = (shot.size.width, shot.size.height);
-                let x = ((self.viewport_origin.0 * s).round().max(0.0) as u32).min(w.saturating_sub(1));
-                let y = ((self.viewport_origin.1 * s).round().max(0.0) as u32).min(h.saturating_sub(1));
-                let (cw, ch) = (((self.viewport_size.0 * s).round() as u32).clamp(1, w - x), ((self.viewport_size.1 * s).round() as u32).clamp(1, h - y));
-                let mut rgba = Vec::with_capacity((cw * ch * 4) as usize);
-                for row in y..y + ch {
-                    let from = ((row * w + x) * 4) as usize;
-                    rgba.extend_from_slice(shot.rgba.get(from..from + (cw * 4) as usize).unwrap_or(&[]));
-                }
-                rgba.chunks_exact_mut(4).for_each(|px| px[3] = 255);
-                if let Ok(png) = crate::remote::encode_png(cw, ch, &rgba) {
+                if let Some(png) = self.viewport_png(&shot) {
                     if let Some(view) = self.collab.issues.topics.iter_mut().find(|t| t.guid == guid).and_then(|t| t.viewpoints.first_mut()) {
                         view.snapshot = Some(("snapshot.png".into(), png));
                     }
@@ -2334,7 +2587,15 @@ impl App {
                 }
             }
             Event::ShowAccepted(on) => self.collab.show_accepted = on,
-            Event::SectionAround => return self.update(Message::SectionToSelection),
+            // a clash picked: the box around where it clashes, not around its two whole elements
+            Event::SectionAround => match self.collab.clash.and_then(|k| self.collab.clashes.get(k).cloned()) {
+                Some(row) if self.collab_clash_cut(&row).is_some() => {
+                    self.section_on = true;
+                    self.section = Some(crate::section::SectionBox::around(&self.collab_clash_focus(&row).unwrap_or_else(crate::model::Bounds::empty)));
+                    self.collab_look_at_clash(&row);
+                }
+                _ => return self.update(Message::SectionToSelection),
+            },
             Event::CompareOld(c) => self.collab.compare_pair.0 = c.0,
             Event::CompareNew(c) => self.collab.compare_pair.1 = c.0,
             Event::Compare => {
@@ -2585,6 +2846,11 @@ impl App {
                     rule.sight_names = typed;
                 }
             }
+            Event::ClashFrameWalls(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.frame_walls = typed;
+                }
+            }
             Event::ClashSightShare(k, typed) => {
                 if let (Some(rule), Ok(pct)) = (self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)), typed.trim().trim_end_matches('%').replace(',', ".").parse::<f32>()) {
                     if (0.0..=100.0).contains(&pct) {
@@ -2614,6 +2880,7 @@ impl App {
                             ClashKind::Hard => rule.tolerance_mm = mm,
                             ClashKind::Clearance => rule.clearance_mm = mm,
                             ClashKind::Sight => rule.sight_m = mm,
+                            ClashKind::Frame => rule.frame_reach_mm = mm,
                         }
                     }
                 }
@@ -2718,6 +2985,7 @@ impl App {
                 self.collab.clash = Some(k);
                 self.collab.open_group = Some(row.group);
                 self.collab_go_to([row.a, row.b]);
+                self.collab_look_at_clash(&row);
                 self.refresh_overlay();
             }
             Event::IssueFromClash(k) => {
@@ -2727,26 +2995,36 @@ impl App {
                 }
                 let topic = self.collab_clash_topic(&row, l);
                 self.collab.topic = Some(topic.guid.clone());
+                self.collab.clash_shots.push((topic.guid.clone(), vec![row]));
                 self.collab.issues.topics.push(topic);
                 self.collab.issues_changed = true;
                 self.collab.tab = Tab::Issues;
+                return self.collab_clash_shot_next();
             }
             Event::IssuesFromClashes => {
                 // one issue for each group: the accepted clashes are left out
                 let mut topics: Vec<Topic> = Vec::new();
+                let mut shots: Vec<(String, Vec<ClashRow>)> = Vec::new();
                 for group in self.collab_groups().into_iter().take(1000) {
                     let rows: Vec<&ClashRow> = group.iter().map(|&k| &self.collab.clashes[k]).filter(|c| c.decision != Decision::Accepted).collect();
-                    match rows.as_slice() {
-                        [] => {}
-                        [one] => topics.push(self.collab_clash_topic(one, l)),
-                        more => topics.push(self.collab_group_topic(more, l)),
+                    let topic = match rows.as_slice() {
+                        [] => continue,
+                        [one] => self.collab_clash_topic(one, l),
+                        more => self.collab_group_topic(more, l),
+                    };
+                    // a picture for each, as many as a report pictures
+                    if shots.len() < super::reports::PICTURED {
+                        shots.push((topic.guid.clone(), rows.iter().map(|&r| r.clone()).collect()));
                     }
+                    topics.push(topic);
                 }
+                self.collab.clash_shots.extend(shots);
                 let made = topics.len();
                 self.collab.issues.topics.extend(topics);
                 self.collab.issues_changed |= made > 0;
                 self.collab.tab = Tab::Issues;
                 self.collab_note(Tone::Success, format!("{made} {}", l.text("issues gemaakt", "issues made")));
+                return self.collab_clash_shot_next();
             }
             Event::Inform(e) => return self.inform_handle(e),
             Event::Cloud(e) => return self.cloud_handle(e),
@@ -3178,9 +3456,16 @@ impl App {
         .spacing(2);
         let mut rows = column![].spacing(2);
         for (i, entry) in self.models.iter().enumerate() {
+            // the checkbox shows it; its name picks it, for its place in the right pane
+            let name = entry.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D").to_string();
+            let picked = self.picked_model == Some(i);
+            let pick = named(
+                button(text(name.clone()).size(12)).padding([1, 4]).width(Length::Fill).style(move |_, s| p.ribbon_button(picked, s)).on_press(Message::PickModel(i)),
+                Node::new(Role::Button, format!("{} {name}", l.text("Kies model", "Pick model"))).selected(picked),
+            );
             let line = row![
-                w::checkbox(look, entry.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D"), entry.visible, Some(move |on| Message::ModelVisible(i, on))),
-                Space::new().width(Length::Fill),
+                named(w::checkbox(look, "", entry.visible, Some(move |on| Message::ModelVisible(i, on))), Node::new(Role::CheckBox, format!("{} {name}", l.text("Toon", "Show"))).selected(entry.visible)),
+                pick,
                 w::secondary(look, entry.model.format.clone()),
             ]
             .spacing(6)
@@ -3689,6 +3974,7 @@ impl App {
                             kind(l.text("Doorsnijding", "Crossing"), hard, ClashKind::Hard),
                             kind(l.text("Vrije ruimte", "Clearance"), rule.kind == ClashKind::Clearance, ClashKind::Clearance),
                             kind(l.text("Zichtlijn", "Sight line"), rule.kind == ClashKind::Sight, ClashKind::Sight),
+                            kind(l.text("Kozijnstaal", "Frame steel"), rule.kind == ClashKind::Frame, ClashKind::Frame),
                             Space::new().width(Length::Fill),
                             container(w::text_field(look, "", amount, Some(move |t| go(Event::ClashAmount(k, t))), D::Compact, None)).width(64),
                             w::secondary(look, if rule.kind == ClashKind::Sight { "m" } else { "mm" }),
@@ -3717,6 +4003,12 @@ impl App {
                             container(w::text_field(look, "*exit*, *vlucht*", &rule.sight_names, (rule.kind == ClashKind::Sight).then_some(move |t| go(Event::ClashSightNames(k, t))), D::Compact, None)).width(Length::FillPortion(3)),
                             container(w::text_field(look, "%", state.sight_shares.get(k).map(String::as_str).unwrap_or(""), (rule.kind == ClashKind::Sight).then_some(move |t| go(Event::ClashSightShare(k, t))), D::Compact, None)).width(Length::FillPortion(1)),
                             w::secondary(look, l.text("% zonder zicht", "% out of sight")),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                        row![
+                            w::secondary(look, l.text("In wanden", "In walls")).width(96),
+                            container(w::text_field(look, l.text("alle; bijv. *sandwich*", "all; e.g. *sandwich*"), &rule.frame_walls, (rule.kind == ClashKind::Frame).then_some(move |t| go(Event::ClashFrameWalls(k, t))), D::Compact, None)).width(Length::Fill),
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
@@ -3837,6 +4129,7 @@ impl App {
                 Kind::Inside => (l.text("ligt erin", "lies inside").to_string(), Tone::Error),
                 Kind::Near => (format!("{mm} mm {}", l.text("ertussen", "apart")), Tone::Warning),
                 Kind::Hidden => (format!("{:.0}% {}", clash.distance * 100.0, l.text("niet te zien", "out of sight")), Tone::Error),
+                Kind::Unframed => (format!("{}: {}", l.text("geen", "no"), crate::collab::frame::words(clash.distance as u8, l == Language::Dutch)), Tone::Error),
             };
             let what = if clash.fresh { format!("{} · {what}", l.text("nieuw", "new")) } else { what };
             match clash.decision {
@@ -4429,6 +4722,7 @@ impl App {
                         "index": k, "rule": c.rule, "a": c.a, "b": c.b, "a_name": c.a_name, "b_name": c.b_name,
                         "kind": format!("{:?}", c.kind), "distance_mm": (c.distance * 1000.0).round(), "decision": c.decision.key(),
                         "group": c.group, "double": c.copy, "new": c.fresh, "reach": c.reach.key(),
+                        "missing": (c.kind == Kind::Unframed).then(|| crate::collab::frame::words(c.distance as u8, false)),
                     })).collect::<Vec<_>>() }))
                 }
                 "group" => {
@@ -4451,6 +4745,12 @@ impl App {
                     let _ = self.collab_handle(Event::PickClash(k));
                     Ok(json!({ "picked": self.collab.clash, "selected": self.sel.len() }))
                 }
+                "section" => {
+                    let k = a.get("index").and_then(|v| v.as_u64()).ok_or("give the clash's index")? as usize;
+                    let _ = self.collab_handle(Event::PickClash(k));
+                    let _ = self.collab_handle(Event::SectionAround);
+                    Ok(json!({ "picked": self.collab.clash, "section": self.section.map(|s| json!({ "min": s.min.to_array(), "max": s.max.to_array() })) }))
+                }
                 "decide" => {
                     let k = a.get("index").and_then(|v| v.as_u64()).ok_or("give the clash's index")? as usize;
                     let d = text("decision").as_deref().and_then(Decision::parse).ok_or("decision: open, accepted or rejected")?;
@@ -4466,7 +4766,7 @@ impl App {
                     let _ = self.collab_handle(Event::IssuesFromClashes);
                     Ok(json!({ "issues": self.collab.issues.topics.len() }))
                 }
-                other => Err(format!("collab_clashes: unknown action {other} (run, list, group, open_group, pick, decide, issue, issues)")),
+                other => Err(format!("collab_clashes: unknown action {other} (run, list, group, open_group, pick, section, decide, issue, issues)")),
             },
             "collab_compare" => {
                 let pick = |k: &str| a.get(k).and_then(|v| v.as_u64()).map(|n| n as usize);
@@ -4722,6 +5022,35 @@ mod tests {
     }
 
     #[test]
+    fn a_clash_is_looked_at_and_cut_where_it_clashes_and_its_issue_gets_a_picture() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let _ = app.collab_update(Event::Tab(Tab::Clashes));
+        // the small block through the 4 m wall
+        app.collab.clashes = vec![row("t", 1, 2, [1.15, 0.1, 1.15])];
+        let _ = app.collab_update(Event::PickClash(0));
+        let _ = app.collab_update(Event::SectionAround);
+        let section = app.section.expect("a section box");
+        assert!(section.max.x - section.min.x < 2.0, "around the block, not along the 4 m wall: {section:?}");
+        assert!([section.min.x, section.max.x].contains(&1.15) || [section.min.y, section.max.y].contains(&0.1), "its side towards the camera through the clash: {section:?}");
+        assert!(app.section_on);
+        // the issue made of it gets a picture of the clash, and the view comes back
+        let selected = app.sel.items().to_vec();
+        let topics = app.collab.issues.topics.len();
+        let _ = app.collab_update(Event::IssueFromClash(0));
+        assert_eq!(app.collab.issues.topics.len(), topics + 1);
+        assert!(app.collab.clash_shown.is_some() && app.sel.is_empty(), "the clash shown in its colours while the picture is taken");
+        app.viewport_size = (40.0, 30.0);
+        app.viewport_origin = (0.0, 0.0);
+        let shot = iced::window::Screenshot::new(vec![200u8; 40 * 30 * 4], iced::Size::new(40, 30), 1.0);
+        let _ = app.collab_update(Event::ClashShot(Arc::new(shot)));
+        let view = &app.collab.issues.topics[topics].viewpoints[0];
+        assert!(view.snapshot.as_ref().is_some_and(|(name, png)| name == "snapshot.png" && png.get(1..4) == Some(&b"PNG"[..])));
+        assert!(app.collab.clash_shown.is_none() && app.collab.clash_shots.is_empty());
+        assert_eq!(app.sel.items().to_vec(), selected);
+    }
+
+    #[test]
     fn a_group_decides_and_makes_one_issue_and_a_pair_two_tests_find_is_one_clash() {
         let mut app = App::default();
         app.set_model(Arc::new(two_blocks()));
@@ -4895,6 +5224,54 @@ mod tests {
         // half may be without sight of it: then it passes; and without the wall too
         let lenient = ClashRule { sight_blocked_pct: 60.0, ..rule.clone() };
         assert!(run_clashes(&model, &models, &[lenient], &AtomicBool::new(false)).is_empty());
+    }
+
+    #[test]
+    fn a_frame_test_finds_the_steel_missing_around_windows_and_doors() {
+        // a sandwich wall along x with a window (posts and a lintel, no sill) and a door (nothing
+        // around it); a window in a brick wall is not tested
+        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), texturing: None };
+        let boxes: [(u64, &str, &str, [f32; 3], [f32; 3]); 8] = [
+            (1, "IfcWall", "Sandwichpaneel 120", [0.0, 0.0, 0.0], [6.0, 0.135, 3.0]),
+            (2, "IfcWindow", "Raam", [1.0, 0.03, 1.0], [1.9, 0.1, 2.8]),
+            (3, "IfcColumn", "Stijl", [0.9, -0.12, 0.0], [0.96, 0.0, 3.0]),
+            (4, "IfcColumn", "Stijl", [1.94, -0.12, 0.0], [2.0, 0.0, 3.0]),
+            (5, "IfcBeam", "Latei", [0.9, -0.1, 2.8], [2.0, 0.0, 2.88]),
+            (6, "IfcDoor", "Deur", [3.0, 0.03, 0.0], [4.0, 0.1, 2.4]),
+            (7, "IfcWall", "Metselwerk", [0.0, 10.0, 0.0], [6.0, 10.2, 3.0]),
+            (8, "IfcWindow", "Raam", [1.0, 10.05, 1.0], [1.9, 10.15, 2.8]),
+        ];
+        for (id, class, name, lo, hi) in boxes {
+            let first = layer.indices.len() as u32;
+            let base = (layer.positions.len() / 3) as u32;
+            for i in 0..8 {
+                layer.positions.extend([if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]);
+                layer.normals.extend([0.0, 0.0, 1.0]);
+            }
+            for q in [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]] {
+                layer.indices.extend([q[0], q[1], q[2], q[0], q[2], q[3]].map(|i: u32| base + i));
+            }
+            layer.elements.push((id, first, layer.indices.len() as u32 - first));
+            layer.props.push((id, format!("{{\"IfcType\":\"{class}\",\"Name\":\"{name}\",\"GlobalId\":\"g{id}\"}}")));
+        }
+        let model = Model::new(PathBuf::from("frames.ifc"), "IFC", vec![layer]);
+        let models = vec![("frames.ifc".to_string(), 0..1)];
+        let rule = ClashRule {
+            name: "frames".into(),
+            kind: ClashKind::Frame,
+            a: Selector { classes: vec!["IfcWindow*".into(), "IfcDoor*".into()], ..Selector::default() },
+            b: Selector { classes: vec!["IfcBeam*".into(), "IfcColumn*".into()], ..Selector::default() },
+            frame_reach_mm: 250.0,
+            frame_walls: "*sandwich*".into(),
+            ..ClashRule::default()
+        };
+        let mut found = run_clashes(&model, &models, std::slice::from_ref(&rule), &AtomicBool::new(false));
+        found.sort_by_key(|c| c.a);
+        use crate::collab::frame::{BOTTOM, LEFT, RIGHT, TOP};
+        assert_eq!(found.iter().map(|c| (c.a, c.b, c.kind, c.distance as u8)).collect::<Vec<_>>(), [(2, 1, Kind::Unframed, BOTTOM), (6, 1, Kind::Unframed, LEFT | RIGHT | TOP)], "{found:?}");
+        // all walls: the window in brickwork lacks everything
+        let all = ClashRule { frame_walls: String::new(), ..rule };
+        assert_eq!(run_clashes(&model, &models, &[all], &AtomicBool::new(false)).len(), 3);
     }
 
     #[test]

@@ -8,5 +8,6 @@ pub mod bsdd;
 pub mod clash;
 pub mod deviation;
 pub mod floor;
+pub mod frame;
 pub mod rules;
 pub mod share;

@@ -1214,6 +1214,16 @@
     "Load borings": "Wczytaj odwierty",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Pobiera odwierty geotechniczne wokół miejsca z holenderskiego rejestru podłoża i umieszcza je w modelu.",
     "Opens borings from GEF files and puts them in the model.": "Otwiera odwierty z plików GEF i umieszcza je w modelu.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Tworzy model 3D podłoża z wczytanych odwiertów: każde miejsce przejmuje warstwy najbliższego odwiertu."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Tworzy model 3D podłoża z wczytanych odwiertów: każde miejsce przejmuje warstwy najbliższego odwiertu.",
+    "Frame steel": "Stal ościeżnicy",
+    "In walls": "W ścianach",
+    "Steel is missing around the frame:": "Wokół ościeżnicy brakuje stali:",
+    "all; e.g. *sandwich*": "wszystkie; np. *sandwich*",
+    "no": "brak",
+    "without steel in": "bez stali w",
+    "Move by two points": "Przesuń o dwa punkty",
+    "Moving…": "Przesuwanie…",
+    "Pick model": "Wybierz model",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Kliknij punkt modelu, a potem miejsce, do którego ma trafić (np. przecięcie dwóch osi). Esc przerywa."
   }
 }

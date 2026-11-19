@@ -1214,6 +1214,16 @@
     "Load borings": "Bohrungen laden",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Ruft die geotechnischen Bohrungen rund um den Ort aus dem niederländischen Untergrundregister ab und legt sie im Modell ab.",
     "Opens borings from GEF files and puts them in the model.": "Öffnet Bohrungen aus GEF-Dateien und legt sie im Modell ab.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Erstellt ein 3D-Modell des Untergrunds aus den geladenen Bohrungen: Jeder Ort übernimmt die Schichten der nächstgelegenen Bohrung."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Erstellt ein 3D-Modell des Untergrunds aus den geladenen Bohrungen: Jeder Ort übernimmt die Schichten der nächstgelegenen Bohrung.",
+    "Frame steel": "Rahmenstahl",
+    "In walls": "In Wänden",
+    "Steel is missing around the frame:": "Um den Rahmen fehlt Stahl:",
+    "all; e.g. *sandwich*": "alle; z. B. *sandwich*",
+    "no": "kein",
+    "without steel in": "ohne Stahl in",
+    "Move by two points": "Mit zwei Punkten verschieben",
+    "Moving…": "Verschieben…",
+    "Pick model": "Modell wählen",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Klicken Sie einen Punkt des Modells und dann, wohin er soll (etwa wo sich zwei Achsen kreuzen). Esc bricht ab."
   }
 }

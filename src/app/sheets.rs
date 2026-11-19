@@ -728,7 +728,7 @@ impl canvas::Program<Message> for SheetDrawing {
                             // what an annotation stands on: of a split view only the piece it is in
                             let here = |q: [f64; 2]| !split || crop.is_some_and(|(lo, hi)| (0..2).all(|k| q[k] >= lo[k] && q[k] <= hi[k]));
                             let piece = |a: [f64; 2], z: [f64; 2]| match crop {
-                                Some((lo, hi)) => super::paper::clip(a, z, *lo, *hi),
+                                Some((lo, hi)) => crate::drawing2d::clip(a, z, *lo, *hi),
                                 None => Some((a, z)),
                             };
                             let stroke = |frame: &mut Frame, segments: &mut dyn Iterator<Item = ([f64; 2], [f64; 2])>, color: Color, width: f32| {

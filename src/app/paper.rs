@@ -7,6 +7,7 @@
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
 use crate::drawing::Cut;
+use crate::drawing2d::clip;
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -549,26 +550,6 @@ enum Side {
     Top,
 }
 
-/// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky).
-pub(super) fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
-    let d = [b[0] - a[0], b[1] - a[1]];
-    let (mut t0, mut t1) = (0.0f64, 1.0f64);
-    for (p, q) in [(-d[0], a[0] - lo[0]), (d[0], hi[0] - a[0]), (-d[1], a[1] - lo[1]), (d[1], hi[1] - a[1])] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return None;
-            }
-        } else {
-            let r = q / p;
-            if p < 0.0 {
-                t0 = t0.max(r);
-            } else {
-                t1 = t1.min(r);
-            }
-        }
-    }
-    (t0 <= t1).then(|| ([a[0] + t0 * d[0], a[1] + t0 * d[1]], [a[0] + t1 * d[0], a[1] + t1 * d[1]]))
-}
 struct PaperDrawing {
     sheet: Sheet,
     /// Per placed view, in the order of the sheet's views.

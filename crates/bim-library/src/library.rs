@@ -58,6 +58,19 @@ fn numbered(names: impl Iterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
+/// A name as part of an id: lower case, letters, digits and points, hyphens between.
+pub(crate) fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() || c == '.' || c == '_' {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
 /// `id`, or the first of `id-2`, `id-3`, ... that `taken` says is free.
 fn free_id(id: &str, taken: impl Fn(&str) -> bool) -> String {
     let mut fresh = id.to_string();

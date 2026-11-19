@@ -1039,7 +1039,7 @@ impl canvas::Program<Message> for ViewMarks {
                         for s in segments {
                             let (a, b) = (s[0].map(f64::from), s[1].map(f64::from));
                             let Some((a, b)) = (match self.crop {
-                                Some((lo, hi)) => super::paper::clip(a, b, lo, hi),
+                                Some((lo, hi)) => crate::drawing2d::clip(a, b, lo, hi),
                                 None => Some((a, b)),
                             }) else { continue };
                             if let (Some(a), Some(b)) = (self.px(&screen, a), self.px(&screen, b)) {

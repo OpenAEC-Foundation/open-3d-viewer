@@ -26,6 +26,7 @@ pub mod drawing;
 pub mod dutch;
 pub mod grade;
 pub mod hatch;
+pub mod house;
 pub mod ifcx;
 pub mod inb;
 pub mod library;
@@ -90,6 +91,8 @@ pub enum LibraryError {
     /// A code is no NL-SfB code: two digits of a group of table 1, and one or two more after a
     /// point.
     BadCode(String),
+    /// A house style does not hold together; the text says what should.
+    BadHouseStyle(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -104,6 +107,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::BadProfile(why) => write!(f, "Not a profile: {why}"),
             LibraryError::BadGrid => f.write_str("A system's bays and rows must be wider than its members."),
             LibraryError::UnknownSetting(key) => write!(f, "The drawing standard has no \"{key}\"."),
+            LibraryError::BadHouseStyle(what) => write!(f, "Not a house style: {what}."),
             LibraryError::BadCode(code) => write!(f, "\"{code}\" is no NL-SfB code (21, 21.2 or 21.22)."),
         }
     }

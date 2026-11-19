@@ -267,6 +267,8 @@ pub struct Step {
     pub library: Option<Arc<bim_library::Library>>,
     /// The project's drawing standard, kept as the library is.
     pub standard: Option<Arc<bim_library::drawing::Standard>>,
+    /// The house style the project follows, kept as the library is.
+    pub house: Option<Arc<bim_library::house::HouseStyle>>,
 }
 
 impl App {
@@ -285,6 +287,8 @@ impl App {
                 }
             } else if let Some(standards) = definition.get(crate::export::ifcx::STANDARDS) {
                 self.adopt_standard(standards);
+            } else if let Some(style) = definition.get(crate::export::ifcx::HOUSE) {
+                self.adopt_house(style);
             } else if let Some(rooms) = definition.get(crate::export::ifcx::ROOMS) {
                 self.modeller.rooms = serde_json::from_value(rooms.clone()).unwrap_or_default();
             } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
@@ -725,6 +729,8 @@ impl App {
         built.project.part_materials = crate::hatching::part_materials(&self.library);
         // and its drawing standard: the kinds of drawing and their settings, a node each
         built.project.types.extend(bim_library::drawing::nodes(&self.standard));
+        // and the house style it follows
+        built.project.types.push(bim_library::house::node(&self.house));
         // and the names given to its spaces
         if !self.modeller.rooms.is_empty() {
             built.project.types.push(serde_json::json!({ "path": "openaec-rooms", "attributes": { crate::export::ifcx::ROOMS: self.modeller.rooms } }));

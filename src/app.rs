@@ -45,6 +45,7 @@ mod precut;
 mod levels;
 pub mod buildups;
 pub mod codes;
+pub mod house;
 pub mod libraries;
 pub mod library;
 pub mod materials;
@@ -388,6 +389,9 @@ pub struct App {
     /// The material edited on the Library page, and what is being typed of it.
     pub material_view: materials::MaterialView,
     pub code_view: codes::CodeView,
+    /// The house style the project follows: how its sheets and documents look.
+    pub house: bim_library::house::HouseStyle,
+    pub house_view: house::HouseView,
     /// The linear type edited on the Library page, the role whose types show and what of the
     /// steel table shows.
     pub profile_view: profiles::ProfileView,
@@ -578,6 +582,7 @@ pub enum Message {
     /// The materials of the project on the Library page: picking and editing one.
     Material(materials::MaterialMessage),
     Code(codes::CodeMessage),
+    House(house::HouseMessage),
     /// The linear types of the project on the Library page: picking one and editing its profile.
     Profile(profiles::ProfileMessage),
     /// The system types of the project on the Library page: picking one and editing its parts.
@@ -1078,6 +1083,8 @@ impl Default for App {
             buildup_view: buildups::BuildUpView::default(),
             material_view: materials::MaterialView::default(),
             code_view: codes::CodeView::default(),
+            house: bim_library::house::HouseStyle::starter(),
+            house_view: house::HouseView::default(),
             profile_view: profiles::ProfileView::default(),
             system_view: systems::SystemView::default(),
             follow_refused: Vec::new(),
@@ -2346,6 +2353,7 @@ impl App {
             Message::BuildUp(message) => return self.buildup_update(message),
             Message::Material(message) => return self.material_update(message),
             Message::Code(message) => return self.code_update(message),
+            Message::House(message) => return self.house_update(message),
             Message::Profile(message) => return self.profile_update(message),
             Message::SystemType(message) => return self.system_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]

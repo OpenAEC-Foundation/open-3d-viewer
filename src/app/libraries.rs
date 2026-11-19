@@ -38,7 +38,7 @@ use bim_library::{DrawingStandard, HatchKind, HatchPattern, HatchSet, Library, L
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, canvas as canvas_widget, column, container, row, scrollable, text, text_input, Column, Space};
+use iced::widget::{button, canvas as canvas_widget, column, container, row, scrollable, text, text_input, Column};
 use iced::{Center, Color, Element, Fill, Point, Rectangle, Size, Task};
 use openaec_ui::Language;
 use std::sync::OnceLock;
@@ -186,6 +186,8 @@ pub enum Category {
     /// A company's house style.
     Colours,
     Fonts,
+    /// The sheet formats of the house style, each with its margins and its title block.
+    Sheets,
 }
 
 /// What a category stands under in the tree.
@@ -244,6 +246,7 @@ impl Category {
             Category::Codes => "NL-SfB",
             Category::Colours => l.text("Kleuren", "Colours"),
             Category::Fonts => l.text("Lettertypen", "Fonts"),
+            Category::Sheets => l.text("Bladformaten", "Sheet formats"),
         }
     }
 
@@ -599,8 +602,9 @@ impl App {
             Category::HatchSet(set) => hatch::of(set).count(),
             Category::Hatches => HatchKind::ALL.len(),
             Category::Codes => of(&|lib| lib.codes.len()),
-            Category::Colours => HOUSE_COLOURS,
-            Category::Fonts => 1,
+            Category::Colours => self.house.colours.len(),
+            Category::Fonts => 2,
+            Category::Sheets => self.house.sheets.len(),
         }
     }
 
@@ -652,7 +656,7 @@ impl App {
                 }
                 tree
             }
-            Source::Company => vec![(Heading::House, counted(vec![Category::Colours, Category::Fonts]))],
+            Source::Company => vec![(Heading::House, counted(vec![Category::Colours, Category::Fonts, Category::Sheets]))],
             Source::Project => {
                 let mut tree = types(true);
                 steel(&mut tree);
@@ -804,6 +808,9 @@ impl App {
         let hint = |hint: &'static str| -> Element<'_, Message> { container(text(hint).size(12).color(p.text_muted).wrapping(Wrapping::Word)).padding(8).into() };
         if self.category().of_standard() && view.query.trim().chars().count() < 2 {
             return self.standard_pane(p, l);
+        }
+        if view.source == Source::Company && view.query.trim().chars().count() < 2 {
+            return self.house_pane(p, l);
         }
         if view.source == Source::Project {
             return match () {
@@ -971,25 +978,9 @@ impl App {
                     })
                     .collect()
             }
-            (Category::Colours, _, _) => {
-                let rgb = |c: Color| [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8];
-                let house: [(Color, &'static str); HOUSE_COLOURS] = [
-                    (p.accent, l.text("accent", "accent")),
-                    (p.text, l.text("tekst", "text")),
-                    (p.text_secondary, l.text("tweede tekst", "secondary text")),
-                    (p.border, l.text("rand", "border")),
-                    (p.surface, l.text("vlak", "surface")),
-                    (p.bg, l.text("achtergrond", "background")),
-                ];
-                house
-                    .into_iter()
-                    .map(|(colour, role)| {
-                        let swatch = container(Space::new().width(Fill).height(LOOK - 8.0)).style(move |_| container::Style { background: Some(colour.into()), border: iced::Border { color: p.border, width: 1.0, radius: 3.0.into() }, ..Default::default() });
-                        tile(p, swatch.into(), super::materials::hex(rgb(colour)), role.to_string(), false, None)
-                    })
-                    .collect()
-            }
-            (Category::Fonts, _, _) => vec![tile(p, container(text("Aa Bb 123").size(26).color(p.text)).width(Fill).align_x(Center).into(), "Inter".to_string(), l.text("het lettertype van de suite", "the suite's font").to_string(), false, None)],
+            (Category::Colours, _, _) => self.house_colour_tiles(p, l),
+            (Category::Fonts, _, _) => self.house_font_tiles(p, l),
+            (Category::Sheets, _, _) => self.house_sheet_tiles(p),
             (category, _, _) if category.of_standard() => self.standard_tiles(p, l, category),
             _ => Vec::new(),
         }
@@ -1212,7 +1203,6 @@ impl App {
 }
 
 /// How many colours a house style shows.
-const HOUSE_COLOURS: usize = 6;
 
 /// A node as text: indented as JSON is, but a list of numbers, of texts or of points stays on one
 /// line, so a colour or a line reads as one.
@@ -1424,7 +1414,7 @@ mod tests {
         assert_eq!((app.category(), app.shown_hatches().1), (Category::Kinds, "NEN 47"));
         // a company: its house style; the project: its own library and its standard
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Company));
-        assert_eq!(app.library_tree(), [(Heading::House, vec![(Category::Colours, 6), (Category::Fonts, 1)])]);
+        assert_eq!(app.library_tree(), [(Heading::House, vec![(Category::Colours, 6), (Category::Fonts, 2), (Category::Sheets, 5)])]);
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
         app.library.materials.truncate(2);
         let project = app.library_tree();

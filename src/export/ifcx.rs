@@ -61,6 +61,8 @@ pub const LIBRARY: &str = "openaec::library";
 /// The key the reader gives a file's drawing standard back under, among the project's
 /// definitions: the nodes of its kinds of drawing and their settings (see `bim_library::drawing`).
 pub const STANDARDS: &str = "openaec::drawing::standards";
+/// The key under which a file's house style comes back, as the reader read it.
+pub const HOUSE: &str = "openaec::housestyle::held";
 
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.

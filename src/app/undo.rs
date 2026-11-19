@@ -24,6 +24,8 @@ pub(super) enum Typing {
     MaterialName(String, Lang),
     /// The colour of a material: typed, or a channel at a time.
     MaterialColour(String),
+    /// A field of the house style.
+    House(super::house::Typed),
     /// The grade typed for a material (its key).
     MaterialGrade(String),
     /// The name of a code in a language.
@@ -42,6 +44,7 @@ impl App {
         match message {
             Message::Material(MaterialMessage::Named(lang, _)) => Some(Typing::MaterialName(self.material_view.picked.clone()?, *lang)),
             Message::Material(MaterialMessage::Hex(_) | MaterialMessage::Channel(..) | MaterialMessage::Shown) => Some(Typing::MaterialColour(self.material_view.picked.clone()?)),
+            Message::House(super::house::HouseMessage::Typed(field, _, _)) => Some(Typing::House(*field)),
             Message::Material(MaterialMessage::Graded(_)) => Some(Typing::MaterialGrade(self.material_view.picked.clone()?)),
             Message::Code(super::codes::CodeMessage::Named(lang, _)) => Some(Typing::CodeName(self.code_view.picked.clone()?, *lang)),
             Message::BuildUp(BuildUpMessage::Named(_)) => Some(Typing::BuildUpName(self.buildup_view.picked.clone()?)),
@@ -62,6 +65,9 @@ impl App {
         if base.standard.is_none() {
             base.standard = Some(Arc::new(self.standard.clone()));
         }
+        if base.house.is_none() {
+            base.house = Some(Arc::new(self.house.clone()));
+        }
     }
 
     /// Whether the project's library or its drawing standard is no longer as the history last
@@ -69,7 +75,7 @@ impl App {
     fn setup_changed(&mut self) -> bool {
         self.look_at_setup();
         let base = &self.modeller.base;
-        base.library.as_deref() != Some(&self.library) || base.standard.as_deref() != Some(&self.standard)
+        base.library.as_deref() != Some(&self.library) || base.standard.as_deref() != Some(&self.standard) || base.house.as_deref() != Some(&self.house)
     }
 
     /// A move being made in edit mode or with a grip: the model changes at every move of the
@@ -129,6 +135,7 @@ impl App {
             levels: Arc::new(self.document.levels().to_vec()),
             library: Some(Arc::new(self.library.clone())),
             standard: Some(Arc::new(self.standard.clone())),
+            house: Some(Arc::new(self.house.clone())),
         }
     }
 
@@ -191,6 +198,10 @@ impl App {
         if let Some(standard) = step.standard.as_ref().filter(|standard| ***standard != self.standard) {
             self.standard = (**standard).clone();
             setup = true;
+        }
+        if let Some(house) = step.house.as_ref().filter(|house| ***house != self.house) {
+            self.house = (**house).clone();
+            self.house_view = super::house::HouseView { sheet: self.house_view.sheet.take(), ..Default::default() };
         }
         if setup {
             self.settle_library_editors();

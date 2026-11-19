@@ -217,6 +217,18 @@ impl App {
             text(l.text("X, Y, Z in meters, de draaiing in graden linksom om het nulpunt; Enter past toe.", "X, Y, Z in metres, the turn in degrees anticlockwise about the zero point; Enter applies.").to_string()).size(11).color(p.text_muted),
         ]
         .spacing(4);
+        // moving by two points picked in the view: a point of the model, then where it goes
+        let moving = self.moving_model.is_some();
+        let label = if moving { l.text("Verplaatsen…", "Moving…") } else { l.text("Verplaats met twee punten", "Move by two points") };
+        rows = rows.push(
+            iced::widget::button(text(label.to_string()).size(12))
+                .padding([3, 10])
+                .style(move |_, status| p.ribbon_button(moving, status))
+                .on_press(AppMessage::MoveModelByPoints),
+        );
+        if moving {
+            rows = rows.push(text(l.text("Klik een punt van het model en daarna waar het heen moet (bijv. de kruising van twee stramienen). Esc breekt af.", "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.").to_string()).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph));
+        }
         // the map of where its file says it lies
         let note = |words: String| text(words).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph);
         match &entry.placed.map {

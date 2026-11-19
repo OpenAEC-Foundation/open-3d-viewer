@@ -1218,6 +1218,10 @@
     "Steel is missing around the frame:": "Falta acero alrededor del marco:",
     "all; e.g. *sandwich*": "todos; p. ej. *sandwich*",
     "no": "sin",
-    "without steel in": "sin acero en"
+    "without steel in": "sin acero en",
+    "Move by two points": "Mover con dos puntos",
+    "Moving…": "Moviendo…",
+    "Pick model": "Elegir modelo",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Haga clic en un punto del modelo y luego donde debe ir (por ejemplo, donde se cruzan dos ejes). Esc cancela."
   }
 }

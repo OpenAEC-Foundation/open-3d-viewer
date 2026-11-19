@@ -1218,6 +1218,10 @@
     "Steel is missing around the frame:": "Wokół ościeżnicy brakuje stali:",
     "all; e.g. *sandwich*": "wszystkie; np. *sandwich*",
     "no": "brak",
-    "without steel in": "bez stali w"
+    "without steel in": "bez stali w",
+    "Move by two points": "Przesuń o dwa punkty",
+    "Moving…": "Przesuwanie…",
+    "Pick model": "Wybierz model",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Kliknij punkt modelu, a potem miejsce, do którego ma trafić (np. przecięcie dwóch osi). Esc przerywa."
   }
 }

@@ -16,18 +16,33 @@
 //!   and never changes a type the project has ([`Library::merge`]).
 //! - No technical value is invented: a material has a hatch and a colour, no density or
 //!   conductivity until a source gives one.
+//! - The hatches of a drawing standard and the suite's own are a catalogue of tiles ([`hatch`]),
+//!   taken from the INB template.
 //!
 //! Lengths are metres.
 
+pub mod annotate;
 pub mod buildup;
+pub mod drawing;
+pub mod dutch;
+pub mod grade;
+pub mod hatch;
+pub mod house;
 pub mod ifcx;
 pub mod inb;
 pub mod library;
+pub mod lod;
 pub mod material;
+pub mod nlsfb;
+pub mod object;
+pub mod ocondat;
 pub mod profile;
+pub mod remote;
 pub mod system;
+pub mod template;
 
 pub use buildup::{BuildUp, Layer, Role};
+pub use hatch::{Hatch, HatchSet};
 pub use library::Library;
 pub use material::{DrawingStandard, HatchKind, HatchPattern, Material, Names};
 pub use profile::{LinearRole, LinearType, ProfileShape, Series, SteelProfile};
@@ -75,6 +90,16 @@ pub enum LibraryError {
     BadProfile(String),
     /// A system type's bays or rows are not wider than its members.
     BadGrid,
+    /// A drawing standard names a scale, a pen or a style it does not have, or a line style's
+    /// dashes lack a gap; the text says which.
+    UnknownSetting(String),
+    /// A code is no NL-SfB code: two digits of a group of table 1, and one or two more after a
+    /// point.
+    BadCode(String),
+    /// A house style does not hold together; the text says what should.
+    BadHouseStyle(String),
+    /// An object type does not hold together; the text says what it needs.
+    BadObject(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -88,6 +113,10 @@ impl std::fmt::Display for LibraryError {
             LibraryError::Unreadable(why) => write!(f, "Not a library: {why}"),
             LibraryError::BadProfile(why) => write!(f, "Not a profile: {why}"),
             LibraryError::BadGrid => f.write_str("A system's bays and rows must be wider than its members."),
+            LibraryError::UnknownSetting(key) => write!(f, "The drawing standard has no \"{key}\"."),
+            LibraryError::BadObject(what) => write!(f, "Not an object: it needs {what}."),
+            LibraryError::BadHouseStyle(what) => write!(f, "Not a house style: {what}."),
+            LibraryError::BadCode(code) => write!(f, "\"{code}\" is no NL-SfB code (21, 21.2 or 21.22)."),
         }
     }
 }

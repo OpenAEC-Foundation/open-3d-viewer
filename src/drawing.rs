@@ -72,6 +72,9 @@ pub struct Fill {
     /// draws outside its elements.
     pub layer: usize,
     pub element: Option<u64>,
+    /// The material (in the model's `part_materials`) of the part of the element this face is
+    /// of, for an element of several materials: a face per layer of a wall.
+    pub part: Option<u32>,
     /// Closed outlines; a point is in the face when an odd number of them goes round it.
     pub loops: Vec<Vec<[f32; 2]>>,
     /// The colour behind the hatch and that of its lines; `None` before it is hatched.
@@ -631,11 +634,11 @@ pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], dep
     // where the cut meets the terrain: a surface, that closes no face of its own
     let terrain: Vec<bool> = model.layers.iter().map(|l| l.name.contains("Topograph")).collect();
     let mut ground: HashMap<(usize, Option<u64>), Vec<Segment>> = HashMap::new();
-    for (key, t) in keyed(model, shown) {
+    for (key, part, t) in keyed(model, shown) {
         let c = t.map(map);
         if let Some(segment) = cross(c, 0.0) {
             segments.push(segment);
-            faces.add(key, segment);
+            faces.add(key, part, segment);
             if terrain.get(key.0).copied().unwrap_or(false) {
                 ground.entry(key).or_default().push(segment);
             }
@@ -744,7 +747,7 @@ pub fn view_at(model: &Model, shown: Shown, forward: [f32; 3], clip: Option<&cra
     let mut faces: Vec<[[f32; 3]; 3]> = Vec::new();
     let mut edges = feature_edges(model, shown, map, f32::NEG_INFINITY, f32::INFINITY);
     match clip {
-        None => faces.extend(keyed(model, shown).map(|(_, t)| t.map(map))),
+        None => faces.extend(keyed(model, shown).map(|(_, _, t)| t.map(map))),
         Some(clip) => {
             let (lo, hi) = (clip.min, clip.max);
             // a line's part in the box (the box's own coordinates)
@@ -766,7 +769,7 @@ pub fn view_at(model: &Model, shown: Shown, forward: [f32; 3], clip: Option<&cra
             };
             let seen = |a: Vec3, z: Vec3| [map(clip.to_world(a).to_array()), map(clip.to_world(z).to_array())];
             edges = edges.into_iter().filter_map(|[a, z]| within(clip.to_local(unmap(a)), clip.to_local(unmap(z))).map(|(a, z)| seen(a, z))).collect();
-            for (_, t) in keyed(model, shown) {
+            for (_, _, t) in keyed(model, shown) {
                 let local = t.map(|p| clip.to_local(Vec3::from(p)));
                 // the triangle's part in the box: cut back side by side
                 let mut polygon: Vec<Vec3> = local.to_vec();
@@ -943,10 +946,10 @@ fn extent<'a>(segments: impl Iterator<Item = &'a Segment>) -> Option<([f32; 2], 
 pub fn cut_at(model: &Model, shown: Shown, z: f32) -> Cut {
     let mut segments = Vec::new();
     let mut faces = Faces::default();
-    for (key, corners) in keyed(model, shown) {
+    for (key, part, corners) in keyed(model, shown) {
         if let Some(segment) = cross(corners, z) {
             segments.push(segment);
-            faces.add(key, segment);
+            faces.add(key, part, segment);
         }
     }
     let extent = extent(segments.iter());
@@ -1084,29 +1087,31 @@ pub fn join(cut: &mut Cut, same: &dyn Fn(usize, usize) -> bool) {
 /// its first two: what each element shows there, not hatched yet.
 pub fn faces_at(model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<Fill> {
     let mut faces = Faces::default();
-    for (key, corners) in keyed(model, shown) {
+    for (key, part, corners) in keyed(model, shown) {
         if let Some(segment) = cross(corners.map(&map), 0.0) {
-            faces.add(key, segment);
+            faces.add(key, part, segment);
         }
     }
     faces.fills()
 }
 
-/// The corners of each triangle that is shown, with its layer and the element it draws.
-fn keyed<'a>(model: &'a Model, shown: Shown<'a>) -> impl Iterator<Item = ((usize, Option<u64>), [[f32; 3]; 3])> + 'a {
+/// The corners of each triangle that is shown, with its layer and the element it draws, and the
+/// material of the part of that element it is of (an element of several materials).
+fn keyed<'a>(model: &'a Model, shown: Shown<'a>) -> impl Iterator<Item = ((usize, Option<u64>), Option<u32>, [[f32; 3]; 3])> + 'a {
     model.layers.iter().enumerate().filter(move |(i, l)| !l.points && shown.on(*i)).flat_map(move |(i, layer)| {
         let p = &layer.positions;
         layer.indices.chunks_exact(3).enumerate().filter(move |(_, t)| !(shown.hidden)(i, t[0])).filter_map(move |(k, t)| {
             let corner = |k: u32| p.get(k as usize * 3..k as usize * 3 + 3).map(|v| [v[0], v[1], v[2]]);
-            Some(((i, layer.element_at(k)), [corner(t[0])?, corner(t[1])?, corner(t[2])?]))
+            Some(((i, layer.element_at(k)), model.project.part_at(i, k), [corner(t[0])?, corner(t[1])?, corner(t[2])?]))
         })
     })
 }
 
-/// The cut segments per element, to close into its cut faces.
+/// The cut segments per element (per part of an element of several materials), to close into
+/// its cut faces.
 #[derive(Default)]
 struct Faces {
-    of: HashMap<(usize, Option<u64>), Vec<Segment>>,
+    of: HashMap<((usize, Option<u64>), Option<u32>), Vec<Segment>>,
 }
 
 /// Points nearer than this (metres) are one point of an outline.
@@ -1115,8 +1120,8 @@ const WELD: f32 = 5e-5;
 const SLIVER: f32 = 1e-6;
 
 impl Faces {
-    fn add(&mut self, key: (usize, Option<u64>), segment: Segment) {
-        self.of.entry(key).or_default().push(segment);
+    fn add(&mut self, key: (usize, Option<u64>), part: Option<u32>, segment: Segment) {
+        self.of.entry((key, part)).or_default().push(segment);
     }
 
     /// The faces whose segments close into outlines, in the order of their layers and elements.
@@ -1124,10 +1129,10 @@ impl Faces {
         let mut fills: Vec<Fill> = self
             .of
             .into_iter()
-            .map(|((layer, element), segments)| Fill { layer, element, loops: outlines(&segments), ..Fill::default() })
+            .map(|(((layer, element), part), segments)| Fill { layer, element, part, loops: outlines(&segments), ..Fill::default() })
             .filter(|f| !f.loops.is_empty())
             .collect();
-        fills.sort_by_key(|f| (f.layer, f.element));
+        fills.sort_by_key(|f| (f.layer, f.element, f.part));
         fills
     }
 }

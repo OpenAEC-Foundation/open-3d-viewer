@@ -61,18 +61,25 @@ fn content(d: &Drawing2d) -> String {
     let at = |q: [f64; 2]| format!("{} {}", num((q[0] - lo[0]) * k), num((q[1] - lo[1]) * k));
     let mut s = String::from("1 J 1 j 0 G 0 g\n");
     for pen in Pen::ALL {
-        let mut segments: Vec<([f64; 2], [f64; 2])> = d.lines.iter().filter(|l| l.pen == pen).map(|l| (l.a, l.b)).collect();
+        // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
+        // what is seen beyond it a width of its own
+        let mut groups: Vec<(f64, Vec<([f64; 2], [f64; 2])>)> =
+            d.widths(pen).into_iter().map(|width| (width, d.lines.iter().filter(|l| l.pen == pen && (l.width - width).abs() < 1e-9).map(|l| (l.a, l.b)).collect())).collect();
         if pen == Pen::Dimension {
-            segments.extend(d.dimensions.iter().flat_map(|dim| dim.lines()).map(|[a, b]| (a, b)));
+            let marks: Vec<([f64; 2], [f64; 2])> = d.dimensions.iter().flat_map(|dim| dim.lines()).map(|[a, b]| (a, b)).collect();
+            match groups.iter_mut().find(|(width, _)| (*width - pen.weight_mm()).abs() < 1e-9) {
+                Some((_, segments)) => segments.extend(marks),
+                None if !marks.is_empty() => groups.push((pen.weight_mm(), marks)),
+                None => {}
+            }
         }
-        if segments.is_empty() {
-            continue;
+        for (width, segments) in groups {
+            let _ = writeln!(s, "{} w", num(width * POINTS));
+            for (a, b) in segments {
+                let _ = writeln!(s, "{} m {} l", at(a), at(b));
+            }
+            s.push_str("S\n");
         }
-        let _ = writeln!(s, "{} w", num(pen.weight_mm() * POINTS));
-        for (a, b) in segments {
-            let _ = writeln!(s, "{} m {} l", at(a), at(b));
-        }
-        s.push_str("S\n");
     }
     let labels: Vec<Text2d> = d.dimensions.iter().map(|dim| dim.label()).collect();
     for t in d.texts.iter().chain(&labels) {
@@ -173,7 +180,7 @@ mod tests {
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(A3_LANDSCAPE),
-            lines: vec![Line2d { pen: Pen::Cut, a: [0.05, 0.05], b: [0.30, 0.05] }, Line2d { pen: Pen::Beyond, a: [0.05, 0.10], b: [0.30, 0.10] }],
+            lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
             texts: vec![
                 Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left },
                 Text2d { pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right },

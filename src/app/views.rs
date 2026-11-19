@@ -63,6 +63,7 @@ impl App {
     pub(super) fn new_plan_of(&mut self, level: &str, kind: PlanKind, word: &str) {
         self.views_picker = None;
         if let Some(plan) = self.document.add_plan_of(level, kind, word) {
+            self.view_made(&plan);
             self.open_plan(&plan);
         }
     }

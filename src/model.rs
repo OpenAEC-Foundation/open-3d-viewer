@@ -251,6 +251,13 @@ pub struct ProjectData {
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
+    /// The parts elements are made of, where they are of several materials (a modelled wall's
+    /// layers): the layer of the model, the first index and the index count of the part's
+    /// triangles, and its material in `part_materials`; sorted by layer and first index. A cut
+    /// through such an element is a face per part, each hatched as its material.
+    pub parts: Vec<(usize, u32, u32, u32)>,
+    /// What the parts are made of: each material with how a cut through it is hatched.
+    pub part_materials: Vec<crate::hatching::PartMaterial>,
     /// The earth under the terrain a section cuts (Revit, the settings of the site): the height
     /// down to which it is filled (metres) and the name of the material it is hatched as.
     pub earth: Option<(f32, Option<String>)>,
@@ -327,6 +334,20 @@ impl ProjectData {
         self.joins = drawings.joins;
         self.drawn = drawings.drawn;
         self.drawings = drawings.drawings;
+    }
+}
+
+impl ProjectData {
+    /// The material (in `part_materials`) of the part that triangle `tri` of `layer` draws,
+    /// when the triangle is of a part.
+    pub fn part_at(&self, layer: usize, tri: usize) -> Option<u32> {
+        if self.parts.is_empty() {
+            return None;
+        }
+        let at = (3 * tri) as u32;
+        let k = self.parts.partition_point(|p| (p.0, p.1) <= (layer, at)).checked_sub(1)?;
+        let (of, first, count, material) = self.parts[k];
+        (of == layer && at < first + count).then_some(material)
     }
 }
 

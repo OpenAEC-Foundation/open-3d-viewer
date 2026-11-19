@@ -29,6 +29,8 @@ mod layers;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
 mod docs;
+mod drawing_kinds;
+mod solid_view;
 mod drafts;
 pub mod drawn_props;
 mod edit;
@@ -41,7 +43,20 @@ mod join_marks;
 mod later;
 mod precut;
 mod levels;
+pub mod buildups;
+pub mod codes;
+pub mod drawing_sets;
+pub mod view_templates;
+pub mod house;
+pub mod objects;
+pub mod online;
+pub mod libraries;
 pub mod library;
+pub mod materials;
+pub mod profiles;
+pub mod standards;
+pub mod systems;
+pub mod type_follow;
 mod marks;
 mod gis;
 mod geo;
@@ -70,6 +85,7 @@ mod underlays;
 mod views_in_3d;
 
 pub use docs::{DocsMessage, DocsTab};
+pub use libraries::LibrariesMessage;
 pub use ifc::{IfcTab, IfcView};
 pub use marks::DrawKind;
 #[cfg(test)]
@@ -371,6 +387,35 @@ pub struct App {
     pub ifc: IfcTab,
     /// Docs: the documents of the project folder.
     pub docs: DocsTab,
+    /// Library, the product: the source and the country its page shows.
+    pub libraries: libraries::LibrariesView,
+    /// The project's drawing standard: its kinds of drawing and their settings. The Dutch one
+    /// until it is changed or a project's file brings its own.
+    pub standard: bim_library::drawing::Standard,
+    /// What is picked of the standard on the Library page.
+    pub standard_view: standards::StandardView,
+    /// The build-up edited on the Library page, and the role whose build-ups show.
+    pub buildup_view: buildups::BuildUpView,
+    /// The material edited on the Library page, and what is being typed of it.
+    pub material_view: materials::MaterialView,
+    pub code_view: codes::CodeView,
+    pub object_view: objects::ObjectView,
+    /// The online libraries: the place, its index once fetched, and what was added from it.
+    pub online: online::OnlineView,
+    pub drawing_set_view: drawing_sets::DrawingSetView,
+    pub view_template_view: view_templates::ViewTemplateView,
+    /// The house style the project follows: how its sheets and documents look.
+    pub house: bim_library::house::HouseStyle,
+    pub house_view: house::HouseView,
+    /// The linear type edited on the Library page, the role whose types show and what of the
+    /// steel table shows.
+    pub profile_view: profiles::ProfileView,
+    /// The system type edited on the Library page, the group whose types show and the part of it
+    /// whose fields show.
+    pub system_view: systems::SystemView,
+    /// The elements the kernel refused to make as their type is now, when a type was last
+    /// changed on the Library page, each with why (see `type_follow`).
+    pub follow_refused: Vec<(bim_core::ElementId, bim_core::Refusal)>,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -418,6 +463,11 @@ pub struct App {
     /// elements', false: the view's), and the same for the steps taken back.
     undo_trail: Vec<bool>,
     redo_trail: Vec<bool>,
+    /// The field of a Library editor the message being handled types into, if it does; and the
+    /// one the last step of the history was typed into: typing on in it is the same step (see
+    /// `undo`).
+    step_typing: Option<undo::Typing>,
+    last_typing: Option<undo::Typing>,
     /// The selection box while it is dragged: from, to (viewport pixels).
     pub box_select: Option<(Vec2, Vec2)>,
     /// The right-click menu, open at this viewport point (logical pixels).
@@ -523,6 +573,13 @@ pub enum Message {
     ViewField(ViewField, String),
     /// Enter in a field of the View section: it shows the value in use again.
     ViewFieldDone,
+    /// The kind of drawing picked for the view the right pane shows: a key of the drawing
+    /// standard.
+    ViewKind(String),
+    /// The scale picked for that view in its own tab (1 : this).
+    ViewScale(u32),
+    /// Open the fields of that view's kind of drawing under its own, or close them.
+    ViewKindEdit(bool),
     Navigate(Navigate),
     Cube(CubeEvent),
     /// Show a view saved in the file.
@@ -536,6 +593,24 @@ pub enum Message {
     Library(library::LibraryMessage),
     /// Docs: the documents of the project folder.
     Docs(docs::DocsMessage),
+    /// Library, the product: the source or the country to show.
+    Libraries(libraries::LibrariesMessage),
+    /// The drawing standard on the Library page: picking and setting its kinds and settings.
+    Standard(standards::StandardMessage),
+    /// The build-ups of the project on the Library page: picking and editing one.
+    BuildUp(buildups::BuildUpMessage),
+    /// The materials of the project on the Library page: picking and editing one.
+    Material(materials::MaterialMessage),
+    Code(codes::CodeMessage),
+    Object(objects::ObjectMessage),
+    Online(online::OnlineMessage),
+    DrawingSet(drawing_sets::DrawingSetMessage),
+    ViewTemplate(view_templates::ViewTemplateMessage),
+    House(house::HouseMessage),
+    /// The linear types of the project on the Library page: picking one and editing its profile.
+    Profile(profiles::ProfileMessage),
+    /// The system types of the project on the Library page: picking one and editing its parts.
+    SystemType(systems::SystemMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1028,6 +1103,21 @@ impl Default for App {
             schedule_scroll: (0.0, 0.0),
             ifc: IfcTab::default(),
             docs: DocsTab::default(),
+            libraries: libraries::LibrariesView::default(),
+            standard: bim_library::drawing::Standard::netherlands(),
+            standard_view: standards::StandardView::default(),
+            buildup_view: buildups::BuildUpView::default(),
+            material_view: materials::MaterialView::default(),
+            code_view: codes::CodeView::default(),
+            object_view: objects::ObjectView::default(),
+            online: online::OnlineView::default(),
+            drawing_set_view: drawing_sets::DrawingSetView::default(),
+            view_template_view: view_templates::ViewTemplateView::default(),
+            house: bim_library::house::HouseStyle::starter(),
+            house_view: house::HouseView::default(),
+            profile_view: profiles::ProfileView::default(),
+            system_view: systems::SystemView::default(),
+            follow_refused: Vec::new(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -1050,6 +1140,8 @@ impl Default for App {
             history: History::new(),
             undo_trail: Vec::new(),
             redo_trail: Vec::new(),
+            step_typing: None,
+            last_typing: None,
             box_select: None,
             context_menu: None,
             explode_bounds: None,
@@ -1846,6 +1938,9 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let before = changes_visibility(&message).then(|| self.view_state());
         let shown = before.is_some() || matches!(message, Message::Undo | Message::Redo);
+        // typing in one field of a Library editor is one step to take back
+        self.step_typing = self.typing_of(&message);
+        self.look_at_setup();
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);
@@ -2196,6 +2291,9 @@ impl App {
             Message::LayersQuery(q) => self.layers_query = q,
             Message::ViewField(field, typed) => self.type_view_field(field, typed),
             Message::ViewFieldDone => self.view_typing = None,
+            Message::ViewKind(key) => self.set_view_kind(&key),
+            Message::ViewScale(scale) => self.set_view_scale(scale),
+            Message::ViewKindEdit(open) => self.edit_view_kind(open),
             Message::Navigate(n) => {
                 if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
                     self.context_menu = None;
@@ -2298,6 +2396,18 @@ impl App {
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
             Message::Docs(message) => return self.docs_update(message),
+            Message::Libraries(message) => return self.libraries_update(message),
+            Message::Standard(message) => return self.standard_update(message),
+            Message::BuildUp(message) => return self.buildup_update(message),
+            Message::Material(message) => return self.material_update(message),
+            Message::Code(message) => return self.code_update(message),
+            Message::Object(message) => self.object_update(message),
+            Message::Online(message) => return self.online_update(message),
+            Message::DrawingSet(message) => self.drawing_set_update(message),
+            Message::ViewTemplate(message) => self.view_template_update(message),
+            Message::House(message) => return self.house_update(message),
+            Message::Profile(message) => return self.profile_update(message),
+            Message::SystemType(message) => return self.system_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -5096,10 +5206,16 @@ impl Palette {
 /// window and `--screenshot`.
 #[cfg(test)]
 pub(crate) fn test_ui(app: &App, size: iced::Size) -> iced_test::Simulator<'_, Message> {
+    test_ui_of(size, app.view())
+}
+
+/// A part of the interface at `size` in a test, drawn on the CPU as [`test_ui`] is.
+#[cfg(test)]
+pub(crate) fn test_ui_of<'a>(size: iced::Size, part: Element<'a, Message>) -> iced_test::Simulator<'a, Message> {
     static CPU: std::sync::Once = std::sync::Once::new();
     // iced_test reads the variable for each simulator; all of them are made here
     CPU.call_once(|| std::env::set_var("ICED_TEST_BACKEND", "tiny-skia"));
-    iced_test::Simulator::with_size(iced::Settings::default(), size, app.view())
+    iced_test::Simulator::with_size(iced::Settings::default(), size, part)
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
-//!                  [--language en|nl] [--product viewer|modeller|validator|docs|gis|pointcloud] [--no-remote]
+//!                  [--language en|nl] [--product viewer|modeller|validator|docs|gis|library|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,supports,loads,next-set,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
@@ -126,7 +126,7 @@ fn parse_args() -> Result<Args, String> {
             "--language" => {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
-            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|docs|gis|pointcloud")?),
+            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|docs|gis|library|pointcloud")?),
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|extensions|feedback|cloud")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),

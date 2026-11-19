@@ -114,7 +114,7 @@ enum RibbonPart {
 /// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1410.0;
 /// The products to come, named on the switch but not to be chosen yet.
-const SOON: [&str; 2] = ["FM", "Environment"];
+const SOON: [&str; 2] = ["FM", "Requirements"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -1451,6 +1451,11 @@ impl Studio {
         for &product in &self.products {
             list.push(Command::new(product.command(), product.full_name(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
+        // Library, the product: the source whose library its page shows
+        for source in crate::app::libraries::Source::ALL {
+            let show = go(Message::Libraries(crate::app::LibrariesMessage::Source(source)));
+            list.push(Command::new(source.command(), source.label(l), show).icon(small(source.icon()), large(source.icon())).mode(app.libraries.source == source).detail(source.purpose(l)));
+        }
         // the Validator's commands: issues, checks, clashes and the rule set
         // Pointcloud: how the points show, the meshes, exports and drawing made of a cloud (on the
         // desktop) and the card with what the file holds and how the jobs are done
@@ -2426,6 +2431,8 @@ impl Studio {
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
             ],
+            // the four sources of library content
+            RibbonPage::Library => vec![(l.text("Bibliotheek", "Library"), vec![large("library.general"), large("library.country"), large("library.company"), large("library.project")])],
             // the project folder, the picked document, and its link with the model
             RibbonPage::Docs => vec![
                 (l.text("Projectmap", "Project folder"), vec![large("docs.folder"), smalls(&["docs.refresh", "docs.leave"])]),
@@ -2603,11 +2610,15 @@ impl Studio {
         let l = self.l();
         let p = palette(look);
         let app = &self.app;
-        let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
+        let library = self.product() == Product::Library;
+        let workspace: Element<'_, Msg> = if library {
+            // Library: its page is the workspace, with or without a model
+            app.libraries_page(p, l).map(Msg::App)
+        } else if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer | Product::Docs | Product::Gis => (
+                Product::Viewer | Product::Docs | Product::Gis | Product::Library => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2667,7 +2678,8 @@ impl Studio {
         }
         let doc_tabs = app.doc_tabs();
         // Docs opens without a model too; in its own product it then needs no tab
-        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 {
+        // (the Library page is no view of the model: no tabs of views over it)
+        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 && !library {
             let tabs: Vec<DocumentTab<'_>> = doc_tabs
                 .iter()
                 .map(|&t| if t == DocTab::Model { DocumentTab::pinned(model_name) } else { DocumentTab::new(app.tab_title(t), false) })
@@ -2731,6 +2743,8 @@ impl Studio {
             }
             // Docs: the folders of the project folder
             Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
+            // Library: the sources of library content, and the countries
+            Product::Library => (l.text("Bibliotheken", "Libraries"), Self::pane(self.app.libraries_pane(palette(look), l))),
             Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Gis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
@@ -2743,6 +2757,11 @@ impl Studio {
         let p = palette(look);
         // the GIS and Geo tabs belong to GIC
         let geo = self.product() == Product::Gis;
+        // Library: the editor of the picked build-up, or the fields of what is picked of the
+        // drawing standard
+        if self.product() == Product::Library {
+            return Self::pane(app.library_side(p, l));
+        }
         if self.product() != Product::Modeller {
             return Self::pane(app.properties_body_for(p, l, geo));
         }
@@ -3434,6 +3453,150 @@ mod tests {
         }
     }
 
+    /// A floor plan of the demo building in its tab, with the fields of its kind of drawing open
+    /// in the View section of the right pane: target/shell-renders/view-kind.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_view_kind_render() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Viewer);
+        let level = std::sync::Arc::<str>::from(studio.app.document.levels()[0].path.as_str());
+        for message in [Message::NewPlan(level), Message::ViewKindEdit(true)] {
+            let _ = studio.update(Msg::App(message));
+        }
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("view-kind.png")).expect("snapshot");
+    }
+
+    /// The Library product with each of its sources: target/shell-renders/library-product-*.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_library_product_renders() {
+        use crate::app::libraries::{Country, Source};
+        use crate::app::LibrariesMessage;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let shots = [
+            ("general", LibrariesMessage::Source(Source::General)),
+            ("country-nl", LibrariesMessage::Country(Country::Netherlands)),
+            ("country-de", LibrariesMessage::Country(Country::Germany)),
+            ("company", LibrariesMessage::Source(Source::Company)),
+            ("project", LibrariesMessage::Source(Source::Project)),
+            ("search", LibrariesMessage::Search("beton 2".into())),
+            ("buildup", LibrariesMessage::Source(Source::Project)),
+            ("profile", LibrariesMessage::Source(Source::Project)),
+            ("material", LibrariesMessage::Source(Source::Project)),
+            ("system", LibrariesMessage::Source(Source::Project)),
+            ("system-layer", LibrariesMessage::Source(Source::Project)),
+            ("follow", LibrariesMessage::Source(Source::Project)),
+            ("search-steel", LibrariesMessage::Search("hea 2".into())),
+            ("hatches-nen47", LibrariesMessage::Country(Country::Netherlands)),
+            ("hatches-openaec", LibrariesMessage::Source(Source::Project)),
+            ("ifcx", LibrariesMessage::Source(Source::Project)),
+            ("ifcx-hatch", LibrariesMessage::Source(Source::General)),
+            ("search-hatch", LibrariesMessage::Search("isolatie".into())),
+            ("3d-system", LibrariesMessage::Source(Source::Project)),
+            ("3d-system-apart", LibrariesMessage::Source(Source::Project)),
+            ("3d-wall", LibrariesMessage::Source(Source::Project)),
+            ("3d-steel", LibrariesMessage::Source(Source::General)),
+        ];
+        for (name, show) in shots {
+            let mut studio = Studio::new(App::default());
+            studio.prefs.language = Language::Dutch;
+            studio.set_product(Product::Library);
+            let _ = studio.update(Msg::App(Message::Libraries(show)));
+            // the Netherlands with a kind of drawing picked, so the right pane shows its fields
+            // the project with its first wall picked, so the right pane is its editor
+            if name == "buildup" {
+                let id = studio.app.library.buildups[0].id.clone();
+                let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+            }
+            // the project with a column of the steel table picked, in its profile editor, and
+            // the series it is of shown under the types
+            if name == "profile" {
+                use crate::app::profiles::ProfileMessage;
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(crate::app::libraries::Category::Steel))));
+                for message in [ProfileMessage::Add, ProfileMessage::Steel("HEB 300".into()), ProfileMessage::Series(Some("HEB"))] {
+                    let _ = studio.update(Msg::App(Message::Profile(message)));
+                }
+            }
+            // the project with a material picked, in its editor
+            if name == "material" {
+                let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
+            }
+            // the project with a timber frame picked, in its editor: the face open, or a layer
+            if name.starts_with("system") {
+                use crate::app::systems::{Part, SystemMessage};
+                let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Pick("system.timber-frame-140".into()))));
+                if name == "system-layer" {
+                    let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Part(Part::Layer(3)))));
+                }
+            }
+            // the project with a model: a wall of the demo building given the first build-up,
+            // and the build-up then made thicker without its wall (as in a file whose elements
+            // are older than their type), so the pane says the wall is not as its type is now
+            if name == "follow" {
+                use crate::app::buildups::BuildUpMessage;
+                studio.app.add_demo_building();
+                let wall = studio.app.modeller.model.iter().find(|e| e.class() == "IfcWall").map(|e| e.id).expect("a wall of the demo");
+                let id = studio.app.library.buildups[0].id.clone();
+                studio.app.select_modelled(wall);
+                let _ = studio.update(Msg::App(Message::Library(crate::app::library::LibraryMessage::Assign(id.clone()))));
+                crate::app::buildups::change(&mut studio.app.library, &id, |b| b.layers[0].thickness = 0.12).expect("a thicker layer");
+                let _ = studio.update(Msg::App(Message::BuildUp(BuildUpMessage::Pick(id))));
+            }
+            // the hatches: the signs of NEN 47 with one looked at, the suite's own with a species
+            // of wood looked at
+            if name.starts_with("hatches") {
+                use crate::app::libraries::{Category, Item};
+                let (set, key) = if name == "hatches-nen47" { (bim_library::HatchSet::Nen47, "nen47-25") } else { (bim_library::HatchSet::OpenAec, "openaec-12-larch") };
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(set)))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch(key.into())))));
+            }
+            // the IFCX tab: the project's materials with one picked, and the general library's
+            // hatches with one looked at
+            if name == "ifcx" {
+                let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(crate::app::libraries::Page::Code))));
+            }
+            if name == "ifcx-hatch" {
+                use crate::app::libraries::{Category, Item};
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(bim_library::HatchSet::OpenAec)))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch("openaec-17-pir".into())))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(crate::app::libraries::Page::Code))));
+            }
+            // the 3D tab: a timber frame of the project as it lies and pulled apart, a wall of the
+            // project pulled apart, and a profile of the steel table
+            if name.starts_with("3d") {
+                use crate::app::libraries::{Item, Page};
+                match name {
+                    "3d-wall" => {
+                        let id = studio.app.library.buildups.iter().find(|b| b.layers.len() >= 4).map(|b| b.id.clone()).expect("a layered wall");
+                        let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+                    }
+                    "3d-steel" => {
+                        let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Steel("HEB 300".into())))));
+                    }
+                    _ => {
+                        let _ = studio.update(Msg::App(Message::SystemType(crate::app::systems::SystemMessage::Pick("system.timber-frame-140".into()))));
+                    }
+                }
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(Page::Solid))));
+                if name != "3d-system" {
+                    let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Apart(true))));
+                }
+            }
+            if name == "country-nl" {
+                let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));
+            }
+            studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-product-{name}.png"))).expect("snapshot");
+        }
+    }
+
     #[test]
     fn every_setting_has_a_name_in_every_language() {
         for i in 0..LANGUAGES {
@@ -3637,7 +3800,7 @@ mod tests {
         // it is on the switch once: a product there is, is no product to come; it stands where it
         // was announced, after the Modeller (GIS came after it)
         assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
-        assert_eq!(Product::ALL.last(), Some(&Product::Gis));
+        assert_eq!(Product::ALL[Product::Modeller.index() + 1], Product::Docs);
         // no project folder yet: the page asks for one
         assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
         // with one: its folders are the left pane, its files the page

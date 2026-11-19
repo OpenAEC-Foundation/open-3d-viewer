@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<robot name="demo_arm">
+  <material name="steel"><color rgba="0.62 0.64 0.68 1"/></material>
+  <material name="orange"><color rgba="0.95 0.45 0.1 1"/></material>
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.05"/><geometry><cylinder radius="0.2" length="0.1"/></geometry><material name="steel"/></visual>
+  </link>
+  <link name="shoulder_link">
+    <visual><origin xyz="0 0 0.1"/><geometry><box size="0.16 0.16 0.2"/></geometry><material name="orange"/></visual>
+  </link>
+  <link name="upper_arm_link">
+    <visual><origin xyz="0 0 0.3"/><geometry><cylinder radius="0.06" length="0.6"/></geometry><material name="steel"/></visual>
+    <visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.08"/></geometry><material name="orange"/></visual>
+  </link>
+  <link name="forearm_link">
+    <visual><origin xyz="0.25 0 0" rpy="0 1.5707963 0"/><geometry><capsule radius="0.045" length="0.4"/></geometry><material name="steel"/></visual>
+  </link>
+  <link name="tool_link">
+    <visual><origin xyz="0 0 0" rpy="0 1.5707963 0"/><geometry><mesh filename="package://arm_description/meshes/gripper.stl" scale="0.001 0.001 0.001"/></geometry><material name="orange"/></visual>
+  </link>
+  <joint name="base_turn" type="continuous"><parent link="base_link"/><child link="shoulder_link"/><origin xyz="0 0 0.1"/><axis xyz="0 0 1"/></joint>
+  <joint name="shoulder" type="revolute"><parent link="shoulder_link"/><child link="upper_arm_link"/><origin xyz="0 0 0.2"/><axis xyz="0 1 0"/><limit lower="-2" upper="2" effort="50" velocity="1"/></joint>
+  <joint name="elbow" type="revolute"><parent link="upper_arm_link"/><child link="forearm_link"/><origin xyz="0 0 0.6"/><axis xyz="0 1 0"/><limit lower="-2" upper="2" effort="30" velocity="1"/></joint>
+  <joint name="wrist" type="fixed"><parent link="forearm_link"/><child link="tool_link"/><origin xyz="0.5 0 0"/></joint>
+</robot>

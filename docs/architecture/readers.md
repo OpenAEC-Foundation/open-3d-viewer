@@ -93,6 +93,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | COPC (`.copc.laz`) | in `las.rs` | the `las` crate's COPC reader (MIT) | Adapter: the app picks which octree levels to read for its point limit, the crate reads them. Added 2026-11-18. |
 | 3MF (`.3mf`) | 30 | `3mf-dll` (`threemf-model`, `threemf-read`) | Moved; the adapter only maps. |
 | ASAM OpenDRIVE (`.xodr`) | 48 | `crates/xodr-read`, on the published `opendrive` (MIT): it follows the reference lines and lays the lanes beside them | A crate in the suite for now, by the owner's choice: it uses nothing of the app and returns its own plain `Surface`, so it moves one to one into a repository of its own (`opendrive-dll`) later. |
+| URDF (`.urdf`) | 112 | `crates/urdf-read`, on the published `urdf-rs` (Apache-2.0): it places the links by their joints, meshes the solids and finds the mesh files | A crate in the suite for now, by the owner's choice: it uses nothing of the app, so it moves one to one into a repository of its own (`urdf-dll`) later. The adapter reads the mesh files with the app's own readers. |
 
 ## Moved so far
 

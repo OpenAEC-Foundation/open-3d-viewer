@@ -76,6 +76,7 @@ mod blend;
 mod fcstd;
 mod dicom;
 mod xodr;
+mod urdf;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -299,7 +300,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &fem::INP, &fem::BDF, &fem::MSH, &fem::S2K, &fem::SAF, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader, &xodr::XodrLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &fem::INP, &fem::BDF, &fem::MSH, &fem::S2K, &fem::SAF, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader, &xodr::XodrLoader, &urdf::UrdfLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -631,6 +632,29 @@ mod tests {
         // placed by the header offset in the Dutch grid, which the file properties name
         assert!(model.project.info.iter().any(|(k, v)| k == "Coordinate reference system" && v.contains("+proj=sterea")));
         assert!(model.project.info.iter().any(|(k, v)| k == "OpenDRIVE world origin" && v == "155000, 463000, 0"));
+    }
+
+    #[test]
+    fn loads_a_urdf_robot_with_its_mesh_file() {
+        let model = load(&repo_file("test-models/urdf-arm/arm_description/urdf/arm.urdf")).expect("URDF file");
+        assert_eq!(model.format, "URDF");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["base_link", "shoulder_link", "upper_arm_link", "upper_arm_link", "forearm_link", "tool_link"]);
+        // the gripper (an STL in millimetres) is read from the package, scaled and placed at the
+        // wrist, 0.9 m up and 0.5 m out, its fingers pointing on along X in the robot's orange
+        let gripper = model.layers.last().unwrap();
+        assert_eq!(gripper.color, [0.95, 0.45, 0.1]);
+        let xs = gripper.positions.chunks_exact(3).map(|p| p[0]);
+        let (lo, hi) = xs.fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        assert!((lo - 0.49).abs() < 1e-4 && (hi - 0.56).abs() < 1e-4, "{lo} {hi}");
+        assert!(gripper.positions.chunks_exact(3).all(|p| (p[2] - 0.9).abs() < 0.013));
+        assert!(model.props.values().any(|p| p.contains("\"Joints\":\"base_turn › shoulder › elbow › wrist\"")));
+        // in the browser there is no package to find the mesh in: the rest still opens
+        let data = std::fs::read(repo_file("test-models/urdf-arm/arm_description/urdf/arm.urdf")).unwrap();
+        let source = Source::Bytes { name: "arm.urdf".into(), data: Arc::new(data) };
+        let bytes = load_with(&source, &Progress::default()).expect("URDF bytes");
+        assert_eq!(bytes.layers.len(), 5);
+        assert!(bytes.project.info.iter().any(|(k, v)| k == "Mesh files not read" && v.contains("gripper.stl")));
     }
 
     #[test]

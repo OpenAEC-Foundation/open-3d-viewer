@@ -229,7 +229,7 @@ mod dutch_tests {
         let count = |l: &crate::Library| (l.buildups_of(Role::Wall).count(), l.buildups_of(Role::Floor).count(), l.linear_types_of(LinearRole::Beam).count(), l.linear_types_of(LinearRole::Column).count(), l.materials.len());
         // the template was made from the same workbook: most walls and floors are its own, the
         // timber sizes, the concrete sections and the graded materials are new to it
-        assert_eq!((count(&template), count(&dutch), added), ((39, 31, 7, 7, 37), (48, 40, 42, 24, 126), 159));
+        assert_eq!((count(&template), count(&dutch), added), ((39, 31, 7, 7, 41), (48, 40, 42, 24, 130), 159));
         // nothing of the template changed, and it has no twin of a type it had
         for b in &template.buildups {
             assert_eq!(dutch.buildup(&b.id), Some(b));

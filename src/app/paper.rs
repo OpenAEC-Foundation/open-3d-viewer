@@ -983,7 +983,9 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             for (k, note) in placed.notes.iter().enumerate() {
                 let picked = self.pick == Some(SheetPick::Note(i, k));
-                super::marks::draw_note_in(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
+                let at = fit.point(self.to_paper(i, note.at));
+                let at = if note.level { super::marks::draw_level_mark(&mut frame, at, Self::note_size(&fit), if picked { p.accent } else { ink }) } else { at };
+                super::marks::draw_note_in(&mut frame, at, &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
                 if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
                 }

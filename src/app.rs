@@ -344,6 +344,8 @@ pub struct App {
     pub dragging_view: Option<Arc<str>>,
     /// The text tool is on: a click on a view (its tab, or placed on a sheet) puts a text there.
     pub note_tool: bool,
+    /// The text tool places level marks (the Level mark tool): only with `note_tool` on.
+    pub level_tool: bool,
     /// The drawing tool that is on: lines, rectangles or circles on the view shown.
     pub draw_tool: Option<marks::DrawKind>,
     /// The wording of the next text placed, or of the picked text.
@@ -590,6 +592,9 @@ pub enum Message {
     LetGoView,
     /// Switch the text tool on or off.
     NoteTool(bool),
+    /// The Level mark tool: a click in a section or an elevation marks the height there.
+    LevelTool(bool),
+    AddLevelMark(Arc<str>, [f64; 2]),
     /// The wording typed for the next text, or for the picked one.
     NoteText(String),
     /// Put a text on a view: the view, the point of its drawing, the wording.
@@ -1007,6 +1012,7 @@ impl Default for App {
             cut_edit: None,
             dragging_view: None,
             note_tool: false,
+            level_tool: false,
             draw_tool: None,
             note_text: String::new(),
             mark_pick: None,
@@ -2349,7 +2355,15 @@ impl App {
                 self.pick_on_sheet(None);
                 self.mark_pick = None;
             }
+            Message::LevelTool(on) => {
+                let _ = self.update(Message::NoteTool(on));
+                self.level_tool = on;
+            }
+            Message::AddLevelMark(view, at) => {
+                self.document.add_level_mark(&view, at);
+            }
             Message::NoteTool(on) => {
+                self.level_tool = false;
                 self.note_tool = on;
                 if on {
                     self.section_tool = false;

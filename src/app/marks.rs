@@ -200,6 +200,7 @@ impl App {
             crop,
             measuring: self.dimension_tool,
             noting: self.note_tool.then(|| self.note_to_place(l)),
+            levelling: self.note_tool && self.level_tool && !is_plan,
             cutting: self.section_tool && is_plan,
             sections: if is_plan { self.document.sections().iter().map(|s| (s.mark(), s.from, s.to)).collect() } else { Vec::new() },
             word: l.text("Doorsnede", "Section"),
@@ -238,6 +239,12 @@ impl App {
             )));
         } else if self.annotates && self.draw_tool.is_some() {
             rows = rows.push(hint(l.text("Klik twee punten; een lijn gaat door vanaf zijn eind. Esc stopt.", "Click two points; a line goes on from its end. Esc stops.")));
+        } else if self.annotates && self.note_tool && self.level_tool {
+            rows = rows.push(hint(if is_plan {
+                l.text("Een peilmaat staat in een doorsnede of een aanzicht: open er een.", "A level mark stands in a section or an elevation: open one.")
+            } else {
+                l.text("Klik het punt waarvan je de hoogte wilt tonen. Esc stopt.", "Click the point whose height it shows. Esc stops.")
+            }));
         } else if self.annotates && self.note_tool {
             rows = rows.push(text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
             rows = rows.push(hint(l.text("Klik waar de tekst komt.", "Click where the text goes.")));
@@ -494,6 +501,8 @@ pub(super) struct ViewMarks {
     measuring: bool,
     /// The text tool is on, with the text a click places.
     noting: Option<String>,
+    /// The text tool places level marks: a click marks the height there.
+    levelling: bool,
     /// The section tool is on (a floor plan): two clicks draw a section.
     cutting: bool,
     /// The sections, drawn on a floor plan: name, line (plan).
@@ -686,6 +695,29 @@ fn near(a: Point, b: Point, pointer: Point) -> f32 {
     (a + ab * t).distance(pointer)
 }
 
+impl App {
+    /// Clicks on the drawing shown, one after the other, as the mouse does on its layer of marks:
+    /// with the section, dimension, text or a drawing tool on they place what that tool places
+    /// (two clicks a section or a dimension), else they pick a mark. `points` are viewport pixels.
+    /// Returns what each click that did something sent; none when no drawing is shown.
+    pub(crate) fn click_marks(&mut self, points: &[(f32, f32)]) -> Option<Vec<String>> {
+        let mut state = MarksState::default();
+        let mut sent = Vec::new();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(self.viewport_size.0.max(1.0), self.viewport_size.1.max(1.0)));
+        let event = iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        for &(x, y) in points {
+            // the layer anew for every click: what the click before made is in it
+            let marks = self.marks_layer(self.theme.palette(), crate::app::standalone_language())?;
+            let action = canvas::Program::update(&marks, &mut state, &event, bounds, mouse::Cursor::Available(Point::new(x, y)));
+            if let Some(message) = action.and_then(|a| a.into_inner().0) {
+                sent.push(format!("{message:?}"));
+                let _ = self.update(message);
+            }
+        }
+        Some(sent)
+    }
+}
+
 impl canvas::Program<Message> for ViewMarks {
     type State = MarksState;
 
@@ -705,7 +737,7 @@ impl canvas::Program<Message> for ViewMarks {
                     return Some(canvas::Action::publish(Message::MoveNote(self.view.clone(), k, [q[0] + grip[0], q[1] + grip[1]])).and_capture());
                 }
                 if self.busy() {
-                    state.aim = pointer.and_then(|p| if self.drawing.is_some() { self.draw_snap(&screen, p) } else if self.two_clicks() { self.snap(&screen, p) } else { self.at(&screen, p) });
+                    state.aim = pointer.and_then(|p| if self.drawing.is_some() { self.draw_snap(&screen, p) } else if self.two_clicks() || self.levelling { self.snap(&screen, p) } else { self.at(&screen, p) });
                     return Some(canvas::Action::request_redraw());
                 }
                 let hover = pointer.and_then(|p| self.mark_at(&screen, p)).is_some();
@@ -740,6 +772,11 @@ impl canvas::Program<Message> for ViewMarks {
                         Some(from) if self.cutting => Some(canvas::Action::publish(Message::NewSection(from, q, self.word)).and_capture()),
                         Some(from) => Some(canvas::Action::publish(Message::AddDimension(self.view.clone(), from, q)).and_capture()),
                     };
+                }
+                if self.levelling {
+                    // on the end of a line when near one, so it says that corner's height exactly
+                    let q = self.snap(&screen, p)?;
+                    return Some(canvas::Action::publish(Message::AddLevelMark(self.view.clone(), q)).and_capture());
                 }
                 if let Some(wording) = &self.noting {
                     let q = self.at(&screen, p)?;
@@ -916,7 +953,9 @@ impl canvas::Program<Message> for ViewMarks {
         for (k, note) in self.notes.iter().enumerate() {
             let Some(at) = self.px(&screen, note.at) else { continue };
             let picked = self.pick == Some(MarkPick::Note(k));
-            draw_note_in(&mut frame, at, &note.text, self.note_size(&screen, note.at, note.size), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
+            let size = self.note_size(&screen, note.at, note.size);
+            let at = if note.level { draw_level_mark(&mut frame, at, size, if picked { p.accent } else { ink }) } else { at };
+            draw_note_in(&mut frame, at, &note.text, size, if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
             if picked {
                 if let Some(b) = self.note_box(&screen, k) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
@@ -927,6 +966,11 @@ impl canvas::Program<Message> for ViewMarks {
         if let Some(q) = state.aim.and_then(|q| Some((q, self.px(&screen, q)?))) {
             let (aim, c) = q;
             match (&self.noting, state.first) {
+                (Some(_), _) if self.levelling => {
+                    let (size, ink) = (self.note_size(&screen, aim, NOTE_SIZE), Color { a: 0.6, ..p.accent });
+                    let at = draw_level_mark(&mut frame, c, size, ink);
+                    draw_note(&mut frame, at, &crate::document::level_text(aim[1]), size, ink, Align::Left, 0.0);
+                }
                 (Some(wording), _) => draw_note(&mut frame, c, wording, self.note_size(&screen, aim, NOTE_SIZE), Color { a: 0.6, ..p.accent }, Align::Left, 0.0),
                 (None, Some(from)) if self.cutting => self.draw_section(&mut frame, &screen, from, aim, String::new(), p.accent),
                 (None, Some(from)) => {
@@ -1082,6 +1126,22 @@ pub(super) fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, leve
         frame.stroke(&circle, Stroke::default().with_color(ink).with_width(1.0));
         label(frame, centre, alignment::Horizontal::Center);
     }
+}
+
+/// The triangle of a level mark, its point down on `at`, as high as its text (`size`), with a short
+/// line at that height; returns where its text stands, beside it.
+pub(super) fn draw_level_mark(frame: &mut Frame, at: Point, size: f32, color: Color) -> Point {
+    let h = size * 0.9;
+    let mark = Path::new(|b| {
+        b.move_to(at);
+        b.line_to(Point::new(at.x - h * 0.5, at.y - h));
+        b.line_to(Point::new(at.x + h * 0.5, at.y - h));
+        b.close();
+    });
+    let stroke = Stroke::default().with_color(color).with_width(1.0);
+    frame.stroke(&mark, stroke);
+    frame.stroke(&Path::line(Point::new(at.x - h, at.y), Point::new(at.x + h * 3.5, at.y)), stroke);
+    Point::new(at.x + h * 0.8, at.y - 1.0)
 }
 
 /// A text standing on a screen point: its lower left, the middle of its foot or its lower right,
@@ -1258,6 +1318,23 @@ mod tests {
         let _ = app.update(Message::DeletePicked);
         assert!(app.document.plan(&plan).unwrap().dimensions.is_empty());
         assert_eq!(app.mark_pick, None);
+    }
+
+    #[test]
+    fn the_level_tool_marks_the_height_of_a_click_in_a_section_and_nothing_on_a_plan() {
+        let (mut app, plan) = plan_shown();
+        let _ = app.update(Message::LevelTool(true));
+        assert!(app.note_tool && app.level_tool);
+        assert!(!layer(&app).levelling, "a floor plan has no heights");
+        let section: Arc<str> = app.document.add_section("Section A", [0.0, 0.0], [8.0, 0.0], 6.0).unwrap().into();
+        let _ = app.update(Message::AddLevelMark(section.clone(), [1.0, 2.7]));
+        let _ = app.update(Message::AddLevelMark(plan.clone(), [1.0, 2.7]));
+        assert_eq!(app.document.view_notes(&section).unwrap().iter().map(|n| (n.text.as_str(), n.level)).collect::<Vec<_>>(), [("+2.700", true)]);
+        assert!(app.document.view_notes(&plan).unwrap().is_empty());
+        // the text tool takes over: texts again
+        let _ = app.update(Message::NoteTool(true));
+        assert!(app.note_tool && !app.level_tool);
+        let _ = app.update(Message::OpenPlan(plan));
     }
 
     #[test]

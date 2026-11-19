@@ -405,7 +405,7 @@ impl App {
             let mut notes = Vec::new();
             for s in spaces.iter().filter(|s| on(&s.level)) {
                 let middle = s.outline.iter().sum::<DVec2>() / s.outline.len() as f64;
-                let note = |text: String, down: f64| Note { at: [middle.x, middle.y - down], text, size: NOTE_HEIGHT, align: Align::Center, angle: 0.0, face: crate::typeface::Face::default() };
+                let note = |text: String, down: f64| Note { at: [middle.x, middle.y - down], text, size: NOTE_HEIGHT, align: Align::Center, angle: 0.0, face: crate::typeface::Face::default(), level: false };
                 notes.push(note(s.name.clone(), 0.0));
                 notes.push(note(format!("{:.2} m²", s.area), line));
             }

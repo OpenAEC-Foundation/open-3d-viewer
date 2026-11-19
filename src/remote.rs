@@ -456,6 +456,14 @@ impl App {
                 let _ = self.update(Message::Navigate(crate::viewport::Navigate::Cursor3d { x: vx, y: vy, width: w, height: h }));
                 Ok(json!({ "cursor": self.modeller.cursor3d.at.to_array() }))
             }
+            "click_drawing" => {
+                let points: Vec<(f32, f32)> = a.get("points").and_then(Value::as_array).map(|l| l.iter().filter_map(Self::screen_xy).map(|(x, y)| self.to_viewport(x, y)).collect()).unwrap_or_default();
+                if points.is_empty() {
+                    return Err("points: [[x, y], ...] is required".into());
+                }
+                let sent = self.click_marks(&points).ok_or("no drawing is shown: open a floor plan, a section or an elevation first (open_drawing)")?;
+                Ok(json!({ "clicks": points.len(), "messages": sent }))
+            }
             "drag_handle" => self.remote_drag_handle(a),
             "open_drawing" => {
                 // the project's own drawings: its floor plans, sections and elevations, and sheets
@@ -1355,7 +1363,9 @@ impl App {
         let (w, h) = self.viewport_size;
         // a grid line drawn there (its bubble, or within 5 px of its line where it is seen), as a
         // click takes it first (unless it measures or places a plane)
-        let clicks = self.measure.tool.is_none() && !self.plane_picking;
+        // a tool of the Modeller takes the click before a grid line does (see `App::pick`)
+        let tool = self.modeller.transform.is_some() || self.modeller.grid_tool || self.modeller.tool.is_some() || self.modeller.edit.is_some();
+        let clicks = self.measure.tool.is_none() && !self.plane_picking && !(tool && flag(a, "select").unwrap_or(false));
         let grid = self.grid_under(vx, vy, w, h, hit.as_ref().map(|h| h.point)).filter(|_| clicks);
         if let (Some(g), Some(model)) = (grid, self.model.clone()) {
             if flag(a, "select").unwrap_or(false) {

@@ -1415,7 +1415,13 @@ impl Studio {
         list.push(
             Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
                 .icon(small("draw.text"), large("draw.text"))
-                .toggle(app.note_tool && annotatable)
+                .toggle(app.note_tool && !app.level_tool && annotatable)
+                .enabled(annotatable),
+        );
+        list.push(
+            Command::new("annotate.level", l.text("Peilmaat", "Level mark"), go(Message::LevelTool(!(app.note_tool && app.level_tool))))
+                .icon(small("resource.level"), large("resource.level"))
+                .toggle(app.note_tool && app.level_tool && annotatable)
                 .enabled(annotatable),
         );
         list.push(
@@ -2410,7 +2416,7 @@ impl Studio {
             // in the floor plan, section or sheet shown
             RibbonPage::Annotate => vec![
                 (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
-                (l.text("Tekst", "Text"), vec![large("annotate.text")]),
+                (l.text("Tekst", "Text"), vec![large("annotate.text"), large("annotate.level")]),
                 // lines that are no model, drawn on the view shown
                 (l.text("Tekenen", "Draw"), vec![large("draw.line"), large("draw.rectangle"), large("draw.circle")]),
             ],

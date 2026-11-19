@@ -23,6 +23,8 @@
 
 pub mod buildup;
 pub mod drawing;
+pub mod dutch;
+pub mod grade;
 pub mod hatch;
 pub mod ifcx;
 pub mod inb;

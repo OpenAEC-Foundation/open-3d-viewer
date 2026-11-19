@@ -159,6 +159,9 @@ pub struct Material {
     /// kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign: Option<String>,
+    /// Its grade or strength class, as its standard writes it ("C24", "S355", "C20/25").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<String>,
 }
 
 impl Material {
@@ -168,12 +171,17 @@ impl Material {
 
     /// A material drawn by its hatch kind.
     pub fn new(key: &str, names: Names, hatch: HatchKind, colour: [u8; 3]) -> Self {
-        Self { key: key.into(), names, hatch, colour, sign: None }
+        Self { key: key.into(), names, hatch, colour, sign: None, grade: None }
     }
 
     /// Its own hatch of the hatch catalogue, when it names one the catalogue has.
     pub fn catalogue_hatch(&self) -> Option<&'static crate::hatch::Hatch> {
         self.sign.as_deref().and_then(crate::hatch::hatch)
+    }
+
+    /// The timber strength class its grade names, when it names one ([`crate::grade`]).
+    pub fn timber_grade(&self) -> Option<&'static crate::grade::TimberGrade> {
+        self.grade.as_deref().and_then(crate::grade::timber_grade)
     }
 
     /// Its colour as fractions of one, for IFCX and the renderer.

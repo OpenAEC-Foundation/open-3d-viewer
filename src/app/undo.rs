@@ -24,6 +24,8 @@ pub(super) enum Typing {
     MaterialName(String, Lang),
     /// The colour of a material: typed, or a channel at a time.
     MaterialColour(String),
+    /// The grade typed for a material (its key).
+    MaterialGrade(String),
     /// The name of a code in a language.
     CodeName(String, Lang),
     /// The name typed for a build-up (its id).
@@ -40,6 +42,7 @@ impl App {
         match message {
             Message::Material(MaterialMessage::Named(lang, _)) => Some(Typing::MaterialName(self.material_view.picked.clone()?, *lang)),
             Message::Material(MaterialMessage::Hex(_) | MaterialMessage::Channel(..) | MaterialMessage::Shown) => Some(Typing::MaterialColour(self.material_view.picked.clone()?)),
+            Message::Material(MaterialMessage::Graded(_)) => Some(Typing::MaterialGrade(self.material_view.picked.clone()?)),
             Message::Code(super::codes::CodeMessage::Named(lang, _)) => Some(Typing::CodeName(self.code_view.picked.clone()?, *lang)),
             Message::BuildUp(BuildUpMessage::Named(_)) => Some(Typing::BuildUpName(self.buildup_view.picked.clone()?)),
             Message::Profile(ProfileMessage::Named(_)) => Some(Typing::ProfileName(self.profile_view.picked.clone()?)),

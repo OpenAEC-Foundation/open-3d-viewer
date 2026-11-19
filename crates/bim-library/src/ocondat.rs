@@ -164,6 +164,10 @@ mod tests {
             assert_eq!((of(key).sign.as_deref(), of(key).hatch), (None, kind), "{key}");
         }
         assert_eq!(of("concrete-c20-25").name(Lang::De), "Beton C20/25");
+        // a graded material keeps its grade; a timber class gives its stiffness
+        assert_eq!((of("concrete-c20-25").grade.as_deref(), of("steel-s355").grade.as_deref(), of("spruce").grade.as_deref()), (Some("C20/25"), Some("S355"), None));
+        assert_eq!(of("spruce-c18").timber_grade().map(|g| (g.e_0_mean, g.density())), Some((9000.0, 320.0)));
+        assert!(of("steel-s355").timber_grade().is_none());
     }
 
     #[test]

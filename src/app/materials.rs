@@ -39,6 +39,8 @@ pub enum MaterialMessage {
     /// A slider is let go: the model takes the colour.
     Shown,
     Hatch(HatchKind),
+    /// Typed as its grade or strength class ("C24"); empty for none.
+    Graded(String),
     /// Its own hatch of the hatch catalogue, by its key; none: drawn by its hatch kind.
     Sign(Option<String>),
     /// Edit a material of another library: a copy of it in the project, under its key.
@@ -242,6 +244,14 @@ impl App {
                 show = false;
             }
             MaterialMessage::Shown => changed = picked.is_some(),
+            MaterialMessage::Graded(grade) => {
+                if let Some(key) = &picked {
+                    let grade = Some(grade.trim().to_string()).filter(|grade| !grade.is_empty());
+                    changed = change(&mut self.library, key, |m| m.grade = grade);
+                    // (a grade changes no drawing: the model is not made again)
+                    show = false;
+                }
+            }
             MaterialMessage::Sign(sign) => {
                 if let Some(key) = &picked {
                     changed = change(&mut self.library, key, |m| m.sign = sign.filter(|key| bim_library::hatch::hatch(key).is_some()));
@@ -332,6 +342,15 @@ impl App {
         .spacing(2)
         .wrap();
         fields = fields.push(caption(l.text("Arcering", "Hatch"))).push(hatches);
+        // its grade, and what a timber class says of it
+        let grade_name = l.text("Kwaliteit", "Grade");
+        let grade = text_input("C24", m.grade.as_deref().unwrap_or_default()).on_input(MaterialMessage::Graded).size(12).padding([2, 6]);
+        fields = fields.push(labelled(p, grade_name, a11y::named(grade, Aria::TextField, grade_name)));
+        if let Some(class) = m.timber_grade() {
+            let strength = format!("fm,k {} · ft,0,k {} · fc,0,k {} · fv,k {} N/mm²", class.fm_k, class.ft_0_k, class.fc_0_k, class.fv_k);
+            let stiffness = format!("E0,mean {} · Gmean {} N/mm² · ρk {} kg/m³", class.e_0_mean, class.g_mean, class.density());
+            fields = fields.push(text(strength).size(11).color(p.text_secondary).wrapping(Wrapping::Word)).push(text(stiffness).size(11).color(p.text_secondary).wrapping(Wrapping::Word));
+        }
         // its own hatch of the catalogue: the sign of its kind of material, in its colour
         let own_hatch = l.text("Eigen arcering", "Hatch of its own");
         let by_kind = SignChoice { key: None, label: l.text("volgens soort", "by its kind").to_string() };
@@ -391,6 +410,32 @@ mod tests {
         // the pane offers the hatches of the catalogue
         let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 1100.0), app.material_pane(app.theme.palette(), Language::English));
         assert!(pane.find("Hatch of its own").is_ok());
+    }
+
+    #[test]
+    fn a_material_has_a_grade_and_a_timber_class_says_what_it_bears() {
+        let mut app = App::default();
+        let _ = app.material_update(MaterialMessage::Pick("timber".into()));
+        let _ = app.material_update(MaterialMessage::Graded(" C24 ".into()));
+        assert_eq!(app.library.material("timber").unwrap().grade.as_deref(), Some("C24"));
+        {
+            let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 1200.0), app.material_pane(app.theme.palette(), Language::English));
+            assert!(pane.find("Grade").is_ok() && pane.find("fm,k 24 · ft,0,k 14 · fc,0,k 21 · fv,k 4 N/mm²").is_ok() && pane.find("E0,mean 11000 · Gmean 690 N/mm² · ρk 350 kg/m³").is_ok());
+        }
+        // a grade that is no timber class is kept as it is typed; an empty one is none
+        let _ = app.material_update(MaterialMessage::Graded("S355".into()));
+        assert_eq!((app.library.material("timber").unwrap().grade.as_deref(), app.library.material("timber").unwrap().timber_grade()), (Some("S355"), None));
+        let _ = app.material_update(MaterialMessage::Graded("  ".into()));
+        assert_eq!(app.library.material("timber").unwrap().grade, None);
+    }
+
+    #[test]
+    fn the_dutch_library_has_the_usual_layered_build_ups() {
+        let app = App::default();
+        let dutch = app.shelf(Shelf::Netherlands);
+        let cavity = dutch.buildup("nl.wall.cavity-mineral-wool-sand-lime-100").expect("a cavity wall");
+        assert_eq!((cavity.layers.len(), cavity.nlsfb(&dutch.materials).as_str()), (4, "21"));
+        assert_eq!(dutch.buildups.iter().filter(|b| b.id.starts_with("nl.")).count(), bim_library::dutch::buildups().len());
     }
 
     #[test]

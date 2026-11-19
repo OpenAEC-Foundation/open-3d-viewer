@@ -128,7 +128,7 @@ fn convert(doc: &Document, stem: &str) -> Result<Loaded, String> {
         let why = if scene.warnings.is_empty() { String::new() } else { format!(" ({})", scene.warnings.join("; ")) };
         return Err(format!("{stem}: no Inventor geometry that can be shown yet{why}"));
     }
-    Ok(Loaded { layers, views: Vec::new(), project })
+    Ok(Loaded { layers, views: Vec::new(), project, structural: Vec::new(), origin: None })
 }
 
 fn millimetres_to_metres(mut positions: Vec<f32>) -> Vec<f32> {

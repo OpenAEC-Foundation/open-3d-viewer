@@ -176,10 +176,6 @@ ifc-lite-core = "=25.0.1"
 # its placement chains (MPL-2.0, already built for the above): where the grids are
 ifc-lite-geometry = "=25.0.1"
 
-[dev-dependencies]
-# Inventor files written in the tests from the specification
-inventor-read = { git = "https://github.com/OpenAEC-Foundation/inventor-dll", rev = "c496ca45a1419f2620a60c703c0996efd56b0fd3", features = ["synth"] }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The library of Open Pointcloud Studio: reads a cloud from its file and meshes it (LGPL-3.0-or-later)
 pointcloud-core = { git = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio", tag = "v2026.45.1", default-features = false, optional = true }
@@ -257,5 +253,7 @@ debug = "limited"
 opt-level = 2
 
 [dev-dependencies]
+# Inventor files written in the tests from the specification
+inventor-read = { git = "https://github.com/OpenAEC-Foundation/inventor-dll", rev = "c496ca45a1419f2620a60c703c0996efd56b0fd3", features = ["synth"] }
 # The 3dm writer of the Rhino tests
 threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "104d9f9fb4cec48633e6e2e2c54893c4c2ac70aa" }

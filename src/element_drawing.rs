@@ -115,7 +115,7 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
     let outline = |d: &mut Drawing2d, pen: Pen, m: &Member, lo: f64| {
         let (x0, x1, y0, y1) = (m.u.0 - lo, m.u.1 - lo, m.v.0, m.v.1);
         for (a, b) in [([x0, y0], [x1, y0]), ([x1, y0], [x1, y1]), ([x1, y1], [x0, y1]), ([x0, y1], [x0, y0])] {
-            d.lines.push(Line2d { pen, a, b });
+            d.lines.push(Line2d::new(pen, a, b));
         }
     };
     let mut drawings = Vec::with_capacity(units.len());
@@ -151,7 +151,7 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
                 let (a, b, foot, head) = (o.along - lo, o.along + o.width - lo, o.sill, o.sill + o.height);
                 // the opening: its outline and a cross through it
                 for (p, q) in [([a, foot], [b, foot]), ([b, foot], [b, head]), ([b, head], [a, head]), ([a, head], [a, foot]), ([a, foot], [b, head]), ([a, head], [b, foot])] {
-                    d.lines.push(Line2d { pen: Pen::Detail, a: p, b: q });
+                    d.lines.push(Line2d::new(Pen::Detail, p, q));
                 }
             }
         };
@@ -287,7 +287,7 @@ fn laying_plan(model: &Model, element: &Element, s: &bim_core::SystemDef, named:
             // a trimmer: its angle as a rectangle (its lugs are part of it in the list)
             if b[0] - a[0] > 2.0 * (b[1] - a[1]) {
                 for (p, q) in [([a[0], a[1]], [b[0], a[1]]), ([b[0], a[1]], [b[0], b[1]]), ([b[0], b[1]], [a[0], b[1]]), ([a[0], b[1]], [a[0], a[1]])] {
-                    d.lines.push(Line2d { pen: Pen::Detail, a: p, b: q });
+                    d.lines.push(Line2d::new(Pen::Detail, p, q));
                 }
                 trimmers.push((mm(b[1] - a[1]), mm(b[0] - a[0])));
             }
@@ -302,7 +302,7 @@ fn laying_plan(model: &Model, element: &Element, s: &bim_core::SystemDef, named:
                         let (from, to) = (flat(&q), flat(&r));
                         // every edge lies in two faces: drawn once
                         if (from[0], from[1]) < (to[0], to[1]) {
-                            d.lines.push(Line2d { pen: Pen::Cut, a: from, b: to });
+                            d.lines.push(Line2d::new(Pen::Cut, from, to));
                         }
                     }
                 }

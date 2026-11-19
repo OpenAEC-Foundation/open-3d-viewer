@@ -471,7 +471,7 @@ impl Drawing2d {
                 // its triangle, point down on the height, a short line at that height, the text beside it
                 let (l, r) = ([at[0] - h * 0.5, at[1] + h], [at[0] + h * 0.5, at[1] + h]);
                 for (a, b) in [(at, l), (l, r), (r, at), ([at[0] - h, at[1]], [at[0] + h * 3.5, at[1]])] {
-                    self.lines.push(Line2d { pen: Pen::Text, a, b });
+                    self.lines.push(Line2d::new(Pen::Text, a, b));
                 }
                 at = [at[0] + h * 0.8, at[1] + h * 0.1];
             }

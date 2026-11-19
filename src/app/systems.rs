@@ -786,7 +786,7 @@ mod tests {
         let _ = app.system_update(SystemMessage::Plates(Part::Face, true, 2));
         typed(&mut app, Part::Face, Size::Header, "240");
         typed(&mut app, Part::Face, Size::Unit, "6000");
-        assert_eq!(picked(&app).members.framing, Some(Framing { bottom_plates: 1, top_plates: 2, header: 0.24, unit: Some(6.0) }));
+        assert_eq!(picked(&app).members.framing, Some(Framing { bottom_plates: 1, top_plates: 2, header: 0.24, unit: Some(6.0), ..Framing::PLATES }));
         typed(&mut app, Part::Face, Size::Unit, " ");
         assert_eq!(picked(&app).members.framing.unwrap().unit, None);
         // members on the grid's lines have no framing; framed again, plates of one

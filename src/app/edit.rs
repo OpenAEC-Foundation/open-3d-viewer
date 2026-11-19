@@ -137,6 +137,13 @@ pub fn with_points(shape: &Shape, points: &[DVec3]) -> Shape {
             *top = points[0].z;
         }
         Shape::System(s) => {
+            // its openings stay where they stand, as a wall's do
+            if let Some(along) = (s.end - s.start).try_normalize().filter(|_| !s.lies()) {
+                let came = (flat(&points[0]) - s.start).dot(along);
+                for o in s.openings.iter_mut() {
+                    o.along -= came;
+                }
+            }
             s.start = flat(&points[0]);
             s.end = flat(&points[1]);
             s.base = points[0].z;
@@ -663,6 +670,18 @@ mod tests {
         let e = app.modeller.model.get(ElementId(1)).unwrap();
         let Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, .. }, .. }) = e.shape_in_project(&app.modeller.model.grid) else { panic!() };
         (start, end)
+    }
+
+    #[test]
+    fn a_system_whose_start_moves_keeps_its_openings_where_they_stand() {
+        let opening = bim_core::Opening { along: 2.0, sill: 0.9, width: 1.2, height: 1.2 };
+        let system = Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(0.6, 2.7), member: DVec2::new(0.038, 0.14), panel: 0.14, system_type: None, openings: vec![opening] });
+        // the start half a metre along the line: the window is that much nearer to it
+        let Shape::System(moved) = with_points(&system, &[DVec3::new(0.5, 0.0, 0.0), DVec3::new(6.0, 0.0, 0.0)]) else { panic!("a system") };
+        assert!((moved.openings[0].along - 1.5).abs() < 1e-12, "{}", moved.openings[0].along);
+        // the end moved: it stays where it is
+        let Shape::System(moved) = with_points(&system, &[DVec3::ZERO, DVec3::new(7.0, 0.0, 0.0)]) else { panic!("a system") };
+        assert_eq!(moved.openings[0].along, 2.0);
     }
 
     #[test]

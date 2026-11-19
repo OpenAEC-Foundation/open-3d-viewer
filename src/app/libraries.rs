@@ -364,17 +364,13 @@ fn general() -> &'static Library {
     GENERAL.get_or_init(Library::starter)
 }
 
-/// The Dutch library: the types of the INB template, and with its materials those of Project
-/// Ocondat.
+/// The Dutch library: the types of the INB template, and with them the materials and the types
+/// of one material of Project Ocondat that the template lacks.
 fn inb() -> &'static Library {
     static INB: OnceLock<Library> = OnceLock::new();
     INB.get_or_init(|| {
         let mut library = bim_library::inb::library();
-        for material in bim_library::ocondat::materials() {
-            if library.material(&material.key).is_none() {
-                let _ = library.add_material(material.clone());
-            }
-        }
+        library.merge(&bim_library::ocondat::library());
         library
     })
 }

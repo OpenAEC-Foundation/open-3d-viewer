@@ -5,7 +5,12 @@
 
 writes `crates/bim-library/data/ocondat-materials.json`: every material of the sheet
 `materials`, each with its key, its names in four languages, its colour, its hatch kind and
-the key of its hatch in the hatch catalogue (`data/hatches-nl.json`).
+the key of its hatch in the hatch catalogue (`data/hatches-nl.json`); and
+`crates/bim-library/data/ocondat-types.json`: the sheet's types of one material: the
+rectangular and round profiles (timber, concrete, generic) as beams and columns, and the walls
+and floors of a single layer. A type names its material by that material's key. The size of a
+profile is taken from its name where the two differ ("SLS 38x140" is 38 by 38 in the sheet).
+The reinforcing bars of the sheet are not taken over: the library has no type for them.
 
 - The sheet names a material by a base, a type and a grade ("hout", "vuren", "C18"). A
   material of one kind that the hatch catalogue has a hatch for (a species of wood, a kind of
@@ -142,6 +147,8 @@ for r in rows:
     wikidata = re.search(r"Q\d+", r.get("L", ""))
     if wikidata:
         entry["wikidata"] = wikidata[0]
+    # the name the sheet's types call it by
+    entry["sheet"] = r.get("E", "")
     if entry["key"] in seen:
         notes.append(f"twice in the sheet: {entry['key']}")
         continue
@@ -157,5 +164,28 @@ data = {
 target = root / "crates/bim-library/data/ocondat-materials.json"
 head = "".join(f'  "{k}": {json.dumps(data[k])},\n' for k in ["source", "commit", "licence"])
 target.write_text("{\n" + head + '  "materials": [\n' + ",\n".join("    " + json.dumps(m, ensure_ascii=False) for m in out) + "\n  ]\n}\n")
+# the types of one material
+book = xlsx.read(source)
+key_of = {m["sheet"]: m["key"] for m in out}
+linear, planar = [], []
+for r in book["profiles_rect"][1:]:
+    name, width, depth = r["B"], float(r["D"]), float(r["E"])
+    named = re.search(r"(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$", name)
+    if named and (float(named[1]), float(named[2])) != (width, depth):
+        notes.append(f"{name}: {width:g}x{depth:g} in the sheet, taken from its name")
+        width, depth = float(named[1]), float(named[2])
+    roles = [role for role, flag in (("column", r.get("G")), ("beam", r.get("H"))) if flag == "1"]
+    linear.append({"name": name, "roles": roles, "material": key_of[r["F"]], "width": width, "depth": depth})
+for r in book["profiles_round"][1:]:
+    roles = [role for role, flag in (("column", r.get("F")), ("beam", r.get("G"))) if flag == "1"]
+    linear.append({"name": r["B"], "roles": roles, "material": key_of[r["E"]], "diameter": 2 * float(r["D"])})
+for sheet, role in (("walls_single_layer", "wall"), ("floors_single_layer", "floor")):
+    for r in book[sheet][1:]:
+        planar.append({"name": r["C"].replace(" ", "_"), "role": role, "description": r["D"], "material": key_of[r["G"]], "thickness": float(r["F"])})
+types = {"source": data["source"].replace("sheet materials", "sheets profiles_rect, profiles_round, walls_single_layer and floors_single_layer"), "commit": commit, "licence": "LGPL-3.0", "units": "mm"}
+head = "".join(f'  "{k}": {json.dumps(v)},\n' for k, v in types.items())
+body = ",\n".join(f'  "{k}": [\n' + ",\n".join("    " + json.dumps(t, ensure_ascii=False) for t in v) + "\n  ]" for k, v in (("linear", linear), ("planar", planar)))
+(root / "crates/bim-library/data/ocondat-types.json").write_text("{\n" + head + body + "\n}\n")
+print(len(linear), "profiles;", len(planar), "walls and floors")
 print(len(out), "materials;", sum("sign" in m for m in out), "with a hatch of the catalogue")
 print("\n".join(notes))

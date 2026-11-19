@@ -4155,6 +4155,7 @@ dependencies = [
  "signal-hook",
  "skp-reader",
  "sldw-read",
+ "splat-read",
  "stl_io",
  "svx-model",
  "svx-read",
@@ -5803,6 +5804,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eda41003dc44290527a59b13432d4a0379379fa074b70174882adfbdfd917844"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "splat-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/splat-dll?rev=34dbe7c7fc0f842dd729cc3421075a56085f9123#34dbe7c7fc0f842dd729cc3421075a56085f9123"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "ruzstd",
+ "serde_json",
 ]
 
 [[package]]

@@ -81,6 +81,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 |---|---:|---|---|
 | VRML and X3D (`.wrl`, `.x3d`) | 1,024 | in the app | New repository. |
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
+| Gaussian splats (splat `.ply`, `.spz`, glTF with `KHR_gaussian_splatting`) | 85 (`splat.rs`, tests besides) | `splat-dll` (one crate, `splat-read`, public) | Apart from the start (2026-11-18): the PLY and glTF loaders hand a splat file to it, the adapter only copies its splats into a point layer with `SplatData`. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | 3D Tiles (`tileset.json`, `.b3dm`, `.i3dm`, `.pnts`, `.cmpt`) and quantized-mesh terrain (`.terrain`) | 72 (`tiles.rs`) | `3d-tiles-dll`: `tiles-core`, `tiles-model`, `tiles-read` | Laid out as the model from the start (2026-11-18). |
 | Compressed glTF (Draco, meshopt, mesh quantization, KTX2/Basis) | glue in `gltf.rs` | `3d-tiles-dll`: `tiles-gltf` | Decodes into plain glTF before the published glTF crate reads it; 3D Tiles content uses it too. |

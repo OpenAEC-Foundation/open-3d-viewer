@@ -507,7 +507,7 @@ footer code { font-size: 12.5px; }
   },
   ".ply": {
    "pct": 85,
-   "note": "Meshes (ASCII en binair) met vertexkleuren en puntenwolken met kleur, intensiteit en classificatie werken (Wuson, cube_binary, cube_uv, float-color, pond.0 met 70k punten). Textures (TextureFile/texcoords), edge-elementen en extra vertex-eigenschappen worden niet getoond."
+   "note": "Meshes (ASCII en binair) met vertexkleuren en puntenwolken met kleur, intensiteit en classificatie werken (Wuson, cube_binary, cube_uv, float-color, pond.0 met 70k punten). Textures (TextureFile/texcoords), edge-elementen en extra vertex-eigenschappen worden niet getoond. Een PLY met de eigenschappen van 3D Gaussian splatting (f_dc, f_rest, opacity, scale, rot) opent als splatscène; de gecomprimeerde splat-PLY niet."
   },
   ".3mf": {
    "pct": 78,
@@ -520,6 +520,10 @@ footer code { font-size: 12.5px; }
   ".off": {
    "pct": 93,
    "note": "ASCII OFF/COFF/NOFF met polygonen en kleuren werkt (Cube, Wuson). Alleen binaire OFF en 4D-varianten ontbreken, en die zijn zeldzaam. Er is geen naam of hiërarchie, maar het formaat heeft die ook niet."
+  },
+  ".spz": {
+   "pct": 85,
+   "note": "Gaussian-splatscènes in SPZ versie 1 t/m 4 (gzip en zstd) openen: middens, schalen, rotaties (ook smallest-three), opaciteit, kleur en de kijkrichtingafhankelijke kleur tot graad 3, getekend als gesorteerde, gemengde splats, ook in de browser. Graad 4 van SPZ 4 en de extensierecords (georeferentie, camera) worden niet gelezen. Getest met zelf geschreven bestanden van versie 2, 3 en 4, nog niet met een echte opname."
   },
   ".las": {
    "pct": 86,
@@ -573,7 +577,7 @@ const GROUPS = [
   ["Constructieve analyse", ["samjson", "e2k", "ifcfemresults", "ifcfem"]],
   ["GIS en terrein", ["json", "cityjson", "jsonl", "cityjsonl", "gml", "citygml", "geojson", "shp", "xml", "landxml", "asc"]],
   ["Meshes en uitwisseling", ["gltf", "glb", "usd", "usda", "usdc", "usdz", "dae", "wrl", "wrz", "x3d", "x3dv", "x3dz", "x3dvz", "fbx", "3ds", "obj", "stl", "ply", "3mf", "amf", "off"]],
-  ["Puntenwolken", ["las", "laz", "e57", "pts", "ptx", "pcd", "xyz", "txt", "csv"]],
+  ["Puntenwolken", ["las", "laz", "e57", "pts", "ptx", "pcd", "xyz", "txt", "csv", "spz"]],
 ];
 
 // Saved data: the block in this file, or the browser's copy when that is newer (typed while the

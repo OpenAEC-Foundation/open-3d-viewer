@@ -9,9 +9,13 @@
 //! point is an instance of a four-vertex triangle strip that the vertex shader spreads round the
 //! point on screen. Instanced quads rather than `PointList`, whose points are one pixel on every
 //! backend that matters (WebGL2 and WebGPU have no point size).
+//!
+//! Splat scenes (layers with `SplatData`) are drawn by `super::splats` after the opaque surfaces:
+//! sorted, blended Gaussians, not dots.
 
 use super::camera::Camera;
 use super::chunks;
+use super::splats::{GpuSplats, SplatPipeline};
 use super::structural::{GpuStructural, StructUniforms, StructuralPipelines};
 use crate::structural::display::Marks;
 use crate::structural::pick::Lod;
@@ -299,6 +303,9 @@ pub struct ScenePipeline {
     gpu_structural: Option<GpuStructural>,
     /// The structural selection and hover as last gathered (the marks they were gathered from).
     structural_marked: [(Arc<Marks>, Option<GpuStructural>); 2],
+    /// The splat scenes: their pipeline and the model's splat layers.
+    splat_pipeline: SplatPipeline,
+    splats: GpuSplats,
 }
 
 impl shader::Pipeline for ScenePipeline {
@@ -376,6 +383,7 @@ impl ScenePipeline {
             label: Some("o3v.scene.shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
         });
+        let splat_pipeline = SplatPipeline::new(device, format, &uniform_layout, SAMPLES, DEPTH_FORMAT);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("o3v.scene.layout"),
             bind_group_layouts: &[&uniform_layout],
@@ -743,6 +751,8 @@ impl ScenePipeline {
             structural: None,
             gpu_structural: None,
             structural_marked: Default::default(),
+            splat_pipeline,
+            splats: GpuSplats::default(),
         }
     }
 
@@ -824,11 +834,17 @@ impl ScenePipeline {
         let (low, high) = (Vec3::from(model.bounds.min), Vec3::from(model.bounds.max));
         let cell = ((high - low).max_element() / chunks::CELLS).max(1e-3);
         // the heights of the model's clouds, for colouring them by height
-        let heights = model.layers.iter().filter(|l| l.points).flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
+        let heights = model.layers.iter().filter(|l| l.points && l.splats.is_none()).flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
         let (floor, top) = heights.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), z| (lo.min(z), hi.max(z)));
         for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
+            if layer.splats.is_some() {
+                // drawn by `GpuSplats`: nothing here
+                let empty = || device.create_buffer(&wgpu::BufferDescriptor { label: Some("o3v.layer.splats"), size: 4, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX, mapped_at_creation: false });
+                self.layers.push(GpuLayer { vertices: empty(), indices: empty(), index_count: 0, points: 0, features: None, solid: None, lines: None, chunks: Vec::new() });
+                continue;
+            }
             if layer.points {
                 self.layers.push(upload_points(device, layer, base, self.cloud_color, (floor, top)));
                 continue;
@@ -1057,7 +1073,7 @@ impl ScenePipeline {
         let shaded = matches!(primitive.settings.mode, RenderMode::Solid | RenderMode::SolidEdges);
         self.shadows = primitive.settings.ambient && shaded && primitive.model.is_some();
         // the depth shading of the clouds, where the model has one
-        self.dome = primitive.settings.cloud_depth && primitive.model.as_ref().is_some_and(|m| m.layers.iter().any(|l| l.points));
+        self.dome = primitive.settings.cloud_depth && primitive.model.as_ref().is_some_and(|m| m.layers.iter().any(|l| l.points && l.splats.is_none()));
         {
             let camera = &primitive.camera;
             let projection = camera.projection(w as f32 / h as f32);
@@ -1084,6 +1100,12 @@ impl ScenePipeline {
             }
         }
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
+        self.splats.upload(device, queue, &self.splat_pipeline, primitive.model.as_ref());
+        {
+            let camera = &primitive.camera;
+            let forward = (camera.target - camera.eye()).normalize_or_zero();
+            self.splats.prepare(queue, primitive.model.as_ref(), primitive.settings.model_matrix, camera.eye(), forward, (w, h));
+        }
         self.upload_datum(device, primitive);
         self.upload_overlay(device, primitive);
         self.upload_overlay_faces(device, primitive);
@@ -1299,6 +1321,10 @@ impl ScenePipeline {
                         pass.draw(0..4, 0..layer.points);
                     }
                 }
+            }
+            // splat scenes in every mode, over the opaque surfaces and clouds
+            if !self.splats.is_empty() {
+                self.splats.draw(&mut pass, &self.splat_pipeline, &self.model_group, visible);
             }
             // the layers' own lines (curves, text, hatches) in every mode, unlit in their colours
             if self.layers.iter().any(|l| l.lines.is_some()) {

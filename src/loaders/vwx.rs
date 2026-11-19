@@ -304,6 +304,7 @@ fn layer(mesh: vwx_read::model::Mesh) -> Layer {
         lines: mesh.lines,
         line_elements: mesh.line_elements,
         texturing: None,
+        splats: None,
     }
 }
 

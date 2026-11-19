@@ -49,12 +49,14 @@ required-features = ["pointcloud"]
 # The products a build holds: all four by default, with the switch at the top right of the window.
 # Code that serves one product moves behind its feature module by module.
 [features]
-default = ["viewer", "modeller", "validator", "pointcloud"]
+default = ["viewer", "modeller", "validator", "pointcloud", "planner"]
 viewer = []
 modeller = []
 validator = []
 # Its meshing comes from the library of Open Pointcloud Studio, on the desktop.
 pointcloud = ["dep:pointcloud-core"]
+# A trial: the web version of Open Planner Studio in a web frame inside the window, on Windows.
+planner = ["dep:wry"]
 
 [dependencies]
 # GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
@@ -148,6 +150,8 @@ sldw-read = { git = "https://github.com/OpenAEC-Foundation/solidworks-dll", rev 
 sedge-read = { git = "https://github.com/OpenAEC-Foundation/solidedge-dll", rev = "04a068e6a06409b8396d0e05a2613d86c3af50c4" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
 threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "104d9f9fb4cec48633e6e2e2c54893c4c2ac70aa", default-features = false }
+# Private standalone Inventor library (parts and assemblies, clean-room); reads in the browser too.
+inventor-read = { git = "https://github.com/OpenAEC-Foundation/inventor-dll", rev = "c496ca45a1419f2620a60c703c0996efd56b0fd3" }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -171,6 +175,10 @@ ifc-lite-processing = "=25.0.1"
 ifc-lite-core = "=25.0.1"
 # its placement chains (MPL-2.0, already built for the above): where the grids are
 ifc-lite-geometry = "=25.0.1"
+
+[dev-dependencies]
+# Inventor files written in the tests from the specification
+inventor-read = { git = "https://github.com/OpenAEC-Foundation/inventor-dll", rev = "c496ca45a1419f2620a60c703c0996efd56b0fd3", features = ["synth"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The library of Open Pointcloud Studio: reads a cloud from its file and meshes it (LGPL-3.0-or-later)
@@ -224,7 +232,10 @@ signal-hook = "0.3"
 [target.'cfg(windows)'.dependencies]
 # Which GPU the window gets, before wgpu starts (`gpu`), and the window's rectangle when its
 # display scale changes (`dpi_drag`); the version wgpu-hal uses (MIT OR Apache-2.0)
-windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The web frame of the Planner: the system's web view (WebView2) as a child of the app's window
+# (MIT OR Apache-2.0). On Windows only for now: elsewhere it needs system libraries the builds lack.
+wry = { version = "0.57", default-features = false, optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
 # The app icon and version info in the .exe (MIT)

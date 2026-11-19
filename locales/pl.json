@@ -1408,6 +1408,14 @@
     "Flat bars": "Płaskowniki",
     "Round bars": "Pręty okrągłe",
     "cold-formed": "gięty na zimno",
-    "Differdinger (old)": "Differdinger (stary)"
+    "Differdinger (old)": "Differdinger (stary)",
+    "by rule": "według reguły",
+    "types": "typy",
+    "+ Code": "+ Kod",
+    "Pick a code on the page to edit it.": "Wybierz kod na stronie, aby go edytować.",
+    "Types with this code": "Typy z tym kodem",
+    "+ Code under it": "+ Kod poniżej",
+    "Not taken.": "Nie przyjęto.",
+    "Not removed: types with this code": "Nie usunięto: typy z tym kodem"
   }
 }

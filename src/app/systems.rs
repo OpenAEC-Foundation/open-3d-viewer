@@ -87,6 +87,8 @@ pub enum SystemMessage {
     /// Another group, and so another IFC class; a floor or a ceiling lies, the others stand.
     Group(SystemGroup),
     Corners(Corner),
+    /// An NL-SfB code of its own, one of the library's; none for the rule's.
+    Coded(Option<String>),
     /// Show the fields of this part.
     Part(Part),
     /// Typed as a size.
@@ -495,6 +497,7 @@ impl App {
                 let general = self.shelf(Shelf::General).clone();
                 regroup(&mut self.library, &general, id, group).map(|()| self.set_category(Category::Systems(group)))
             }),
+            SystemMessage::Coded(code) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.code = code)),
             SystemMessage::Corners(corners) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.corners = corners)),
             SystemMessage::Done => match (picked.as_deref(), self.system_view.draft.clone()) {
                 (Some(id), Some((part, size, typed))) => Some(set(&mut self.library, id, part, size, &typed)),
@@ -680,6 +683,7 @@ impl App {
             .push(more)
             .push(closed)
             .push(text(total).size(11).color(p.text_secondary))
+            .push(super::codes::picker(p, l, library, t.rule_code(), t.code.as_deref(), SystemMessage::Coded))
             .push(row![act(l.text("Dupliceren", "Duplicate"), SystemMessage::Duplicate), act(l.text("Verwijderen", "Remove"), SystemMessage::Remove), Space::new().width(Fill)].spacing(4))
             .push(refused)
             .push(text(l.text("De naam volgt de stijlen of de panelen.", "The name follows the members or the panels.")).size(11).color(p.text_muted).wrapping(Wrapping::Word))

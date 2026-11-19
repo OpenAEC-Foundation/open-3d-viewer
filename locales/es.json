@@ -1408,6 +1408,14 @@
     "Flat bars": "Pletinas",
     "Round bars": "Barras redondas",
     "cold-formed": "conformado en frío",
-    "Differdinger (old)": "Differdinger (antiguo)"
+    "Differdinger (old)": "Differdinger (antiguo)",
+    "by rule": "según la regla",
+    "types": "tipos",
+    "+ Code": "+ Código",
+    "Pick a code on the page to edit it.": "Elija un código en la página para editarlo.",
+    "Types with this code": "Tipos con este código",
+    "+ Code under it": "+ Código debajo",
+    "Not taken.": "No aceptado.",
+    "Not removed: types with this code": "No eliminado: tipos con este código"
   }
 }

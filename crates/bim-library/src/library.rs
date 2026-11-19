@@ -3,6 +3,7 @@
 
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
+use crate::nlsfb::{self, Code};
 use crate::profile::{self, LinearRole, LinearType};
 use crate::system::{self, SystemGroup, SystemType};
 use crate::{Lang, LibraryError};
@@ -23,6 +24,9 @@ pub struct Library {
     pub linear_types: Vec<LinearType>,
     #[serde(default)]
     pub system_types: Vec<SystemType>,
+    /// Its NL-SfB codes, each once: the groups of the table and the codes added to them.
+    #[serde(default)]
+    pub codes: Vec<Code>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -57,7 +61,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -222,6 +226,40 @@ impl Library {
         self.buildups_of(buildup.role).find(|b| same(b))
     }
 
+    /// The code `code` of the library.
+    pub fn code(&self, code: &str) -> Option<&Code> {
+        self.codes.iter().find(|c| c.code == code)
+    }
+
+    /// Adds a code, in the order of the codes. Refused when it is no NL-SfB code or the library
+    /// has it.
+    pub fn add_code(&mut self, code: Code) -> Result<(), LibraryError> {
+        if !nlsfb::valid(&code.code) {
+            return Err(LibraryError::BadCode(code.code));
+        }
+        if self.code(&code.code).is_some() {
+            return Err(LibraryError::Duplicate(code.code));
+        }
+        let at = self.codes.iter().position(|c| c.code > code.code).unwrap_or(self.codes.len());
+        self.codes.insert(at, code);
+        Ok(())
+    }
+
+    /// What `code` is called: its name in the library, else the name of its group in the table.
+    pub fn code_name(&self, code: &str, lang: Lang) -> Option<String> {
+        self.code(code).map(|c| c.name(lang).to_string()).or_else(|| nlsfb::group_name(code, lang).map(str::to_string))
+    }
+
+    /// The types that have `code`, by their ids: build-ups, linear types and system types. With
+    /// `deeper`, also those of a code under it ("21" has the types of "21.22").
+    pub fn coded(&self, code: &str, deeper: bool) -> Vec<&str> {
+        let has = |of: String| of == code || deeper && of.strip_prefix(code).is_some_and(|rest| rest.starts_with('.') || code.contains('.'));
+        let buildups = self.buildups.iter().filter(|b| has(b.nlsfb(&self.materials))).map(|b| b.id.as_str());
+        let linear = self.linear_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
+        let systems = self.system_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
+        buildups.chain(linear).chain(systems).collect()
+    }
+
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
     /// materials by key, build-ups by role and layers ([`Library::matching`]), linear types by
     /// role, material and profile ([`Library::matching_linear`]), system types by what they make
@@ -230,6 +268,10 @@ impl Library {
     /// Returns how many materials and types were added.
     pub fn merge(&mut self, other: &Library) -> usize {
         let mut added = 0;
+        // codes are not counted: they come with the types that have them
+        for c in &other.codes {
+            let _ = self.add_code(c.clone());
+        }
         for m in &other.materials {
             if self.material(&m.key).is_none() && self.add_material(m.clone()).is_ok() {
                 added += 1;
@@ -278,7 +320,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }

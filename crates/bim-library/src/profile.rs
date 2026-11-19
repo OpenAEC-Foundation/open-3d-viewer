@@ -499,17 +499,20 @@ pub struct LinearType {
     /// A name of its own, shown in place of the rule's (a type of a catalogue).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// An NL-SfB code of its own, in place of the rule's ("21.22").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl LinearType {
     pub fn new(id: &str, role: LinearRole, material: &str, profile: ProfileShape) -> Self {
-        Self { id: id.into(), role, material: material.into(), profile, designation: None, name: None }
+        Self { id: id.into(), role, material: material.into(), profile, designation: None, name: None, code: None }
     }
 
     /// A type of `role` of the steel profile `designation`, of steel.
     pub fn steel(id: &str, role: LinearRole, designation: &str) -> Option<Self> {
         let p = steel(designation)?;
-        Some(Self { id: id.into(), role, material: "steel".into(), profile: p.shape.clone(), designation: Some(p.designation.clone()), name: None })
+        Some(Self { id: id.into(), role, material: "steel".into(), profile: p.shape.clone(), designation: Some(p.designation.clone()), name: None, code: None })
     }
 
     /// Checks it against `materials`: an id, a known material, a profile that checks.

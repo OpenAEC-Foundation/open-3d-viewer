@@ -71,7 +71,7 @@ pub fn colour_of(typed: &str) -> Option<[u8; 3]> {
 }
 
 /// A language of the library's names, as it names itself.
-fn lang_name(lang: Lang) -> &'static str {
+pub(super) fn lang_name(lang: Lang) -> &'static str {
     match lang {
         Lang::Nl => "Nederlands",
         Lang::En => "English",

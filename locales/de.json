@@ -1408,6 +1408,14 @@
     "Flat bars": "Flachstahl",
     "Round bars": "Rundstahl",
     "cold-formed": "kaltgeformt",
-    "Differdinger (old)": "Differdinger (alt)"
+    "Differdinger (old)": "Differdinger (alt)",
+    "by rule": "nach Regel",
+    "types": "Typen",
+    "+ Code": "+ Code",
+    "Pick a code on the page to edit it.": "Wählen Sie einen Code auf der Seite, um ihn zu bearbeiten.",
+    "Types with this code": "Typen mit diesem Code",
+    "+ Code under it": "+ Code darunter",
+    "Not taken.": "Nicht übernommen.",
+    "Not removed: types with this code": "Nicht entfernt: Typen mit diesem Code"
   }
 }

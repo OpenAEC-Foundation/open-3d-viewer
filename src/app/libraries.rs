@@ -181,6 +181,8 @@ pub enum Category {
     HatchSet(HatchSet),
     /// What each kind of material is drawn with under the drawing standard a source follows.
     Hatches,
+    /// The NL-SfB codes of a library, each with the types that have it.
+    Codes,
     /// A company's house style.
     Colours,
     Fonts,
@@ -195,6 +197,7 @@ pub enum Heading {
     Systems,
     Standard,
     Hatches,
+    Codes,
     House,
 }
 
@@ -207,6 +210,7 @@ impl Heading {
             Heading::Systems => l.text("Systemen", "Systems"),
             Heading::Standard => l.text("Tekenstandaard", "Drawing standard"),
             Heading::Hatches => l.text("Arceringen", "Hatches"),
+            Heading::Codes => l.text("Coderingen", "Classification"),
             Heading::House => l.text("Huisstijl", "House style"),
         }
     }
@@ -237,6 +241,7 @@ impl Category {
             Category::TextStyles => l.text("Tekststijlen", "Text styles"),
             Category::HatchSet(set) => set.name(),
             Category::Hatches => l.text("Per materiaalsoort", "By kind of material"),
+            Category::Codes => "NL-SfB",
             Category::Colours => l.text("Kleuren", "Colours"),
             Category::Fonts => l.text("Lettertypen", "Fonts"),
         }
@@ -318,6 +323,7 @@ pub(super) enum Editor {
     BuildUp,
     Profile,
     System,
+    Code,
 }
 
 /// A library something was found in.
@@ -467,6 +473,9 @@ impl App {
         if editor != Editor::System {
             self.system_view.picked = None;
         }
+        if editor != Editor::Code {
+            self.code_view.picked = None;
+        }
     }
 
     /// Nothing is picked to edit or to set: another source or another category shows.
@@ -475,6 +484,7 @@ impl App {
         self.buildup_view.picked = None;
         self.profile_view.picked = None;
         self.system_view.picked = None;
+        self.code_view.picked = None;
         self.standard_view.picked = None;
         self.follow_refused.clear();
     }
@@ -516,6 +526,9 @@ impl App {
         let system = &mut self.system_view;
         (system.draft, system.refused) = (None, None);
         system.picked = system.picked.take().filter(|id| library.system_type(id).is_some());
+        let code = &mut self.code_view;
+        (code.draft, code.refused, code.in_use) = (None, None, None);
+        code.picked = code.picked.take().filter(|of| library.code(of).is_some());
         // (a layer that is gone shows no fields: the face does)
         let layers = system.picked.as_deref().and_then(|id| library.system_type(id)).map_or(0, |t| t.layers.len());
         if matches!(system.part, super::systems::Part::Layer(k) if k >= layers) {
@@ -573,6 +586,7 @@ impl App {
             Category::TextStyles => self.standard.text_styles.len(),
             Category::HatchSet(set) => hatch::of(set).count(),
             Category::Hatches => HatchKind::ALL.len(),
+            Category::Codes => of(&|lib| lib.codes.len()),
             Category::Colours => HOUSE_COLOURS,
             Category::Fonts => 1,
         }
@@ -598,6 +612,7 @@ impl App {
                 (Heading::Planar, has(counted(Role::ALL.map(Category::Planar).to_vec()))),
                 (Heading::Linear, has(counted(LinearRole::ALL.map(Category::Linear).to_vec()))),
                 (Heading::Systems, has(counted(SystemGroup::ALL.map(Category::Systems).to_vec()))),
+                (Heading::Codes, has(counted(vec![Category::Codes]))),
             ]
         };
         let steel = |tree: &mut Vec<(Heading, Vec<(Category, usize)>)>| {
@@ -784,6 +799,7 @@ impl App {
                 _ if self.profile_view.picked.is_some() => self.profile_pane(p, l),
                 _ if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
                 _ if self.system_view.picked.is_some() => self.system_pane(p, l),
+                _ if self.code_view.picked.is_some() => self.code_pane(p, l),
                 _ => hint(l.text("Klik een tegel om hem te bewerken. De laatste tegel maakt een nieuwe.", "Click a tile to edit it. The last tile makes a new one.")),
             };
         }
@@ -909,6 +925,22 @@ impl App {
                 }
                 tiles
             }
+            (Category::Codes, Some(_), Some(library)) => {
+                let mut tiles: Vec<Element<'_, Message>> = library
+                    .codes
+                    .iter()
+                    .map(|code| {
+                        let (on, press) = if project { (self.code_view.picked.as_deref() == Some(code.code.as_str()), Some(Message::Code(super::codes::CodeMessage::Pick(code.code.clone())))) } else { (false, None) };
+                        let look = container(text(code.code.clone()).size(26).color(p.text)).width(Fill).align_x(Center);
+                        let about = format!("{}: {}", l.text("typen", "types"), library.coded(&code.code, false).len());
+                        tile(p, look.into(), code.name(lang).to_string(), about, on, press)
+                    })
+                    .collect();
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Code", "+ Code"), Message::Code(super::codes::CodeMessage::Add)));
+                }
+                tiles
+            }
             (Category::HatchSet(set), _, _) => hatch::of(set)
                 .map(|h| {
                     let item = Item::Hatch(h.key.clone());
@@ -1000,6 +1032,12 @@ impl App {
         let nodes = ifcx::nodes(library);
         let node = |path: String| nodes.iter().find(|n| n["path"] == path.as_str()).cloned();
         match category {
+            Category::Codes => {
+                for c in &library.codes {
+                    let (on, press) = if project { (self.code_view.picked.as_deref() == Some(c.code.as_str()), Some(Message::Code(super::codes::CodeMessage::Pick(c.code.clone())))) } else { (false, None) };
+                    code.extend(node(bim_library::nlsfb::code_path(&c.code)).map(|node| (super::codes::named(library, &c.code, lang), press, on, node)));
+                }
+            }
             Category::Materials => {
                 for m in &library.materials {
                     let item = Item::Material(shelf, m.key.clone());
@@ -1348,7 +1386,8 @@ mod tests {
         // the general library: materials, the planar elements together, the linear ones with the
         // steel table, the systems, and the hatches: the suite's own, and those of its standard
         let general = app.library_tree();
-        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Hatches]);
+        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Codes, Heading::Hatches]);
+        assert_eq!(general.iter().find(|(heading, _)| *heading == Heading::Codes).map(|(_, list)| list.clone()), Some(vec![(Category::Codes, Library::starter().codes.len())]));
         assert_eq!(categories(&general, Heading::Planar), Role::ALL.map(Category::Planar));
         assert_eq!(general[0].1, [(Category::Materials, Library::starter().materials.len())]);
         assert!(categories(&general, Heading::Linear).starts_with(&[Category::Linear(LinearRole::Column), Category::Linear(LinearRole::Beam)]));

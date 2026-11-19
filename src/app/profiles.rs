@@ -88,6 +88,8 @@ pub enum ProfileMessage {
     Remove,
     /// A name of its own, in place of the rule's; empty for the rule's.
     Named(String),
+    /// An NL-SfB code of its own, one of the library's; none for the rule's.
+    Coded(Option<String>),
     Role(LinearRole),
     /// The material, by its key.
     Material(String),
@@ -319,6 +321,7 @@ impl App {
                 }
                 Some(Ok(()))
             }
+            ProfileMessage::Coded(code) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.code = code)),
             ProfileMessage::Named(name) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.name = (!name.trim().is_empty()).then_some(name))),
             ProfileMessage::Role(role) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.role = role).map(|()| {
                 // the page follows the type to its role, unless it shows the steel table
@@ -479,6 +482,7 @@ impl App {
         let own_name = l.text("Eigen naam", "Own name");
         let own = text_input(l.text("volgens materiaal en maat", "by material and size"), t.name.as_deref().unwrap_or_default()).on_input(ProfileMessage::Named).size(12).padding([2, 6]);
         fields = fields.push(stacked(p, own_name, a11y::named(own, Aria::TextField, own_name)));
+        fields = fields.push(super::codes::picker(p, l, library, t.rule_code(), t.code.as_deref(), ProfileMessage::Coded));
         let act = |label: &'static str, message: ProfileMessage| button(text(label).size(12).color(p.text_secondary)).padding([3, 8]).style(move |_, s| p.row_button(s)).on_press(message);
         let refused = view.refused.as_ref().map(|why| {
             let refused = l.text("Niet overgenomen: het profiel zou dan niet meer kloppen.", "Not taken: the profile would no longer hold together.");

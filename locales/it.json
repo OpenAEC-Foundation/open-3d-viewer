@@ -1408,6 +1408,14 @@
     "Flat bars": "Piatti",
     "Round bars": "Tondi",
     "cold-formed": "formato a freddo",
-    "Differdinger (old)": "Differdinger (vecchio)"
+    "Differdinger (old)": "Differdinger (vecchio)",
+    "by rule": "secondo la regola",
+    "types": "tipi",
+    "+ Code": "+ Codice",
+    "Pick a code on the page to edit it.": "Scegliere un codice nella pagina per modificarlo.",
+    "Types with this code": "Tipi con questo codice",
+    "+ Code under it": "+ Codice sotto",
+    "Not taken.": "Non accettato.",
+    "Not removed: types with this code": "Non rimosso: tipi con questo codice"
   }
 }

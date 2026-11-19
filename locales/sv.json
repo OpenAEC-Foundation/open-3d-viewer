@@ -1408,6 +1408,14 @@
     "Flat bars": "Plattstål",
     "Round bars": "Rundstål",
     "cold-formed": "kallformad",
-    "Differdinger (old)": "Differdinger (äldre)"
+    "Differdinger (old)": "Differdinger (äldre)",
+    "by rule": "enligt regeln",
+    "types": "typer",
+    "+ Code": "+ Kod",
+    "Pick a code on the page to edit it.": "Välj en kod på sidan för att redigera den.",
+    "Types with this code": "Typer med den här koden",
+    "+ Code under it": "+ Kod under den",
+    "Not taken.": "Inte godtagen.",
+    "Not removed: types with this code": "Inte borttagen: typer med den här koden"
   }
 }

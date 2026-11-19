@@ -1408,6 +1408,14 @@
     "Flat bars": "Lama demiri",
     "Round bars": "Yuvarlak çubuklar",
     "cold-formed": "soğuk şekillendirilmiş",
-    "Differdinger (old)": "Differdinger (eski)"
+    "Differdinger (old)": "Differdinger (eski)",
+    "by rule": "kurala göre",
+    "types": "tipler",
+    "+ Code": "+ Kod",
+    "Pick a code on the page to edit it.": "Düzenlemek için sayfadan bir kod seçin.",
+    "Types with this code": "Bu koda sahip tipler",
+    "+ Code under it": "+ Altına kod",
+    "Not taken.": "Kabul edilmedi.",
+    "Not removed: types with this code": "Kaldırılmadı: bu koda sahip tipler"
   }
 }

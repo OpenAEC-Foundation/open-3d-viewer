@@ -28,6 +28,7 @@ pub mod ifcx;
 pub mod inb;
 pub mod library;
 pub mod material;
+pub mod nlsfb;
 pub mod profile;
 pub mod system;
 
@@ -83,6 +84,9 @@ pub enum LibraryError {
     /// A drawing standard names a scale, a pen or a style it does not have, or a line style's
     /// dashes lack a gap; the text says which.
     UnknownSetting(String),
+    /// A code is no NL-SfB code: two digits of a group of table 1, and one or two more after a
+    /// point.
+    BadCode(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -97,6 +101,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::BadProfile(why) => write!(f, "Not a profile: {why}"),
             LibraryError::BadGrid => f.write_str("A system's bays and rows must be wider than its members."),
             LibraryError::UnknownSetting(key) => write!(f, "The drawing standard has no \"{key}\"."),
+            LibraryError::BadCode(code) => write!(f, "\"{code}\" is no NL-SfB code (21, 21.2 or 21.22)."),
         }
     }
 }

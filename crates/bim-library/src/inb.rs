@@ -77,7 +77,7 @@ fn slug(name: &str) -> String {
 /// The library of the INB template: its materials (the starter's and its own) and its types. A
 /// type of the catalogue whose material is unknown, or that does not check, is left out.
 pub fn library() -> Library {
-    let mut library = Library { materials: material::starter(), ..Library::default() };
+    let mut library = Library { materials: material::starter(), codes: crate::nlsfb::starter(), ..Library::default() };
     for m in own_materials() {
         let _ = library.add_material(m);
     }

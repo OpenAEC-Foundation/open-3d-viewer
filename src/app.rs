@@ -34,6 +34,7 @@ mod drawing_kinds;
 mod solid_view;
 mod drafts;
 pub mod drawn_edit;
+mod element_drawings;
 pub mod drawn_props;
 mod edit;
 mod element_props;
@@ -367,6 +368,8 @@ pub struct App {
     pub dragging_view: Option<Arc<str>>,
     /// The text tool is on: a click on a view (its tab, or placed on a sheet) puts a text there.
     pub note_tool: bool,
+    /// The text tool places level marks (the Level mark tool): only with `note_tool` on.
+    pub level_tool: bool,
     /// The drawing tool that is on: lines, rectangles or circles on the view shown.
     pub draw_tool: Option<marks::DrawKind>,
     /// The wording of the next text placed, or of the picked text.
@@ -684,6 +687,9 @@ pub enum Message {
     LetGoView,
     /// Switch the text tool on or off.
     NoteTool(bool),
+    /// The Level mark tool: a click in a section or an elevation marks the height there.
+    LevelTool(bool),
+    AddLevelMark(Arc<str>, [f64; 2]),
     /// The wording typed for the next text, or for the picked one.
     NoteText(String),
     /// Put a text on a view: the view, the point of its drawing, the wording.
@@ -921,6 +927,17 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// Give an opening (its index) of the selected timber frame its type's framing again.
+    ResetOpeningFraming(usize),
+    /// Ask for a joint between two prefab units of the selected timber frame, and take one (its
+    /// index) back.
+    AddBreak,
+    RemoveBreak(usize),
+    /// An opening more in the selected floor system: rectangular, or round.
+    AddRecess(bool),
+    /// The element drawings of the selected system: ask for a folder, then write them there.
+    ElementDrawings(openaec_ui::Language),
+    ElementDrawingsTo(Option<std::path::PathBuf>, openaec_ui::Language),
     /// The rows of an element's top in the Modeller's properties.
     Top(modeller::tops::TopMessage),
     /// A row of the Modeller's model explorer.
@@ -1115,6 +1132,7 @@ impl Default for App {
             cut_edit: None,
             dragging_view: None,
             note_tool: false,
+            level_tool: false,
             draw_tool: None,
             note_text: String::new(),
             mark_pick: None,
@@ -2220,6 +2238,16 @@ impl App {
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
+            Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),
+            Message::AddBreak => self.add_break(),
+            Message::AddRecess(round) => self.add_recess(round),
+            Message::RemoveBreak(index) => self.remove_break(index),
+            Message::ElementDrawings(l) => return self.element_drawings_dialog(l),
+            Message::ElementDrawingsTo(folder, l) => {
+                if let Some(folder) = folder {
+                    self.element_drawings_to(&folder, l);
+                }
+            }
             Message::JoinKind(kind) => self.set_join_kind(kind),
             Message::SwapJoin => self.swap_join(),
             Message::PickJoin(id) => self.select_modelled(id),
@@ -2632,7 +2660,15 @@ impl App {
                 self.pick_on_sheet(None);
                 self.mark_pick = None;
             }
+            Message::LevelTool(on) => {
+                let _ = self.update(Message::NoteTool(on));
+                self.level_tool = on;
+            }
+            Message::AddLevelMark(view, at) => {
+                self.document.add_level_mark(&view, at);
+            }
             Message::NoteTool(on) => {
+                self.level_tool = false;
                 self.note_tool = on;
                 if on {
                     self.section_tool = false;

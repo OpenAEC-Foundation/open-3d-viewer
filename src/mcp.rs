@@ -257,8 +257,22 @@ pub fn tools() -> Vec<Value> {
         // the Modeller's viewport gestures
         tool("place_cursor", "The Modeller: put the 3D cursor under a pixel of the last viewport screenshot, as Shift + the right button does. It lands on a point of an element near it, else on the level worked on.",
             json!({ "x": { "type": "number" }, "y": { "type": "number" } }), &["x", "y"], false),
+        tool("click_drawing", "The Modeller: click on the drawing shown (a floor plan, a section or an elevation) at pixels of the last viewport screenshot, one after the other, as the mouse does. With a tool of the Annotate or Project tab on (ui_press its button first) the clicks place what it places: two for a section or a dimension, two for a line, a rectangle or a circle, one for a text; without a tool a click picks a dimension, a text or a section line.",
+            json!({ "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 1, "description": "The clicks in order, each [x, y]" } }), &["points"], false),
         tool("export_drawing", "Write the drawing of the sheet or view shown in the active tab to a file, as its Export button does: the format is the path's extension (pdf, svg, dxf, dwg, png or ifccad).",
             json!({ "path": { "type": "string", "description": "Where to write it (absolute)" } }), &["path"], false),
+        tool("tool_type", "The Modeller: the Type list of the tool that is on (Wall, Slab, Column, Beam, Curtain wall: the building systems, timber and steel frames among them). Without a type it lists the types with their ids and names and tells which is picked; with one (an id or a name, exact, else the first that contains it) it picks that type, as choosing it in the list does. ui_press cannot open a list, so this is how a type is chosen.",
+            json!({
+                "type": { "type": "string", "description": "The type to pick: its id or its name" },
+                "language": { "type": "string", "description": "The language of the names: en, nl, de or fr" }
+            }), &[], false),
+        tool("element_drawings", "The Modeller: write the element drawings of the framed systems (timber frames, steel frames, metal stud walls) into a folder, as the Element drawings button of the properties panel does: for every prefab unit the drawing of its frame with its dimensions and the list of its members, then one of every layer with boards or battens. Of every framed system, or of the selected ones with selection: true. Returns the files written.",
+            json!({
+                "folder": { "type": "string", "description": "The folder to write into (absolute); made when it is not there" },
+                "format": { "type": "string", "enum": ["pdf", "svg", "dxf", "dwg", "png", "ifccad"], "description": "pdf when left out" },
+                "selection": { "type": "boolean", "description": "Only the selected systems" },
+                "language": { "type": "string", "description": "The language of the material names: en, nl, de or fr" }
+            }), &["folder"], false),
         tool("open_drawing", "The project's own drawings: without a name, lists its floor plans, sections and elevations, and sheets; with one, opens that drawing in its tab (exact name, else the first that contains it).",
             json!({ "name": { "type": "string" } }), &[], false),
         tool("hover", "Rest the pointer on a pixel of the last viewport screenshot, as moving the mouse there does: a tool's preview runs to it, and elements grabbed with G follow it.",

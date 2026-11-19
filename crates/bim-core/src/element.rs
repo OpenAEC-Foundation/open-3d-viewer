@@ -91,6 +91,38 @@ pub struct Opening {
     pub sill: f64,
     pub width: f64,
     pub height: f64,
+    /// In a framed system: how this opening is framed where it is not as its system's type frames
+    /// openings. A wall's opening has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framing: Option<OpeningFraming>,
+}
+
+/// The framing of one opening where it departs from its system's type: a header of its own
+/// height, and more king studs or trimmers either side than one. What it leaves out is the type's.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct OpeningFraming {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kings: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trimmers: Option<u8>,
+    /// In a lying system (a floor): the opening is round, drilled, its `width` the diameter.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub round: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl Opening {
+    /// How many king studs and how many trimmers stand either side of it in a frame: one of each,
+    /// unless its own framing says two.
+    pub fn studs_beside(&self) -> (u8, u8) {
+        let own = self.framing.unwrap_or_default();
+        (own.kings.unwrap_or(1).clamp(1, 2), own.trimmers.unwrap_or(1).clamp(1, 2))
+    }
 }
 
 /// How a slab rises: from edge `edge` of its outline (the eave, where its top is at the slab's
@@ -281,6 +313,15 @@ pub struct SystemDef {
     pub system_type: Option<crate::system::SystemTypeDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub openings: Vec<Opening>,
+    /// A framed system made in prefab units: where the user wants a joint between two units,
+    /// along its line from its start. These come first; its type splits what lies between them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breaks: Vec<f64>,
+    /// A lying system (a floor, a ceiling) laid in an outline: the outline in plan. It is laid
+    /// along its line over the rectangle that holds the outline and cut to it; its openings are
+    /// measured from its line's start. Empty: the rectangle its line and its `height` make.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outline: Vec<DVec2>,
 }
 
 /// How a connection joins its members.
@@ -457,6 +498,7 @@ impl Shape {
             Shape::System(s) => {
                 s.start += flat;
                 s.end += flat;
+                s.outline.iter_mut().for_each(|p| *p += flat);
                 s.base += delta.z;
             }
             Shape::Connection(_) => {}
@@ -827,7 +869,7 @@ mod tests {
     }
 
     fn at(along: f64, sill: f64, width: f64, height: f64) -> Opening {
-        Opening { along, sill, width, height }
+        Opening { along, sill, width, height, framing: None }
     }
 
     /// The volume of a 5 × 3 m wall 0.2 thick with `area` square metres of its elevation taken out.
@@ -865,7 +907,7 @@ mod tests {
     #[test]
     fn openings_cut_the_wall_without_booleans() {
         let door = at(0.5, 0.0, 0.9, 2.1);
-        let window = Opening { along: 2.0, sill: 0.9, width: 1.5, height: 1.2 };
+        let window = Opening { along: 2.0, sill: 0.9, width: 1.5, height: 1.2, framing: None };
         let s = planar_solid(&wall(vec![door, window])).unwrap();
         let expected = (5.0 * 3.0 - 0.9 * 2.1 - 1.5 * 1.2) * 0.2;
         assert!((s.volume() - expected).abs() < 1e-12, "{} vs {expected}", s.volume());
@@ -984,7 +1026,7 @@ mod tests {
     #[test]
     fn openings_go_through_every_layer() {
         let mut w = cavity_wall();
-        w.openings = vec![Opening { along: 1.0, sill: 0.9, width: 1.2, height: 1.2 }];
+        w.openings = vec![Opening { along: 1.0, sill: 0.9, width: 1.2, height: 1.2, framing: None }];
         let volume: f64 = planar_parts(&w).unwrap().iter().map(|(_, s)| s.volume()).sum();
         assert!((volume - (5.0 * 3.0 - 1.2 * 1.2) * 0.32).abs() < 1e-9, "{volume}");
     }
@@ -1058,7 +1100,7 @@ mod tests {
 
     #[test]
     fn a_system_fills_its_domain_with_members_and_panels() {
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let parts = system_parts(&s).unwrap();
         let members = parts.iter().filter(|p| p.class == "IfcMember").count();
         let panels = parts.iter().filter(|p| p.class == "IfcPlate").count();
@@ -1089,7 +1131,7 @@ mod tests {
         let shape = Shape::Planar(PlanarDef {
             form: PlanarForm::Wall { start: DVec2::new(0.1, 0.2), end: DVec2::new(7.3, 0.2), base: 0.0, height: 2.7 },
             thickness: 0.214,
-            openings: vec![Opening { along: 1.0, sill: 0.0, width: 0.93, height: 2.315 }],
+            openings: vec![Opening { along: 1.0, sill: 0.0, width: 0.93, height: 2.315, framing: None }],
             build_up: None,
         });
         let e = Element::in_project(&grid, "Wall 1", Some("level-path".into()), shape);

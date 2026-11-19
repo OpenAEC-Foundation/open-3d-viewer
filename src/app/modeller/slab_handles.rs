@@ -1,5 +1,6 @@
 //! Shape handles of a floor: a selected slab has a grip on every edge of its outline, one on its
-//! top and one on its underside, without edit mode.
+//! top and one on its underside, without edit mode. A lying system (a floor of slabs, a ceiling of
+//! tiles) has the same grips on the four sides of its rectangle and on its top.
 //!
 //! - **An edge's grip** pushes that side in or out, along the edge's normal in plan. Its two
 //!   corners slide along the neighbouring edges, so those keep their direction; where a neighbour
@@ -8,6 +9,10 @@
 //!   underside and keeps the top. Either way the floor's thickness changes. A floor with a
 //!   build-up is as thick as its layers: its top's grip moves the whole floor and its underside
 //!   has none. A top that comes within [`LEVEL_SNAP`] of a level goes to it.
+//! - **A lying system** is as thick as its type makes it: its top's grip moves the whole system
+//!   and it has none on its underside. Its sides stay square to one another: the side on its line
+//!   takes the line along, the far side changes how far it reaches, the two ends make its line
+//!   longer or shorter. The kernel then divides it anew into its slabs or tiles.
 //! - **Where a grip shows.** Only where its way shows on the screen: seen from above the edges
 //!   have theirs, in a section the sides the view cuts and the top and underside. So the side of
 //!   a floor is dragged in a section as it is in the floor plan.
@@ -20,7 +25,7 @@ use crate::app::edit::{EditEvent, EditOverlay};
 use crate::app::grips::crossing;
 use crate::app::App;
 use bim_core::element::PlanarForm;
-use bim_core::{ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, PlanarDef, Shape, SystemDef};
 use glam::{DVec2, DVec3, Vec3};
 use iced::Color;
 
@@ -54,11 +59,22 @@ pub struct SlabDrag {
     pub along: f64,
 }
 
-/// The parts of a slab: its outline, its top, its thickness and whether a build-up gives that.
-/// `None` for anything else.
-fn slab(shape: &Shape) -> Option<(&[DVec2], f64, f64, bool)> {
+/// The rectangle of a lying system in plan, counter-clockwise from its start: along its line,
+/// then as far to the left of it as it reaches. `None` when its line has no length.
+pub(in crate::app) fn lying_outline(s: &SystemDef) -> Option<Vec<DVec2>> {
+    if !s.outline.is_empty() {
+        return Some(s.outline.clone());
+    }
+    let left = (s.end - s.start).try_normalize()?.perp() * s.height;
+    Some(vec![s.start, s.end, s.end + left, s.start + left])
+}
+
+/// The parts of a slab or of a lying system: its outline, its top, its thickness and whether
+/// that thickness is given (by a build-up, by a system's type). `None` for anything else.
+fn slab(shape: &Shape) -> Option<(Vec<DVec2>, f64, f64, bool)> {
     match shape {
-        Shape::Planar(p @ PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) if outline.len() >= 3 => Some((outline, *top, p.total_thickness(), p.build_up.is_some())),
+        Shape::Planar(p @ PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) if outline.len() >= 3 => Some((outline.clone(), *top, p.total_thickness(), p.build_up.is_some())),
+        Shape::System(s) if s.lies() => Some((lying_outline(s)?, s.base, s.member.y.max(s.panel), true)),
         _ => None,
     }
 }
@@ -80,6 +96,7 @@ fn normal(outline: &[DVec2], i: usize) -> Option<DVec2> {
 /// with its normal, the top's and the underside's middle with the vertical.
 fn handles(shape: &Shape) -> Vec<(SlabHandle, DVec3, DVec3)> {
     let Some((outline, top, thickness, built_up)) = slab(shape) else { return Vec::new() };
+    let outline = &outline[..];
     let n = outline.len();
     let mut out: Vec<(SlabHandle, DVec3, DVec3)> = (0..n)
         .filter_map(|i| {
@@ -95,11 +112,58 @@ fn handles(shape: &Shape) -> Vec<(SlabHandle, DVec3, DVec3)> {
     out
 }
 
-/// `shape` (a slab) with `handle` gone `along` its way: an edge out along its normal, the top or
-/// the underside up. `None` when `shape` is no slab or has no such edge.
+/// Lying system `s` with `handle` gone `along` its way: the side on its line takes the line
+/// along, the far side changes how far it reaches, an end makes the line longer or shorter, the
+/// top moves all of it. `None` when nothing of it would be left, or it has no such grip.
+fn pushed_lying(s: &SystemDef, handle: SlabHandle, along: f64) -> Option<SystemDef> {
+    let dir = (s.end - s.start).try_normalize()?;
+    let mut out = s.clone();
+    match handle {
+        SlabHandle::Edge(0) => {
+            out.start -= dir.perp() * along;
+            out.end -= dir.perp() * along;
+            out.height += along;
+        }
+        SlabHandle::Edge(1) => out.end += dir * along,
+        SlabHandle::Edge(2) => out.height += along,
+        SlabHandle::Edge(3) => out.start -= dir * along,
+        SlabHandle::Top => out.base += along,
+        SlabHandle::Edge(_) | SlabHandle::Under => return None,
+    }
+    ((out.end - out.start).dot(dir) > ROUND / 2.0 && out.height > ROUND / 2.0).then_some(out)
+}
+
+/// `shape` (a slab or a lying system) with `handle` gone `along` its way: an edge out along its
+/// normal, the top or the underside up. `None` when `shape` is neither or has no such edge, or
+/// when nothing of a lying system would be left.
 pub fn pushed(shape: &Shape, handle: SlabHandle, along: f64) -> Option<Shape> {
+    if let Shape::System(s) = shape {
+        if !s.lies() {
+            return None;
+        }
+        if s.outline.is_empty() {
+            return pushed_lying(s, handle, along).map(Shape::System);
+        }
+        // laid in an outline: an edge of the outline goes, as a slab's does
+        let mut out = s.clone();
+        match handle {
+            SlabHandle::Edge(i) => {
+                let (outline, n) = (&s.outline, s.outline.len());
+                if i >= n {
+                    return None;
+                }
+                let step = normal(outline, i)? * along;
+                let (j, before, after) = ((i + 1) % n, (i + n - 1) % n, (i + 2) % n);
+                let (a, b) = (outline[i] + step, outline[j] + step);
+                out.outline[i] = crossing(outline[before], outline[i], a, b).unwrap_or(a);
+                out.outline[j] = crossing(outline[j], outline[after], a, b).unwrap_or(b);
+            }
+            SlabHandle::Top => out.base += along,
+            SlabHandle::Under => return None,
+        }
+        return Some(Shape::System(out));
+    }
     let (outline, _, _, built_up) = slab(shape)?;
-    let outline = outline.to_vec();
     let mut out = shape.clone();
     let Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline: ring, top, .. }, thickness, .. }) = &mut out else { return None };
     match handle {
@@ -127,7 +191,8 @@ pub fn pushed(shape: &Shape, handle: SlabHandle, along: f64) -> Option<Shape> {
 }
 
 impl App {
-    /// The selected floor with grips: one slab alone, outside edit mode and with no tool on.
+    /// The selected floor with grips: one slab or lying system alone, outside edit mode and with
+    /// no tool on.
     fn slab_gripped(&self) -> Option<ElementId> {
         if self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
             return None;
@@ -191,8 +256,8 @@ impl App {
         let (outline, top, _, _) = slab(&shape)?;
         // the outline as the floor has it: its bowed edges as arcs
         let ring = match &shape {
-            Shape::Planar(PlanarDef { form: PlanarForm::Slab { bulges, .. }, .. }) => bim_core::element::bowed(outline, bulges),
-            _ => outline.to_vec(),
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { bulges, .. }, .. }) => bim_core::element::bowed(&outline, bulges),
+            _ => outline.clone(),
         };
         let shown = self.slab_handles_shown(&shape);
         Some(EditOverlay {
@@ -239,11 +304,18 @@ impl App {
                 let Some(drag) = self.modeller.slab_drag.clone() else { return false };
                 let shape = self.slab_dragged();
                 self.modeller.slab_drag = None;
-                let Some(shape) = shape.filter(|_| drag.along != 0.0) else { return true };
+                if drag.along == 0.0 {
+                    return true;
+                }
+                // dragged until nothing of it is left: no floor
+                let Some(shape) = shape else {
+                    self.modeller.refusal = Some(bim_core::Refusal::NotPositive);
+                    return true;
+                };
                 let Some(old) = self.modeller.model.get(drag.element).cloned() else { return true };
                 let grid = self.modeller.model.grid;
                 // an edge pushed through the far side turns the outline inside out: no floor
-                let turned = |s: &Shape| slab(s).map(|(outline, ..)| turn(outline) >= 0.0);
+                let turned = |s: &Shape| slab(s).map(|(outline, ..)| turn(&outline) >= 0.0);
                 let made = match turned(&shape) == turned(&old.shape_in_project(&grid)) {
                     true => self.modeller.model.replace(old.reshaped(&grid, shape)),
                     false => Err(bim_core::Refusal::SelfIntersecting),
@@ -281,7 +353,7 @@ mod tests {
 
     fn parts(shape: &Shape) -> (Vec<DVec2>, f64, f64) {
         let (outline, top, thickness, _) = slab(shape).unwrap();
-        (outline.to_vec(), top, thickness)
+        (outline, top, thickness)
     }
 
     /// A floor 4 × 3 m, its top at 3 m, 0.25 m thick, selected, seen from above.
@@ -406,5 +478,63 @@ mod tests {
         assert!(app.modeller.slab_drag.is_none());
         assert!(close(&now(&app, id).0, &RECT));
         assert_eq!(app.selected_modelled(), vec![id], "the floor stays selected");
+    }
+
+    /// A floor of hollow-core slabs, 3.6 m of line along y = 0 and 6 m wide, its top at 3 m,
+    /// selected, seen from above.
+    fn lying_selected() -> (App, ElementId) {
+        let mut app = modelling();
+        let library = bim_library::Library::starter();
+        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.6, 0.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.2, 6.0), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let floor = generic.laid(library.system_type("system.hollow-core-260").unwrap()).unwrap();
+        let id = app.add_element("Floor", None, Shape::System(floor)).unwrap();
+        app.keep_model_history();
+        app.select_modelled(id);
+        (app, id)
+    }
+
+    fn lying(app: &App, id: ElementId) -> SystemDef {
+        let Shape::System(s) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!("a system") };
+        s
+    }
+
+    #[test]
+    fn a_lying_system_has_a_grip_on_each_side_and_they_keep_it_a_rectangle() {
+        let (mut app, id) = lying_selected();
+        let shown: Vec<SlabHandle> = app.slab_grips(id).into_iter().map(|(h, _)| h).collect();
+        assert_eq!(shown, (0..4).map(SlabHandle::Edge).collect::<Vec<_>>(), "from above: its four sides");
+        let near = |a: DVec2, x: f64, y: f64| (a - DVec2::new(x, y)).length() < 1e-9;
+        // the far side: it reaches farther, its line stays
+        drag(&mut app, id, SlabHandle::Edge(2), DVec3::new(1.8, 7.2, 3.0));
+        let s = lying(&app, id);
+        assert!(near(s.start, 0.0, 0.0) && near(s.end, 3.6, 0.0) && (s.height - 7.2).abs() < 1e-9, "{s:?}");
+        // the side on its line: the line goes along, the far side stays
+        drag(&mut app, id, SlabHandle::Edge(0), DVec3::new(1.8, -1.2, 3.0));
+        let s = lying(&app, id);
+        assert!(near(s.start, 0.0, -1.2) && near(s.end, 3.6, -1.2) && (s.height - 8.4).abs() < 1e-9, "{s:?}");
+        // its ends: the line longer at either one
+        drag(&mut app, id, SlabHandle::Edge(1), DVec3::new(4.8, 3.0, 3.0));
+        drag(&mut app, id, SlabHandle::Edge(3), DVec3::new(-1.2, 3.0, 3.0));
+        let s = lying(&app, id);
+        assert!(near(s.start, -1.2, -1.2) && near(s.end, 4.8, -1.2) && (s.height - 8.4).abs() < 1e-9, "{s:?}");
+        assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
+        assert_eq!(app.selected_modelled(), vec![id], "it stays selected");
+    }
+
+    #[test]
+    fn a_lying_system_dragged_through_itself_is_refused_and_its_top_moves_all_of_it() {
+        let (mut app, id) = lying_selected();
+        let before = lying(&app, id);
+        drag(&mut app, id, SlabHandle::Edge(2), DVec3::new(1.8, -3.0, 3.0));
+        assert_eq!(app.modeller.refusal, Some(bim_core::Refusal::NotPositive));
+        assert_eq!(lying(&app, id), before, "nothing changed");
+        // in an elevation the top shows, and no underside: its type makes its thickness
+        app.select_modelled(id);
+        app.camera.set_preset(ViewPreset::Front);
+        let shown: Vec<SlabHandle> = app.slab_grips(id).into_iter().map(|(h, _)| h).collect();
+        assert!(shown.contains(&SlabHandle::Top) && !shown.contains(&SlabHandle::Under), "{shown:?}");
+        drag(&mut app, id, SlabHandle::Top, DVec3::new(1.8, 0.0, 3.5));
+        let s = lying(&app, id);
+        assert!((s.base - 3.5).abs() < 1e-9 && (s.height - 6.0).abs() < 1e-9, "{s:?}");
     }
 }

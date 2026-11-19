@@ -95,6 +95,24 @@ impl App {
         true
     }
 
+    /// Move or Copy of grid line `index` (of the modelled ones) by `by`: the line goes there, or
+    /// (`copy`) stays and a parallel one is made there under the next name of its kind. The line
+    /// moved or made is picked, so it can be copied on.
+    pub(in crate::app) fn shift_grid(&mut self, index: Option<usize>, by: DVec2, copy: bool) {
+        let Some(index) = index else { return };
+        let Some(line) = self.modeller.model.grids().get(index).cloned() else { return };
+        let (start, end) = (line.start + by, line.end + by);
+        let now = if copy {
+            self.modeller.model.add_grid(start, end).ok()
+        } else {
+            self.modeller.model.set_grid(index, bim_core::GridDef { start, end, ..line }).ok().map(|_| index)
+        };
+        let Some(now) = now else { return };
+        self.show_modelled();
+        let shown = self.shown_grid(now);
+        self.pick_grid(shown);
+    }
+
     /// The plus past the end of the picked grid line, and the series field it opens.
     pub(in crate::app) fn grid_series_overlay(&self, p: crate::theme::Palette, l: Language) -> Option<iced::Element<'_, crate::app::Message>> {
         use crate::app::Message;
@@ -331,6 +349,33 @@ mod tests {
 
     fn names(app: &crate::app::App) -> Vec<String> {
         app.model.as_ref().unwrap().project.grids.iter().map(|g| g.name.clone()).collect()
+    }
+
+    #[test]
+    fn copy_and_move_take_the_picked_grid_line_when_no_element_is_selected() {
+        use crate::app::transform::TransformKind;
+        let mut app = modelling();
+        app.add_grid_line(DVec2::new(2.0, -1.0), DVec2::new(2.0, 8.0)).unwrap();
+        app.show_modelled();
+        app.pick_grid(Some(0));
+        // CO: from one click to the next, the line stays and a parallel one gets the next number
+        let _ = app.update(Message::Transform(TransformKind::Copy));
+        // (a click near a grid line's end snaps to it, so the clicks are on the ends)
+        click(&mut app, 2.0, -1.0);
+        click(&mut app, 7.4, -1.0);
+        assert_eq!(names(&app), ["1", "2"]);
+        let grids = app.modeller.model.grids();
+        assert_eq!((grids[0].start, grids[1].start, grids[1].end), (DVec2::new(2.0, -1.0), DVec2::new(7.4, -1.0), DVec2::new(7.4, 8.0)));
+        assert_eq!(app.picked_grid, Some(1), "the copy is picked, to copy on");
+        // MV: the picked line itself goes, and keeps its name
+        let _ = app.update(Message::Transform(TransformKind::Move));
+        click(&mut app, 7.4, -1.0);
+        click(&mut app, 9.0, -1.0);
+        assert_eq!(names(&app), ["1", "2"]);
+        assert_eq!(app.modeller.model.grids()[1].start, DVec2::new(9.0, -1.0));
+        // a turn has nothing to take: no transform starts
+        let _ = app.update(Message::Transform(TransformKind::Rotate));
+        assert!(app.modeller.transform.is_none());
     }
 
     #[test]

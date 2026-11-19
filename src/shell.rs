@@ -1558,7 +1558,13 @@ impl Studio {
         list.push(
             Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
                 .icon(small("draw.text"), large("draw.text"))
-                .toggle(app.note_tool && annotatable)
+                .toggle(app.note_tool && !app.level_tool && annotatable)
+                .enabled(annotatable),
+        );
+        list.push(
+            Command::new("annotate.level", l.text("Peilmaat", "Level mark"), go(Message::LevelTool(!(app.note_tool && app.level_tool))))
+                .icon(small("resource.level"), large("resource.level"))
+                .toggle(app.note_tool && app.level_tool && annotatable)
                 .enabled(annotatable),
         );
         list.push(
@@ -2597,7 +2603,7 @@ impl Studio {
                 (l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
-                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
+                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), smalls(&["model.align"]), large("model.delete")]),
             ],
             // the project as its IFCX file has it: the ways to look at it, and saving it
             RibbonPage::Ifcx => vec![
@@ -2618,7 +2624,7 @@ impl Studio {
             RibbonPage::Draw => vec![
                 (l.text("Selectie", "Selection"), vec![large("model.select")]),
                 (l.text("Tekenen", "Draw"), vec![smalls(&["draw.line", "draw.polyline", "draw.rectangle"]), smalls(&["draw.circle", "draw.arc", "draw.ellipse"])]),
-                (l.text("Annoteren", "Annotate"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions", "annotate.text"])]),
+                (l.text("Annoteren", "Annotate"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions", "annotate.text", "annotate.level"])]),
                 (l.text("Wijzigen", "Modify"), vec![smalls(&["model.move", "model.copy", "model.rotate"]), smalls(&["model.mirror", "model.edit", "model.delete"])]),
                 (l.text("Bewerken", "Edit"), vec![smalls(&["edit.trim", "edit.extend", "edit.offset"]), smalls(&["edit.fillet", "edit.chamfer", "edit.explode"])]),
             ],

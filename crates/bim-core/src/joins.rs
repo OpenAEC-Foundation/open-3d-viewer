@@ -252,7 +252,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let mut shape = wall((0.0, 0.0), (5.0, 0.0), 0.2);
         let Shape::Planar(p) = &mut shape else { unreachable!() };
-        p.openings = vec![Opening { along: 4.5, sill: 0.0, width: 0.5, height: 2.1 }];
+        p.openings = vec![Opening { along: 4.5, sill: 0.0, width: 0.5, height: 2.1, framing: None }];
         let a = add(&mut m, shape);
         add(&mut m, wall((5.0, 0.0), (5.0, 4.0), 0.2));
         // the mitred footprint from 4.5 on is 0.4 | 0.6 long, 0.2 wide: 0.1 m², 2.1 high
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn a_joined_wall_keeps_its_openings() {
         let mut m = Model::new(TileGrid::default());
-        let window = Opening { along: 1.0, sill: 0.9, width: 1.2, height: 1.2 };
+        let window = Opening { along: 1.0, sill: 0.9, width: 1.2, height: 1.2, framing: None };
         let shape = Shape::Planar(PlanarDef {
             form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 },
             thickness: 0.2,

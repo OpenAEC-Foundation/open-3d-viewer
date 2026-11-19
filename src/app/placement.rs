@@ -375,6 +375,20 @@ impl App {
         }
     }
 
+    /// The types the active tool's Type list offers, each with its id (none: generic) and its name
+    /// in language `l`, and the id of the one picked. `None` while no tool with types is on. For
+    /// the remote control, which cannot open the list.
+    pub(crate) fn tool_types(&self, l: Language) -> Option<(Vec<(Option<String>, String)>, Option<String>)> {
+        let (tool, s) = self.tool_settings()?;
+        let choices = self.kinds(tool, l)?;
+        Some((choices.into_iter().map(|c| (c.id, c.name)).collect(), s.kind))
+    }
+
+    /// Picks type `id` for the active tool, as its Type list does.
+    pub(crate) fn pick_tool_type(&mut self, id: Option<String>) {
+        let _ = self.update(Message::Place(PlaceMessage::Kind(id)));
+    }
+
     /// The strip over the view while a tool is on: the tool's name, its type, its sizes, then
     /// what goes with the tool (location line, chain).
     pub(super) fn placement_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
@@ -405,7 +419,8 @@ impl App {
             let hint = if field == PlaceField::Height { l.text("tot niveau", "to level") } else { "" };
             let input = text_input(hint, &value).size(12).padding([2, 6]).width(68);
             let input = if fixed { input } else { input.on_input(move |t| Message::Place(PlaceMessage::Field(field, t))).on_submit(Message::Place(PlaceMessage::Done)) };
-            bar = bar.push(pair(label(name), input.width(Fill)));
+            let named = openaec_ui::design::a11y::node(input.width(Fill), openaec_ui::design::a11y::Node::new(openaec_ui::design::a11y::Role::TextField, name).value(value.clone()).disabled(fixed));
+            bar = bar.push(pair(label(name), named));
         }
         if tool == ModelTool::Slab {
             // a floor, a roof or a ceiling: made the same, classed and listed apart

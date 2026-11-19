@@ -214,7 +214,7 @@ impl SystemType {
     /// Its code by rule, from its group.
     pub fn rule_code(&self) -> &'static str {
         match self.group {
-            SystemGroup::CurtainWall | SystemGroup::TimberFrame | SystemGroup::Masonry => "21",
+            SystemGroup::CurtainWall | SystemGroup::TimberFrame | SystemGroup::SteelFrame | SystemGroup::Masonry => "21",
             SystemGroup::Frame => "31",
             SystemGroup::MetalStud => "22",
             SystemGroup::Cladding => "41",

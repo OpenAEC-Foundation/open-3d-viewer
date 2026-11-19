@@ -97,6 +97,7 @@ pub(super) fn system_group_label(group: SystemGroup, l: Language) -> &'static st
         SystemGroup::Frame => l.text("Kozijnen", "Frames"),
         SystemGroup::TimberFrame => l.text("Houtskeletbouw", "Timber frames"),
         SystemGroup::MetalStud => l.text("Metal stud", "Metal stud walls"),
+        SystemGroup::SteelFrame => l.text("Staalframebouw", "Steel frames"),
         SystemGroup::Masonry => l.text("Metselwerk", "Masonry"),
         SystemGroup::Cladding => l.text("Gevelbekleding", "Cladding"),
         SystemGroup::Floor => l.text("Vloeren", "Floors"),
@@ -504,6 +505,28 @@ pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &Syst
         if let Some(unit) = framing.unit {
             list = list.push(small(format!("{} {} mm", l.text("Prefab-elementen tot", "Prefab units up to"), mm(unit, l)), p));
         }
+        let lengths: Vec<String> = framing.lengths.iter().flatten().map(|u| mm(*u, l)).collect();
+        if !lengths.is_empty() {
+            list = list.push(small(format!("{} {} mm", l.text("Voorkeurslengtes", "Preferred lengths"), lengths.join(" · ")), p));
+        }
+        if let Some(shortest) = framing.shortest {
+            list = list.push(small(format!("{} {} mm", l.text("Kortste element", "Shortest unit"), mm(shortest, l)), p));
+        }
+        for band in framing.wide.iter().flatten() {
+            list = list.push(small(format!("{} {} mm: {} {} mm", l.text("Opening breder dan", "Opening wider than"), mm(band.over, l), l.text("latei", "header"), mm(band.high, l)), p));
+        }
+        let studs = match framing.studs {
+            bim_library::StudStart::Start => None,
+            bim_library::StudStart::End => Some(l.text("Stijlen vanaf het eind", "Studs from the end")),
+            bim_library::StudStart::Centre => Some(l.text("Stijlen vanuit het midden", "Studs from the middle")),
+        };
+        if let Some(studs) = studs {
+            list = list.push(small(studs.to_string(), p));
+        }
+        let c = framing.clearance;
+        if c != bim_library::Clearance::default() {
+            list = list.push(small(format!("{} {} · {} · {} mm", l.text("Stelruimte zijkant, boven, onder", "Clearance at the sides, top, bottom"), mm(c.sides, l), mm(c.top, l), mm(c.bottom, l)), p));
+        }
     }
     list = list.push(line(&t.panels.material, format!("{}: {} {}", l.text("Panelen", "Panels"), material(&t.panels.material), mm(t.panels.thickness, l))));
     for layer in &t.layers {
@@ -566,7 +589,7 @@ pub(super) fn system_look<'a>(p: Palette, lib: &Library, t: &SystemType, height:
 /// profiles, or joints.
 pub(super) fn member_word(group: SystemGroup, l: Language) -> &'static str {
     match group {
-        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud => l.text("Stijlen en regels", "Members"),
+        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame => l.text("Stijlen en regels", "Members"),
         SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
         SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
     }
@@ -596,9 +619,9 @@ fn elevation(t: &SystemType, lib: &Library, line: Color) -> Elevation {
     let rows = (0.9 / t.grid.row).ceil().clamp(1.0, 8.0);
     let (length, height) = (bays * t.grid.bay, rows * t.grid.row);
     let upright = SystemType { lying: None, layers: Vec::new(), ..t.clone() };
-    let face = SystemDef { start: glam::DVec2::ZERO, end: glam::DVec2::new(length, 0.0), base: 0.0, height, spacing: glam::DVec2::ONE, member: glam::DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new() };
+    let face = SystemDef { start: glam::DVec2::ZERO, end: glam::DVec2::new(length, 0.0), base: 0.0, height, spacing: glam::DVec2::ONE, member: glam::DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
     let typed = face.typed(&upright);
-    let window = bim_core::Opening { along: (length - 1.2) / 2.0, sill: 0.9, width: 1.2, height: 1.2 };
+    let window = bim_core::Opening { along: (length - 1.2) / 2.0, sill: 0.9, width: 1.2, height: 1.2, framing: None };
     let with_window = typed.clone().filter(|_| t.members.framing.is_some()).map(|s| SystemDef { openings: vec![window], ..s });
     // without the window where it does not fit
     let mut parts = with_window.and_then(|s| bim_core::system::parts(&s).ok()).or_else(|| typed.and_then(|s| bim_core::system::parts(&s).ok())).unwrap_or_default();
@@ -1090,7 +1113,7 @@ mod tests {
         use glam::DVec2;
         let mut app = App::default();
         app.new_model("Level 0");
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(2.4, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(2.4, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         assert_eq!(app.assignable_systems("system.timber-frame-140"), vec![id]);

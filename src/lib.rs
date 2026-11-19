@@ -25,6 +25,7 @@ pub mod document;
 mod dpi_drag;
 pub mod drawing;
 pub mod drawing2d;
+pub mod element_drawing;
 pub mod caps;
 pub mod cloud_color;
 pub mod fields;

@@ -1240,6 +1240,10 @@
     "Studs from the end": "Ständer vom Ende aus",
     "Studs from the middle": "Ständer von der Mitte aus",
     "Trimmers per side": "Wechselständer je Seite",
-    "Unit joint": "Elementstoß"
+    "Unit joint": "Elementstoß",
+    "Move by two points": "Mit zwei Punkten verschieben",
+    "Moving…": "Verschieben…",
+    "Pick model": "Modell wählen",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Klicken Sie einen Punkt des Modells und dann, wohin er soll (etwa wo sich zwei Achsen kreuzen). Esc bricht ab."
   }
 }

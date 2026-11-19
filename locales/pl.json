@@ -1240,6 +1240,10 @@
     "Studs from the end": "Słupki od końca",
     "Studs from the middle": "Słupki od środka",
     "Trimmers per side": "Słupki podporowe na stronę",
-    "Unit joint": "Styk elementów"
+    "Unit joint": "Styk elementów",
+    "Move by two points": "Przesuń o dwa punkty",
+    "Moving…": "Przesuwanie…",
+    "Pick model": "Wybierz model",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Kliknij punkt modelu, a potem miejsce, do którego ma trafić (np. przecięcie dwóch osi). Esc przerywa."
   }
 }

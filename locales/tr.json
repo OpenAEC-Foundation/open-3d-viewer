@@ -1240,6 +1240,10 @@
     "Studs from the end": "Dikmeler sondan",
     "Studs from the middle": "Dikmeler ortadan",
     "Trimmers per side": "Her yanda destek dikmesi",
-    "Unit joint": "Ünite derzi"
+    "Unit joint": "Ünite derzi",
+    "Move by two points": "İki noktayla taşı",
+    "Moving…": "Taşınıyor…",
+    "Pick model": "Modeli seç",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Modelin bir noktasını, sonra gideceği yeri tıklayın (örneğin iki aksın kesiştiği yer). Esc durdurur."
   }
 }

@@ -371,6 +371,13 @@ impl App {
                 call.answer(answer);
                 return task;
             }
+            // an issue made of clashes takes its picture after the answer
+            #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
+            "collab_clashes" if matches!(call.args.get("action").and_then(|v| v.as_str()), Some("issue" | "issues")) => {
+                let (answer, task) = self.collab_clash_issue_remote(&call.args);
+                call.answer(answer);
+                return task;
+            }
             "screenshot" => {
                 // a wrong save_to is refused before the capture
                 if let Some(Err(e)) = call.args.get("save_to").map(|p| shot_target(p, &call.args)) {

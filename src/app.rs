@@ -239,6 +239,9 @@ pub struct App {
     pub plane_placed: Option<SectionPlane>,
     /// Waiting for a click on a face to place the section plane.
     pub plane_picking: bool,
+    /// Moving a model by two points picked in the 3D view: the model, and how many measurements
+    /// there were when it began (the line drawn between the two points is not kept).
+    pub moving_model: Option<(usize, usize)>,
     /// The saved view last shown.
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
@@ -467,6 +470,8 @@ pub enum Message {
     ModelVisible(usize, bool),
     /// Pick a model in the explorer (its project data show); picked already: fold or unfold it.
     PickModel(usize),
+    /// Move the picked model by two points picked in the 3D view: from, then to.
+    MoveModelByPoints,
     /// Open or close a folder of views in the explorer (by its path).
     ToggleFolder(String),
     /// Order the views of the files in the explorer: see [`App::view_order`].
@@ -961,6 +966,7 @@ impl Default for App {
             plane: None,
             plane_placed: None,
             plane_picking: false,
+            moving_model: None,
             active_view: None,
             show_grids: true,
             picked_grid: None,
@@ -2699,7 +2705,20 @@ impl App {
                 self.explode = [0.0; 3];
                 self.update_explode();
             }
+            Message::MoveModelByPoints => {
+                if let Some(i) = self.picked_model.filter(|&i| i < self.models.len() && self.model.is_some()) {
+                    self.moving_model = Some((i, self.measure.results.len()));
+                    self.measure.picks.clear();
+                    self.measure.tool = Some(Tool::Line);
+                    self.plane_picking = false;
+                    if self.explode_on {
+                        self.explode_on = false;
+                        self.update_explode();
+                    }
+                }
+            }
             Message::Measure(tool) => {
+                self.moving_model = None;
                 self.measure.toggle(tool);
                 if self.measure.tool.is_some() {
                     self.plane_picking = false;
@@ -2766,6 +2785,12 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.moving_model.is_some() => {
+                self.moving_model = None;
+                self.measure.picks.clear();
+                self.measure.hover = None;
+                self.measure.tool = None;
+            }
             Message::Escape if self.modeller.grab.is_some() => {
                 self.drop_grab();
             }
@@ -2893,6 +2918,31 @@ impl App {
         self.context_menu = Some(Vec2::new(x, y));
     }
 
+    /// Moving a model by two points: once the line between them is drawn, the model moves by it
+    /// (its zero point along) and the line is not kept.
+    fn move_model_by_line(&mut self) {
+        let Some((i, before)) = self.moving_model else { return };
+        if self.measure.results.len() <= before {
+            return;
+        }
+        let line = match self.measure.results.pop() {
+            Some(crate::measure::Measurement::Mark { points, .. }) if points.len() == 2 => Some((points[0], points[1])),
+            _ => None,
+        };
+        self.moving_model = None;
+        self.measure.tool = None;
+        self.measure.picks.clear();
+        self.measure.hover = None;
+        let Some((from, to)) = line else { return };
+        // the scene's frame: the points are in the view's, which may be turned up
+        let by = self.model_matrix().inverse().transform_vector3(to - from).as_dvec3();
+        let Some(entry) = self.models.get_mut(i) else { return };
+        entry.placed.moved += by;
+        let name = entry.model.file_name();
+        self.replace_models();
+        self.status = Status::Loaded(format!("{name} moved by {:.3}, {:.3}, {:.3} m", by.x, by.y, by.z));
+    }
+
     /// Something is selected: elements or layers, or structural objects picked by a click.
     pub(crate) fn has_selection(&self) -> bool {
         !self.sel.is_empty() || !self.structural.selected.is_empty()
@@ -2934,6 +2984,10 @@ impl App {
             }
             let Some(hover) = self.measure.hover.clone() else { return };
             self.measure.click(&model, &hover, &self.model_matrix());
+            if self.moving_model.is_some() {
+                self.move_model_by_line();
+                return;
+            }
             // the measured element is also selected (shows its properties)
             if tool == Tool::Volume {
                 self.click(Some(pickable_at(&model, hover.layer, hover.triangle)), false);
@@ -4125,9 +4179,10 @@ impl App {
 
     /// The 3D viewport with its overlays; the shell's workspace.
     pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        // a picture for a report: the model alone, without the cube, the grids and the hints
+        // a picture for a report or an issue: the model alone, without the cube, the grids, the
+        // handles and the hints
         #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
-        let clean = self.collab.report_job.is_some();
+        let clean = self.collab.picturing();
         #[cfg(not(all(feature = "validator", not(target_arch = "wasm32"))))]
         let clean = false;
         let settings = RenderSettings {
@@ -4140,7 +4195,7 @@ impl App {
             section: self.active_section(),
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
-            grids: self.grids_shown() || (self.levels_3d && !clean),
+            grids: (self.grids_shown() || self.levels_3d) && !clean,
             ambient: self.ambient,
             point_size: self.point_size,
             cloud_depth: self.cloud_depth,
@@ -4224,7 +4279,7 @@ impl App {
                 .align_top(Fill)
         });
         // a view's tab keeps its box without the handles: its crop is set on the sheet
-        let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none()).map(|section| {
+        let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none() && !clean).map(|section| {
             canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {
@@ -5352,6 +5407,30 @@ mod tests {
             ..Layer::default()
         };
         Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn a_picked_model_moves_by_two_points_its_zero_point_along() {
+        let mut app = App::default();
+        app.set_model(named_square("architect", 7, 0.0));
+        app.add_model(named_square("structure", 8, 5.0));
+        let _ = app.update(Message::PickModel(1));
+        let _ = app.update(Message::MoveModelByPoints);
+        assert_eq!(app.moving_model, Some((1, 0)));
+        assert_eq!(app.measure.tool, Some(Tool::Line));
+        // the line from a corner of the second square to the first square's corner
+        app.measure.results.push(crate::measure::Measurement::Mark { kind: crate::measure::MarkKind::Line, points: vec![Vec3::new(5.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 0.0)] });
+        app.move_model_by_line();
+        assert_eq!(app.models[1].placed.moved, glam::DVec3::new(-5.0, 0.0, 0.0));
+        assert!(app.moving_model.is_none() && app.measure.tool.is_none() && app.measure.results.is_empty(), "the line is not kept");
+        let scene = app.model.clone().unwrap();
+        assert_eq!(scene.layers[1].positions[0], scene.layers[0].positions[0], "the squares lie on each other");
+        let Status::Loaded(said) = &app.status else { panic!("{:?}", app.status) };
+        assert!(said.contains("structure.rvt moved by -5.000"), "{said}");
+        // Esc stops a move begun
+        let _ = app.update(Message::MoveModelByPoints);
+        let _ = app.update(Message::Escape);
+        assert!(app.moving_model.is_none() && app.measure.tool.is_none());
     }
 
     #[test]

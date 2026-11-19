@@ -1240,6 +1240,10 @@
     "Studs from the end": "Montantes desde el final",
     "Studs from the middle": "Montantes desde el centro",
     "Trimmers per side": "Montantes de apoyo por lado",
-    "Unit joint": "Junta de módulo"
+    "Unit joint": "Junta de módulo",
+    "Move by two points": "Mover con dos puntos",
+    "Moving…": "Moviendo…",
+    "Pick model": "Elegir modelo",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Haga clic en un punto del modelo y luego donde debe ir (por ejemplo, donde se cruzan dos ejes). Esc cancela."
   }
 }

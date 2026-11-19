@@ -1240,6 +1240,10 @@
     "Studs from the end": "Reglar från slutet",
     "Studs from the middle": "Reglar från mitten",
     "Trimmers per side": "Avväxlingsreglar per sida",
-    "Unit joint": "Elementskarv"
+    "Unit joint": "Elementskarv",
+    "Move by two points": "Flytta med två punkter",
+    "Moving…": "Flyttar…",
+    "Pick model": "Välj modell",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Klicka på en punkt i modellen och sedan dit den ska (till exempel där två axlar korsas). Esc avbryter."
   }
 }

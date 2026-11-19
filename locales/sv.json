@@ -1668,6 +1668,13 @@
     "Click the line to extend to · Esc: stop": "Klicka på linjen att förlänga till · Esc: avsluta",
     "Click the line that is extended · Esc: start again": "Klicka på linjen som ska förlängas · Esc: börja om",
     "Click the first line, on the side that stays · Esc: stop": "Klicka på den första linjen, på den sida som blir kvar · Esc: avsluta",
-    "Click the second line, on the side that stays · Esc: start again": "Klicka på den andra linjen, på den sida som blir kvar · Esc: börja om"
+    "Click the second line, on the side that stays · Esc: start again": "Klicka på den andra linjen, på den sida som blir kvar · Esc: börja om",
+    "Depth (mm)": "Djup (mm)",
+    "Underside above floor (mm)": "Underkant över golv (mm)",
+    "IFC predefined type": "Fördefinierad IFC-typ",
+    "+ Property": "+ Egenskap",
+    "Remove property": "Ta bort egenskap",
+    "value": "värde",
+    "+ Object": "+ Objekt"
   }
 }

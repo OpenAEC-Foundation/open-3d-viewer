@@ -82,6 +82,7 @@ pub fn recode(library: &mut Library, from: &str, to: &str) -> Result<(), Library
     next.buildups.iter_mut().for_each(|b| own(&mut b.code));
     next.linear_types.iter_mut().for_each(|t| own(&mut t.code));
     next.system_types.iter_mut().for_each(|t| own(&mut t.code));
+    next.object_types.iter_mut().for_each(|o| own(&mut o.code));
     *library = next;
     Ok(())
 }
@@ -98,7 +99,7 @@ pub fn remove(library: &mut Library, code: &str) -> Result<(), usize> {
 
 /// The names of the types that have `code`, as the library lists them.
 pub fn type_names(library: &Library, code: &str, lang: Lang) -> Vec<String> {
-    library.coded(code, false).into_iter().filter_map(|id| library.name(id, lang).or_else(|| library.linear_name(id, lang)).or_else(|| library.system_name(id, lang))).collect()
+    library.coded(code, false).into_iter().filter_map(|id| library.name(id, lang).or_else(|| library.linear_name(id, lang)).or_else(|| library.system_name(id, lang)).or_else(|| library.object_type(id).map(|o| o.name(lang).to_string()))).collect()
 }
 
 fn name_mut(code: &mut Code, lang: Lang) -> &mut String {

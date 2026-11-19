@@ -560,6 +560,8 @@ impl App {
         let code = &mut self.code_view;
         (code.draft, code.refused, code.in_use) = (None, None, None);
         code.picked = code.picked.take().filter(|of| library.code(of).is_some());
+        // (an object picked of another library stays picked; one that is gone shows the hint)
+        (self.object_view.draft, self.object_view.refused) = (None, None);
         // (a layer that is gone shows no fields: the face does)
         let layers = system.picked.as_deref().and_then(|id| library.system_type(id)).map_or(0, |t| t.layers.len());
         if matches!(system.part, super::systems::Part::Layer(k) if k >= layers) {
@@ -988,7 +990,13 @@ impl App {
                 tiles
             }
             (Category::DrawingSets, Some(_), Some(library)) => self.drawing_set_tiles(p, l, library),
-            (Category::Objects(group), Some(_), Some(library)) => self.object_tiles(p, l, library, group),
+            (Category::Objects(group), Some(_), Some(library)) => {
+                let mut tiles = self.object_tiles(p, l, library, group);
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Object", "+ Object"), Message::Object(super::objects::ObjectMessage::Add(group))));
+                }
+                tiles
+            }
             (Category::Lod(lod), Some(_), Some(library)) => self.lod_tiles(p, l, library, lod),
             (Category::Online, _, _) => self.online_tiles(p, l),
             (Category::ViewTemplates, Some(_), Some(library)) => self.view_template_tiles(p, l, library),

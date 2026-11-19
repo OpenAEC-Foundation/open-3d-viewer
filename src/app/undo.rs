@@ -30,6 +30,8 @@ pub(super) enum Typing {
     MaterialGrade(String),
     /// The name of a code in a language.
     CodeName(String, Lang),
+    /// A field of an object (its id).
+    Object(String, super::objects::Field),
     /// The name typed for a build-up (its id).
     BuildUpName(String),
     /// The name typed for a linear type (its id).
@@ -47,6 +49,7 @@ impl App {
             Message::House(super::house::HouseMessage::Typed(field, _, _)) => Some(Typing::House(*field)),
             Message::Material(MaterialMessage::Graded(_)) => Some(Typing::MaterialGrade(self.material_view.picked.clone()?)),
             Message::Code(super::codes::CodeMessage::Named(lang, _)) => Some(Typing::CodeName(self.code_view.picked.clone()?, *lang)),
+            Message::Object(super::objects::ObjectMessage::Typed(field, _)) => Some(Typing::Object(self.object_view.picked.clone()?, *field)),
             Message::BuildUp(BuildUpMessage::Named(_)) => Some(Typing::BuildUpName(self.buildup_view.picked.clone()?)),
             Message::Profile(ProfileMessage::Named(_)) => Some(Typing::ProfileName(self.profile_view.picked.clone()?)),
             Message::Standard(StandardMessage::Typed(field, _, lang)) => Some(Typing::Standard(self.standard_view.picked.clone()?, *field, *lang)),

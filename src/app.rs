@@ -34,6 +34,7 @@ mod drawing_kinds;
 mod solid_view;
 mod drafts;
 pub mod drawn_edit;
+mod element_drawings;
 pub mod drawn_props;
 mod edit;
 mod element_props;
@@ -921,6 +922,17 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// Give an opening (its index) of the selected timber frame its type's framing again.
+    ResetOpeningFraming(usize),
+    /// Ask for a joint between two prefab units of the selected timber frame, and take one (its
+    /// index) back.
+    AddBreak,
+    RemoveBreak(usize),
+    /// An opening more in the selected floor system: rectangular, or round.
+    AddRecess(bool),
+    /// The element drawings of the selected system: ask for a folder, then write them there.
+    ElementDrawings(openaec_ui::Language),
+    ElementDrawingsTo(Option<std::path::PathBuf>, openaec_ui::Language),
     /// The rows of an element's top in the Modeller's properties.
     Top(modeller::tops::TopMessage),
     /// A row of the Modeller's model explorer.
@@ -2220,6 +2232,16 @@ impl App {
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
+            Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),
+            Message::AddBreak => self.add_break(),
+            Message::AddRecess(round) => self.add_recess(round),
+            Message::RemoveBreak(index) => self.remove_break(index),
+            Message::ElementDrawings(l) => return self.element_drawings_dialog(l),
+            Message::ElementDrawingsTo(folder, l) => {
+                if let Some(folder) = folder {
+                    self.element_drawings_to(&folder, l);
+                }
+            }
             Message::JoinKind(kind) => self.set_join_kind(kind),
             Message::SwapJoin => self.swap_join(),
             Message::PickJoin(id) => self.select_modelled(id),

@@ -203,6 +203,30 @@ pub fn transformed(shape: &Shape, map: &Map) -> Option<Shape> {
                 *top += map.lift();
             }
         },
+        // a lying system keeps its line as it is turned and mirrored: its width and its
+        // openings are measured to its left, so mirrored it is laid from its far side
+        Shape::System(s) if s.lies() => {
+            let (a, b) = (map.plan(s.start), map.plan(s.end));
+            if map.flips() {
+                if s.outline.is_empty() {
+                    if let Some(dir) = (b - a).try_normalize() {
+                        // the rectangle now lies to the right of its line: its outline says where
+                        let across = -dir.perp() * s.height;
+                        s.outline = vec![a, b, b + across, a + across];
+                    }
+                } else {
+                    s.outline.iter_mut().for_each(|q| *q = map.plan(*q));
+                    s.outline.reverse();
+                }
+                for o in s.openings.iter_mut() {
+                    o.sill = -o.sill - if o.framing.is_some_and(|f| f.round) { o.width } else { o.height };
+                }
+            } else {
+                s.outline.iter_mut().for_each(|q| *q = map.plan(*q));
+            }
+            (s.start, s.end) = (a, b);
+            s.base += map.lift();
+        }
         Shape::System(s) => {
             (s.start, s.end) = run(map, s.start, s.end, &mut s.openings);
             s.base += map.lift();
@@ -497,7 +521,7 @@ mod tests {
         let mut e = app.modeller.model.get(id).cloned().unwrap();
         let mut shape = e.shape_in_project(&grid);
         if let Shape::Planar(p) = &mut shape {
-            p.openings.push(Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1 });
+            p.openings.push(Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1, framing: None });
         }
         e = e.reshaped(&grid, shape);
         app.modeller.model.replace(e).unwrap();

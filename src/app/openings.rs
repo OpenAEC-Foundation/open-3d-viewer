@@ -93,7 +93,7 @@ impl App {
             }
             let s = (o + dir * t).x;
             let placed = ((s - w / 2.0).clamp(JAMB, (length - w - JAMB).max(JAMB)) / ROUND).round() * ROUND;
-            let aim = Aim { wall: e.id, opening: Opening { along: placed, sill, width: w, height: h }, hit: a + d * t, start, along, across, base, thickness };
+            let aim = Aim { wall: e.id, opening: Opening { along: placed, sill, width: w, height: h, framing: None }, hit: a + d * t, start, along, across, base, thickness };
             best = Some((t, aim));
         }
         best.map(|(_, aim)| aim)
@@ -224,7 +224,7 @@ mod tests {
         app.set_model_tool(Some((ModelTool::Window, "Window")));
         click(&mut app, 4.5, -0.05);
         let placed = openings(&app);
-        let expected = [Opening { along: 1.55, sill: DOOR.2, width: DOOR.0, height: DOOR.1 }, Opening { along: 3.9, sill: WINDOW.2, width: WINDOW.0, height: WINDOW.1 }];
+        let expected = [Opening { along: 1.55, sill: DOOR.2, width: DOOR.0, height: DOOR.1, framing: None }, Opening { along: 3.9, sill: WINDOW.2, width: WINDOW.0, height: WINDOW.1, framing: None }];
         assert_eq!(placed.len(), 2);
         for (o, e) in placed.iter().zip(&expected) {
             assert!((o.along - e.along).abs() < 1e-9 && (o.sill, o.width, o.height) == (e.sill, e.width, e.height), "{o:?}");
@@ -245,7 +245,7 @@ mod tests {
         app.camera.ortho = true;
         app.camera.target = Vec3::ZERO;
         app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         let framed = |app: &App| app.modeller.model.openings_of(id);
         // a curtain wall is no wall to put a door in: the door placed there stands free
@@ -263,7 +263,7 @@ mod tests {
         app.set_model_tool(Some((ModelTool::Window, "Window")));
         click(&mut app, 4.5, 0.0);
         let placed = framed(&app);
-        let expected = [Opening { along: 1.55, sill: DOOR.2, width: DOOR.0, height: DOOR.1 }, Opening { along: 3.9, sill: WINDOW.2, width: WINDOW.0, height: WINDOW.1 }];
+        let expected = [Opening { along: 1.55, sill: DOOR.2, width: DOOR.0, height: DOOR.1, framing: None }, Opening { along: 3.9, sill: WINDOW.2, width: WINDOW.0, height: WINDOW.1, framing: None }];
         assert_eq!(placed.len(), 2, "{placed:?}");
         for (o, e) in placed.iter().zip(&expected) {
             assert!((o.along - e.along).abs() < 1e-9 && (o.sill, o.width, o.height) == (e.sill, e.width, e.height), "{o:?}");
@@ -283,7 +283,7 @@ mod tests {
         app.camera.ortho = true;
         app.camera.target = Vec3::ZERO;
         app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         for (kind, boards) in [("system.metal-stud-75-1", 2), ("system.metal-stud-100-2", 4)] {

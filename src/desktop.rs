@@ -16,6 +16,8 @@
 //!   open-3d-viewer FILE --save-as OUT.ifc [--schema IFC4X3]   (convert without a window)
 //!   open-3d-viewer FILE --build-film OUT.mp4|OUT.usda [--film-seconds 20]   (how it is built; .mp4 needs Blender)
 //!   open-3d-viewer FILE --render OUT.png   (a still rendered by Blender)
+//!   open-3d-viewer FILE.ifcx --element-drawings FOLDER [--drawing-format pdf|dxf|dwg|svg|png|ifccad]
+//!                  (a drawing of every prefab unit of the project's timber frames, without a window)
 //!   open-3d-viewer FILE.ifc --check OUT.html|json|csv [--ids FILE.ids] [--rules NAME] [--issues OUT.bcf]
 //!                  (the BIM Validator without a window: the report, and an issue per failed rule;
 //!                  ends with code 1 when a rule failed)
@@ -105,6 +107,10 @@ struct Args {
     /// `--render`: a still of the model, rendered by Blender.
     render: Option<PathBuf>,
     film_seconds: Option<f32>,
+    /// `--element-drawings`: the folder to write the drawings of the timber frames' prefab units
+    /// into, and the format to write them in (PDF unless it says otherwise).
+    element_drawings: Option<PathBuf>,
+    drawing_format: Option<String>,
     /// `--check`: the report to write; with the rule set to check on and the BCF file for the
     /// issues of what failed.
     check: Option<PathBuf>,
@@ -213,6 +219,8 @@ fn parse_args() -> Result<Args, String> {
             "--build-film" => args.build_film = Some(PathBuf::from(value()?)),
             "--render" => args.render = Some(PathBuf::from(value()?)),
             "--film-seconds" => args.film_seconds = Some(value()?.parse().map_err(|_| "--film-seconds N")?),
+            "--element-drawings" => args.element_drawings = Some(PathBuf::from(value()?)),
+            "--drawing-format" => args.drawing_format = Some(value()?),
             "--check" => args.check = Some(PathBuf::from(value()?)),
             "--rules" => args.rules = Some(value()?),
             "--issues" => args.issues = Some(PathBuf::from(value()?)),
@@ -274,6 +282,8 @@ pub fn main_as(edition: crate::product::Edition) {
         build_film(&args, out)
     } else if let Some(out) = &args.render {
         render_still(&args, out)
+    } else if let Some(out) = &args.element_drawings {
+        element_drawings(&args, out)
     } else if let Some(out) = &args.check {
         check(&args, out)
     } else if let Some(out) = &args.screenshot {
@@ -338,6 +348,21 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let start = web_time::Instant::now();
     export::save_schema(&model, &crate::document::Document::from_model(&model), out, true, args.schema)?;
     println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
+}
+
+/// Writes a drawing of every prefab unit of the timber frames of project FILE into folder `out`,
+/// without a window: the element drawings a workshop makes the units from.
+fn element_drawings(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    use export::drawing::DrawingFormat;
+    let file = args.file.as_ref().ok_or("--element-drawings needs a FILE: a project with timber frames")?;
+    let wanted = args.drawing_format.as_deref().unwrap_or("pdf").to_ascii_lowercase();
+    let format = DrawingFormat::ALL.into_iter().find(|f| f.extension() == wanted).ok_or_else(|| format!("--drawing-format pdf|dxf|dwg|svg|png|ifccad, not {wanted}"))?;
+    let mut app = App::default();
+    app.set_model(Arc::new(loaders::load(file)?));
+    let start = web_time::Instant::now();
+    let w = app.write_element_drawings(out, format, &[], args.language.unwrap_or(Language::English))?;
+    println!("{} element drawings of {} framed systems -> {} in {:.2} s", w.drawings, w.systems, out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }
 

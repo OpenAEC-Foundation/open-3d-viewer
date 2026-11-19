@@ -130,6 +130,8 @@ fem-read = { git = "https://github.com/OpenAEC-Foundation/fem-dll", rev = "a511e
 # SAF, the open Structural Analysis Format (.xlsx), through the public saf-dll library; it shares
 # fem-model with fem-read, so both pin the same fem-dll revision
 saf-read = { git = "https://github.com/OpenAEC-Foundation/saf-dll", rev = "7578aaad7346f861656a555aa7517e39d7110286" }
+# 3MF (.3mf) with its extensions and slicer project files, through the 3mf-dll library; pure Rust on bytes
+threemf-read = { git = "https://github.com/OpenAEC-Foundation/3mf-dll", rev = "d2cbf02a606aa3f7d4956d5fcd2cc5e79a649c27" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
 vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
 # SolidWorks parts and assemblies (.sldprt, .sldasm) through the private solidworks-dll library; pure Rust on bytes

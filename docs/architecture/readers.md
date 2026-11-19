@@ -81,7 +81,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 |---|---:|---|---|
 | VRML and X3D (`.wrl`, `.x3d`) | 1,024 | in the app | New repository. |
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
-| PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
+| PCD, PTX, XYZ, ASC grid, OFF, AMF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | 3D Tiles (`tileset.json`, `.b3dm`, `.i3dm`, `.pnts`, `.cmpt`) and quantized-mesh terrain (`.terrain`) | 72 (`tiles.rs`) | `3d-tiles-dll`: `tiles-core`, `tiles-model`, `tiles-read` | Laid out as the model from the start (2026-11-18). |
 | Compressed glTF (Draco, meshopt, mesh quantization, KTX2/Basis) | glue in `gltf.rs` | `3d-tiles-dll`: `tiles-gltf` | Decodes into plain glTF before the published glTF crate reads it; 3D Tiles content uses it too. |
 | Smithsonian Voyager scene (`.svx.json`) | 114 (`svx.rs`) | `svx-dll`: `svx-model`, `svx-read` | Laid out as the model from the start (2026-11-18). Both adapters place the glTF the readers hand over through `placed.rs` and the glTF adapter. |
@@ -91,6 +91,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | FEM input deck (`.inp`), FEM bulk data (`.bdf`, `.nas`, `.dat`), finite element mesh (`.msh`), structural analysis text model (`.s2k`, `.$2k`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`) | Done: the reader returns a mesh and an analysis model of its own; the adapter copies the analysis model into `bim-structural`'s. |
 | SAF (`.xlsx`) | adapter `fem.rs` | `saf-dll` (`saf-read`), into `fem-model`'s analysis model | Done. `saf-read` pins the same `fem-dll` revision as the app, so both share one model crate. |
 | COPC (`.copc.laz`) | in `las.rs` | the `las` crate's COPC reader (MIT) | Adapter: the app picks which octree levels to read for its point limit, the crate reads them. Added 2026-11-18. |
+| 3MF (`.3mf`) | 30 | `3mf-dll` (`threemf-model`, `threemf-read`) | Moved; the adapter only maps. |
 
 ## Moved so far
 
@@ -106,6 +107,10 @@ Together this is some 30,000 lines of format knowledge in the app.
 - 2026-11-18, Revit: how the browser orders the views (`rvt_export::browser`) and the typefaces
   of the texts (`rvt_read::fonts`; 429 lines and three tests left the app, which copies the
   reader's `Organization` and `FontFace` into its `ViewOrder` and `Face`).
+
+- 2026-11-18, 3MF: the whole reader (`src/loaders/threemf.rs`, 347 lines and three tests) moved
+  unchanged into `3mf-dll`, which then gained the materials, beam lattice and slice extensions and
+  the project files of slicers.
 
 ## Order
 

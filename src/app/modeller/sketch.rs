@@ -344,13 +344,25 @@ impl Sketch {
 impl App {
     /// Whether `id` is a floor whose outline Tab opens as a sketch.
     pub(in crate::app) fn sketchable(&self, id: ElementId) -> bool {
-        self.modeller.model.get(id).is_some_and(|e| matches!(e.shape, Shape::Planar(PlanarDef { form: PlanarForm::Slab { .. }, .. })))
+        self.modeller.model.get(id).is_some_and(|e| match &e.shape {
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { .. }, .. }) => true,
+            // a floor or a ceiling made as a system is laid in its outline
+            Shape::System(s) => s.lies(),
+            _ => false,
+        })
     }
 
     /// Opens the sketch of floor `element`: its outline and its openings as lines.
     pub(in crate::app) fn open_sketch(&mut self, element: ElementId) {
         let Some(shape) = self.modeller.model.get(element).map(|e| e.shape_in_project(&self.modeller.model.grid)) else { return };
-        let Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, bulges, .. }, .. }) = shape else { return };
+        let (outline, holes, top, bulges) = match shape {
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, bulges, .. }, .. }) => (outline, holes, top, bulges),
+            Shape::System(s) if s.lies() => match super::slab_handles::lying_outline(&s) {
+                Some(outline) => (outline, Vec::new(), s.base, Vec::new()),
+                None => return,
+            },
+            _ => return,
+        };
         let n = outline.len();
         let mut segments: Vec<Segment> = (0..n).map(|i| Segment { a: outline[i], b: outline[(i + 1) % n], bulge: bulges.get(i).copied().unwrap_or(0.0) }).collect();
         for hole in &holes {
@@ -498,6 +510,21 @@ impl App {
         let Some(largest) = (0..rings.len()).max_by(|a, b| size(&rings[*a]).total_cmp(&size(&rings[*b]))) else { return };
         let (corners, bows) = apart(&rings.remove(largest));
         let mut shape = old.shape_in_project(&grid);
+        // a lying system takes the outline, its bows as chords; loops inside it are not its
+        // openings (those are its own, in its properties)
+        if let Shape::System(s) = &mut shape {
+            s.outline = bowed(&corners, &bows);
+            match self.modeller.model.replace(old.reshaped(&grid, shape)) {
+                Ok(()) => {
+                    self.modeller.sketch = None;
+                    self.modeller.refusal = None;
+                    self.show_modelled();
+                    self.select_modelled(id);
+                }
+                Err(refusal) => self.modeller.refusal = Some(refusal),
+            }
+            return;
+        }
         let Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, bulges, .. }, .. }) = &mut shape else { return };
         *outline = corners;
         *bulges = if bows.iter().any(|b| *b != 0.0) { bows } else { Vec::new() };

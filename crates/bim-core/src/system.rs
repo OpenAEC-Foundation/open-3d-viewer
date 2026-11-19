@@ -52,13 +52,14 @@ use crate::join::{self, JoinKind, Member, MemberEnd};
 use crate::profile::Profile;
 use crate::solid::{Axes, Plane, Solid};
 use crate::{positive, Refusal, LINEAR_TOLERANCE};
-use bim_library::system::{Corner, Framing, Gauge, Pattern, StudStart, SystemLayer, SystemType};
+use bim_library::system::{Corner, Framing, Gauge, Pattern, Trimmer, StudStart, SystemLayer, SystemType};
 use bim_library::Library;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use std::iter::once;
 
 mod corner;
+mod lying;
 mod tee;
 
 pub(crate) use corner::{connection, connection_node, joined_parts};
@@ -92,6 +93,9 @@ pub struct SystemTypeDef {
     /// to the left of its line, its `base` the height of its top.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub lying: bool,
+    /// A floor of slabs: how the slabs an opening cuts through are carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trimmer: Option<Trimmer>,
 }
 
 fn is_upright(lying: &bool) -> bool {
@@ -140,6 +144,7 @@ impl SystemDef {
             framing: t.members.framing,
             gauge: t.members.gauge,
             lying: t.lying.is_some(),
+            trimmer: t.trimmer,
         });
         self
     }
@@ -414,16 +419,28 @@ pub fn parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
 
 /// The members and panels of system `s`, its faces ending as `ends` say.
 fn build(s: &SystemDef, ends: &Ends) -> Result<Vec<PartSolid>, Refusal> {
+    // a lying system in an outline is laid over the rectangle that holds it and cut to it
+    let bounded = lying::bounded(s)?;
+    let (s, outline) = match &bounded {
+        Some((rectangle, outline)) => (rectangle, Some(outline.as_slice())),
+        None => (s, None),
+    };
     let plan = plan(s, ends)?;
     // a standing face runs up; a lying one runs level to the left of its line, its layers stacked
-    // upwards, its top at the system's base
-    let (up, sunk) = if s.lies() { (DVec3::Z.cross(plan.dir), s.member.y.max(s.panel) / 2.0) } else { (DVec3::Z, 0.0) };
+    // upwards, the top of the highest at the system's base
+    let own = s.member.y.max(s.panel) / 2.0;
+    let above = s.system_type.as_ref().map_or(0.0, |t| t.layers.iter().map(|l| l.offset + l.members.as_ref().map_or(0.0, |m| m.depth).max(l.panels.thickness) / 2.0).fold(own, f64::max));
+    let (up, sunk) = if s.lies() { (DVec3::Z.cross(plan.dir), above) } else { (DVec3::Z, 0.0) };
     let right = plan.dir.cross(up);
     let mut parts = Vec::new();
     for (f, span) in plan.faces.iter().zip(&plan.spans) {
         let origin = s.start.extend(s.base - sunk) + plan.dir * span.lo;
         let line = Line { origin, dir: plan.dir, up, right, length: span.hi - span.lo, height: s.height, phase: span.phase, lead: span.lead, back: span.back, gaps: span.gaps.clone(), posts: span.posts.clone() };
         line.generate(f, &span.openings, &span.joints, &mut parts)?;
+    }
+    if s.lies() {
+        let length = plan.spans[0].hi - plan.spans[0].lo;
+        return lying::finish(s, &plan.faces[0], length, s.base - sunk + own, outline, parts);
     }
     Ok(parts)
 }
@@ -442,12 +459,13 @@ fn plan<'a>(s: &'a SystemDef, ends: &Ends) -> Result<Plan<'a>, Refusal> {
         return Err(Refusal::ZeroLength);
     }
     let faces = faces(s);
-    // openings are framed: by the system's own face and by every face with members
-    if !s.openings.is_empty() && faces.iter().any(|f| f.member.is_some() && f.framing.is_none()) {
+    // openings are framed: by the system's own face and by every face with members; a lying
+    // system is cut where they are
+    if !s.lies() && !s.openings.is_empty() && faces.iter().any(|f| f.member.is_some() && f.framing.is_none()) {
         return Err(Refusal::OpeningNotFramed);
     }
     let at = |ends: &[FaceEnd], i: usize| ends.get(i).copied().unwrap_or_default();
-    let rough = rough_openings(s, &faces);
+    let rough = if s.lies() { lying::cut(s, &faces[0], length)? } else { rough_openings(s, &faces) };
     let mut spans: Vec<Span> = Vec::with_capacity(faces.len());
     for (i, f) in faces.iter().enumerate() {
         let (start, end) = (at(&ends.start, i), at(&ends.end, i));
@@ -1236,7 +1254,7 @@ mod tests {
     use super::*;
 
     fn system(length: f64, height: f64) -> SystemDef {
-        SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() }
+        SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() }
     }
 
     fn typed(length: f64, height: f64, id: &str) -> SystemDef {
@@ -1548,7 +1566,7 @@ mod tests {
     fn an_opening_can_have_a_framing_of_its_own() {
         use crate::element::OpeningFraming;
         let (w, d) = (0.038, 0.14);
-        let own = OpeningFraming { header: Some(0.3), kings: Some(2), trimmers: Some(2) };
+        let own = OpeningFraming { header: Some(0.3), kings: Some(2), trimmers: Some(2), round: false };
         let special = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2, framing: Some(own) };
         let plain = Opening { along: 3.6, sill: 0.9, width: 0.6, height: 1.2, framing: None };
         let s = reframed(opened(4.8, 2.7, "system.timber-frame-140", vec![special, plain]), |f| f.with_unit(6.0));

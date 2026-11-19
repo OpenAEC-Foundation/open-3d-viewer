@@ -61,9 +61,12 @@ pub struct SlabDrag {
 
 /// The rectangle of a lying system in plan, counter-clockwise from its start: along its line,
 /// then as far to the left of it as it reaches. `None` when its line has no length.
-fn lying_outline(s: &SystemDef) -> Option<[DVec2; 4]> {
+pub(in crate::app) fn lying_outline(s: &SystemDef) -> Option<Vec<DVec2>> {
+    if !s.outline.is_empty() {
+        return Some(s.outline.clone());
+    }
     let left = (s.end - s.start).try_normalize()?.perp() * s.height;
-    Some([s.start, s.end, s.end + left, s.start + left])
+    Some(vec![s.start, s.end, s.end + left, s.start + left])
 }
 
 /// The parts of a slab or of a lying system: its outline, its top, its thickness and whether
@@ -71,7 +74,7 @@ fn lying_outline(s: &SystemDef) -> Option<[DVec2; 4]> {
 fn slab(shape: &Shape) -> Option<(Vec<DVec2>, f64, f64, bool)> {
     match shape {
         Shape::Planar(p @ PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) if outline.len() >= 3 => Some((outline.clone(), *top, p.total_thickness(), p.build_up.is_some())),
-        Shape::System(s) if s.lies() => Some((lying_outline(s)?.to_vec(), s.base, s.member.y.max(s.panel), true)),
+        Shape::System(s) if s.lies() => Some((lying_outline(s)?, s.base, s.member.y.max(s.panel), true)),
         _ => None,
     }
 }
@@ -135,7 +138,30 @@ fn pushed_lying(s: &SystemDef, handle: SlabHandle, along: f64) -> Option<SystemD
 /// when nothing of a lying system would be left.
 pub fn pushed(shape: &Shape, handle: SlabHandle, along: f64) -> Option<Shape> {
     if let Shape::System(s) = shape {
-        return s.lies().then(|| pushed_lying(s, handle, along)).flatten().map(Shape::System);
+        if !s.lies() {
+            return None;
+        }
+        if s.outline.is_empty() {
+            return pushed_lying(s, handle, along).map(Shape::System);
+        }
+        // laid in an outline: an edge of the outline goes, as a slab's does
+        let mut out = s.clone();
+        match handle {
+            SlabHandle::Edge(i) => {
+                let (outline, n) = (&s.outline, s.outline.len());
+                if i >= n {
+                    return None;
+                }
+                let step = normal(outline, i)? * along;
+                let (j, before, after) = ((i + 1) % n, (i + n - 1) % n, (i + 2) % n);
+                let (a, b) = (outline[i] + step, outline[j] + step);
+                out.outline[i] = crossing(outline[before], outline[i], a, b).unwrap_or(a);
+                out.outline[j] = crossing(outline[j], outline[after], a, b).unwrap_or(b);
+            }
+            SlabHandle::Top => out.base += along,
+            SlabHandle::Under => return None,
+        }
+        return Some(Shape::System(out));
     }
     let (outline, _, _, built_up) = slab(shape)?;
     let mut out = shape.clone();
@@ -459,7 +485,7 @@ mod tests {
     fn lying_selected() -> (App, ElementId) {
         let mut app = modelling();
         let library = bim_library::Library::starter();
-        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.6, 0.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.2, 6.0), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.6, 0.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.2, 6.0), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let floor = generic.laid(library.system_type("system.hollow-core-260").unwrap()).unwrap();
         let id = app.add_element("Floor", None, Shape::System(floor)).unwrap();
         app.keep_model_history();

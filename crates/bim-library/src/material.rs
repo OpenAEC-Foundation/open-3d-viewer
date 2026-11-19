@@ -171,6 +171,8 @@ pub fn starter() -> Vec<Material> {
     vec![
         m("concrete", "beton", "concrete", "Beton", "béton", Concrete, CONCRETE),
         m("hollow-core-concrete", "kanaalplaat", "hollow-core slab", "Spannbeton-Hohldiele", "dalle alvéolée", Concrete, CONCRETE),
+        m("wide-slab", "breedplaat", "wide-slab plank", "Elementdecke", "prédalle", Concrete, CONCRETE),
+        m("topping-concrete", "opstort", "structural topping", "Aufbeton", "béton de clavetage", Concrete, [196, 196, 192]),
         m("brick", "metselwerk", "brickwork", "Mauerwerk", "maçonnerie", Brick, [205, 140, 115]),
         m("sand-lime", "kalkzandsteen", "sand-lime brick", "Kalksandstein", "brique silico-calcaire", SandLime, [225, 220, 205]),
         m("insulation", "isolatie", "insulation", "Dämmung", "isolant", Insulation, INSULATION),

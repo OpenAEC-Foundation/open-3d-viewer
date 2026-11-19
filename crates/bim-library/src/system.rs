@@ -379,6 +379,27 @@ pub struct SystemLayer {
     pub panels: Panels,
 }
 
+/// How a floor of slabs carries the slabs an opening cuts through: an opening wider than `over`
+/// (across the slabs) does not cut a slab lengthwise but takes whole slabs out, their ends hung in
+/// a steel trimmer either side of it: an angle of plate `thickness` thick with a seat `seat` wide
+/// under the cut ends, bearing `bearing` on the slab beside the opening at each of its ends.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Trimmer {
+    pub over: f64,
+    pub bearing: f64,
+    pub seat: f64,
+    pub thickness: f64,
+}
+
+impl Trimmer {
+    /// An opening wider than 400 is trimmed: an angle of 8 mm plate with a seat of 80, bearing 150.
+    pub const SLABS: Trimmer = Trimmer { over: 0.4, bearing: 0.15, seat: 0.08, thickness: 0.008 };
+
+    fn fits(&self) -> bool {
+        [self.over, self.bearing, self.seat, self.thickness].into_iter().all(|v| v.is_finite() && v > 0.0)
+    }
+}
+
 /// A system type: its group, the grid of its face with its members and panels, the layers across
 /// it, and, for a floor or a ceiling, how high above its level it lies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -396,6 +417,9 @@ pub struct SystemType {
     /// A lying system's face, this high above its level (metres).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lying: Option<f64>,
+    /// A floor of slabs: how the slabs an opening cuts through are carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trimmer: Option<Trimmer>,
 }
 
 /// Whether a grid fits members `width` wide: positive bays and rows, wider than the members.
@@ -446,7 +470,7 @@ impl SystemType {
             }
             known(&panels.material)?;
         }
-        if self.lying.is_some_and(|h| !h.is_finite()) {
+        if self.lying.is_some_and(|h| !h.is_finite()) || self.trimmer.is_some_and(|t| !t.fits()) {
             return Err(LibraryError::NotPositive);
         }
         Ok(())
@@ -491,6 +515,12 @@ impl SystemType {
                 name = format!("{name} {}×{}", face.len(), mm(board.panels.thickness));
             }
         }
+        // a floor with a layer on its slabs also by that layer ("… opstort 140")
+        if self.group == SystemGroup::Floor {
+            if let Some(l) = self.layers.iter().filter(|l| l.offset > 0.0).max_by(|a, b| a.offset.total_cmp(&b.offset)) {
+                name = format!("{name} {} {}", material(&l.panels.material), mm(l.panels.thickness));
+            }
+        }
         // a timber or a steel frame with more outside its membrane also by its outermost layer
         // ("… houten gevelbekleding 18")
         if matches!(self.group, SystemGroup::TimberFrame | SystemGroup::SteelFrame) {
@@ -514,7 +544,7 @@ pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
     let glass = || Panels::new("glass", 0.024);
-    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None };
+    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, trimmer: None };
     // aluminium and PVC frames are mitred at their corners
     let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
     // boards of `material` laid edge to edge, `bay` wide and `row` high; membranes come in rolls
@@ -609,8 +639,20 @@ pub fn starter() -> Vec<SystemType> {
             )
         }
     };
+    // a wide-slab floor: precast planks 60 thick and 2400 wide, laid edge to edge, spanning up to
+    // 7200, and on them the topping cast in place that makes the floor `depth` thick in all
+    let wide_slab = |depth: f64| {
+        let plank = 0.06;
+        let topping = depth - plank;
+        SystemType {
+            lying: Some(3.0),
+            layers: vec![boards(plank / 2.0 + topping / 2.0, "topping-concrete", topping, 50.0, 50.0)],
+            ..upright(&format!("system.wide-slab-{}", (depth * 1000.0).round()), Floor, Grid::new(2.4, 7.2, Stack), Members::new(0.002, plank, "topping-concrete"), Panels::new("wide-slab", plank))
+        }
+    };
     let hollow_core = |depth: f64| SystemType {
         lying: Some(3.0),
+        trimmer: Some(Trimmer::SLABS),
         ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, 6.0, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))
     };
     let mut types = vec![
@@ -646,6 +688,7 @@ pub fn starter() -> Vec<SystemType> {
         upright("system.cladding-hpl-1200x3000", Cladding, Grid::new(1.2, 3.0, Stack), Members::new(0.008, 0.004, "aluminium"), Panels::new("hpl", 0.008)),
     ];
     types.extend([0.15, 0.2, 0.26, 0.32, 0.4].map(hollow_core));
+    types.extend([0.2, 0.26, 0.3].map(wide_slab));
     types.push(SystemType { lying: Some(2.6), ..upright("system.ceiling-600x600", Ceiling, Grid::new(0.6, 0.6, Stack), Members::new(0.024, 0.038, "steel"), Panels::new("mineral-fibre", 0.015)) });
     types
 }
@@ -661,7 +704,7 @@ mod tests {
     #[test]
     fn the_starter_types_check_and_have_names_of_their_own() {
         let types = starter();
-        assert_eq!(types.len(), 35);
+        assert_eq!(types.len(), 38);
         for t in &types {
             t.check(&materials()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }
@@ -693,6 +736,8 @@ mod tests {
         assert_eq!(name("system.masonry-dik-stretcher", Lang::De), "Mauerwerk 100 220×75 Läuferverband");
         assert_eq!(name("system.cladding-timber-boards-140", Lang::En), "Timber cladding 18 4000×140 staggered");
         assert_eq!(name("system.hollow-core-260", Lang::Nl), "Kanaalplaat 260 1200×6000");
+        assert_eq!(name("system.wide-slab-260", Lang::Nl), "Breedplaat 60 2400×7200 opstort 200");
+        assert_eq!(name("system.wide-slab-200", Lang::En), "Wide-slab plank 60 2400×7200 structural topping 140");
         assert_eq!(name("system.cladding-zinc-standing-seam-430", Lang::Fr), "Zinc 0,8 430×6000");
     }
 

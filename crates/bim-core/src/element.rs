@@ -107,6 +107,13 @@ pub struct OpeningFraming {
     pub kings: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trimmers: Option<u8>,
+    /// In a lying system (a floor): the opening is round, drilled, its `width` the diameter.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub round: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Opening {
@@ -310,6 +317,11 @@ pub struct SystemDef {
     /// along its line from its start. These come first; its type splits what lies between them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub breaks: Vec<f64>,
+    /// A lying system (a floor, a ceiling) laid in an outline: the outline in plan. It is laid
+    /// along its line over the rectangle that holds the outline and cut to it; its openings are
+    /// measured from its line's start. Empty: the rectangle its line and its `height` make.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outline: Vec<DVec2>,
 }
 
 /// How a connection joins its members.
@@ -486,6 +498,7 @@ impl Shape {
             Shape::System(s) => {
                 s.start += flat;
                 s.end += flat;
+                s.outline.iter_mut().for_each(|p| *p += flat);
                 s.base += delta.z;
             }
             Shape::Connection(_) => {}
@@ -1087,7 +1100,7 @@ mod tests {
 
     #[test]
     fn a_system_fills_its_domain_with_members_and_panels() {
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let parts = system_parts(&s).unwrap();
         let members = parts.iter().filter(|p| p.class == "IfcMember").count();
         let panels = parts.iter().filter(|p| p.class == "IfcPlate").count();

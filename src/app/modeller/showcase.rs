@@ -37,7 +37,7 @@ fn p(x: f64, y: f64) -> DVec2 {
 
 /// A standing system of type `id` on the line `a`–`b`, or lying in the rectangle from `a` to `b`.
 fn system(app: &App, id: &str, a: DVec2, b: DVec2, height: f64, openings: Vec<Opening>) -> Option<Shape> {
-    let generic = SystemDef { start: a, end: b, base: 0.0, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new() };
+    let generic = SystemDef { start: a, end: b, base: 0.0, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new(), outline: Vec::new() };
     let t = app.library.system_type(id)?;
     if let Some(above) = t.lying {
         let (lo, hi) = (a.min(b), a.max(b));
@@ -72,7 +72,7 @@ fn window(along: f64) -> Opening {
     Opening { along, sill: 0.9, width: 1.2, height: 1.2, framing: None }
 }
 
-/// The project: section `SHOWCASE_ONLY` of it (1 to 5), or all of it.
+/// The project: section `SHOWCASE_ONLY` of it (1 to 6), or all of it.
 fn build() -> (App, Log) {
     let mut app = super::tests::modelling();
     let mut log = Log::default();
@@ -175,6 +175,24 @@ fn build() -> (App, Log) {
         add(&mut app, &mut log, "Wall", wall(at, at + p(3.6, 0.0), t1, build_up));
         let from = if tee { at + p(1.8, 0.0) } else { at + p(3.6, 0.0) };
         add(&mut app, &mut log, "Wall", wall(from, from + p(0.0, 2.4), t2, build_up));
+    }
+
+    }
+
+    if on(6) {
+    // 6. floors as systems: hollow-core slabs in an L with an opening hung in trimmers, a small
+    //    opening and two cores; and a wide-slab floor with its topping, an opening and a core
+    let y = 22.0;
+    let round = |along: f64, sill: f64, d: f64| Opening { along, sill, width: d, height: d, framing: Some(bim_core::OpeningFraming { round: true, ..Default::default() }) };
+    let hole = |along: f64, sill: f64, width: f64, height: f64| Opening { along, sill, width, height, framing: None };
+    if let Some(Shape::System(mut s)) = system(&app, "system.hollow-core-200", p(x0, y), p(x0 + 7.2, y + 6.0), 0.0, Vec::new()) {
+        s.outline = vec![p(x0, y), p(x0 + 7.2, y), p(x0 + 7.2, y + 3.6), p(x0 + 3.6, y + 3.6), p(x0 + 3.6, y + 6.0), p(x0, y + 6.0)];
+        s.openings = vec![hole(1.5, 2.0, 0.8, 1.2), hole(5.0, 1.0, 0.3, 0.3), round(0.4, 4.5, 0.15), round(5.9, 2.4, 0.2)];
+        add(&mut app, &mut log, &name("system.hollow-core-200"), Shape::System(s));
+    }
+    if let Some(Shape::System(mut s)) = system(&app, "system.wide-slab-200", p(x0 + 9.0, y), p(x0 + 16.2, y + 6.0), 0.0, Vec::new()) {
+        s.openings = vec![hole(2.0, 2.0, 1.0, 2.0), round(5.5, 4.0, 0.25)];
+        add(&mut app, &mut log, &name("system.wide-slab-200"), Shape::System(s));
     }
 
     }
@@ -314,7 +332,7 @@ fn report_overlaps(app: &App) {
 
 /// A standing system of type `id` on the line `a`–`b` from `base` up `height`.
 fn standing(app: &App, id: &str, a: DVec2, b: DVec2, base: f64, height: f64, openings: Vec<Opening>) -> Option<Shape> {
-    let generic = SystemDef { start: a, end: b, base, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new() };
+    let generic = SystemDef { start: a, end: b, base, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new(), outline: Vec::new() };
     generic.typed_from(&app.library, id).map(Shape::System)
 }
 
@@ -323,7 +341,7 @@ fn standing(app: &App, id: &str, a: DVec2, b: DVec2, base: f64, height: f64, ope
 fn lying(app: &App, id: &str, a: DVec2, b: DVec2, level: f64) -> Option<Shape> {
     let t = app.library.system_type(id)?;
     let (lo, hi) = (a.min(b), a.max(b));
-    let rectangle = SystemDef { start: lo, end: p(hi.x, lo.y), base: level + t.lying?, height: hi.y - lo.y, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+    let rectangle = SystemDef { start: lo, end: p(hi.x, lo.y), base: level + t.lying?, height: hi.y - lo.y, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
     rectangle.laid(t).map(Shape::System)
 }
 
@@ -396,7 +414,7 @@ fn build_building() -> (App, Log) {
         let on_south: Vec<f64> = south.iter().copied().chain([8.4, 12.0]).collect();
         let on_north: Vec<f64> = north.iter().map(|x| 9.6 - x).chain([1.2]).collect();
         // the front door has a framing of its own: two king studs and two trimmers either side
-        let doubled = bim_core::OpeningFraming { header: Some(0.3), kings: Some(2), trimmers: Some(2) };
+        let doubled = bim_core::OpeningFraming { header: Some(0.3), kings: Some(2), trimmers: Some(2), round: false };
         let entrances = if storey == 0 { vec![Opening { along: 6.4, sill: 0.0, width: 1.0, height: 2.315, framing: Some(doubled) }, Opening { along: 13.2, sill: 0.0, width: 1.0, height: 2.315, framing: None }] } else { Vec::new() };
         let exterior: [(DVec2, DVec2, Vec<f64>, Vec<Opening>); 6] = [
             (outline[0], outline[1], on_south, entrances),

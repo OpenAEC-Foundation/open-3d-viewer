@@ -33,7 +33,7 @@ impl App {
             made.extend(drawings);
         }
         if made.is_empty() {
-            return Err("no framed system to draw: element drawings are of timber frames, steel frames and metal stud walls".to_string());
+            return Err("nothing to draw: element drawings are of timber frames, steel frames and metal stud walls, and laying plans of floor systems".to_string());
         }
         std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         let mut files = Vec::with_capacity(made.len());

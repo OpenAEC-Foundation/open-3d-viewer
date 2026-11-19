@@ -67,6 +67,9 @@ fn mm(metres: f64) -> i64 {
 /// system, or that the kernel refuses.
 pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -> String) -> Vec<Drawing2d> {
     let Shape::System(s) = &element.shape else { return Vec::new() };
+    if s.lies() {
+        return laying_plan(model, element, s, named).into_iter().collect();
+    }
     let Some(t) = s.system_type.as_ref().filter(|t| t.framing.is_some() && !t.lying) else { return Vec::new() };
     let Some(dir) = (s.end - s.start).try_normalize() else { return Vec::new() };
     let (Ok(parts), Ok(units)) = (model.evaluate(element.id), bim_core::system::joined_units(model, element)) else { return Vec::new() };
@@ -245,6 +248,111 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
     drawings
 }
 
+/// The scale a laying plan is drawn at: 1 : 50.
+pub const PLAN_SCALE: f64 = 50.0;
+
+/// The laying plan of a floor made as a system (hollow-core slabs, wide-slab planks): seen from
+/// above, every slab as the outline of its top (cut to the floor's outline, around its openings,
+/// with the cores drilled through it), the trimmers that carry cut slabs, the floor's length and
+/// width and the seams between its slabs dimensioned, and the list of its slabs and trimmers.
+/// What lies on the slabs (a topping) is named in the title, not drawn.
+fn laying_plan(model: &Model, element: &Element, s: &bim_core::SystemDef, named: &dyn Fn(&str) -> String) -> Option<Drawing2d> {
+    let t = s.system_type.as_ref()?;
+    let dir = (s.end - s.start).try_normalize()?;
+    let left = dir.perp();
+    let parts = model.evaluate(element.id).ok()?;
+    let (text, off) = (TEXT * PLAN_SCALE, OFFSET * PLAN_SCALE);
+    let mut d = Drawing2d { name: format!("{} {}", element.name, element.id.0), space: Space::Model { scale: PLAN_SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let flat = |q: &glam::DVec3| {
+        let p = DVec2::new(q.x, q.y) - s.start;
+        [p.dot(dir), p.dot(left)]
+    };
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    let mut slabs: Vec<(i64, i64)> = Vec::new();
+    let mut trimmers: Vec<(i64, i64)> = Vec::new();
+    let mut seams: Vec<f64> = Vec::new();
+    for p in parts.iter().filter(|p| p.tile == element.tile) {
+        let own = p.class == "IfcPlate" && p.material.as_deref() == Some(t.panel_material.as_str());
+        let steel = p.class == "IfcMember" && p.material.as_deref() == Some("steel");
+        if !own && !steel {
+            continue;
+        }
+        let top = p.solid.positions.iter().map(|q| q.z).fold(f64::NEG_INFINITY, f64::max);
+        let (mut a, mut b) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for q in &p.solid.positions {
+            let at = flat(q);
+            (a, b) = ([a[0].min(at[0]), a[1].min(at[1])], [b[0].max(at[0]), b[1].max(at[1])]);
+        }
+        if steel {
+            // a trimmer: its angle as a rectangle (its lugs are part of it in the list)
+            if b[0] - a[0] > 2.0 * (b[1] - a[1]) {
+                for (p, q) in [([a[0], a[1]], [b[0], a[1]]), ([b[0], a[1]], [b[0], b[1]]), ([b[0], b[1]], [a[0], b[1]]), ([a[0], b[1]], [a[0], a[1]])] {
+                    d.lines.push(Line2d { pen: Pen::Detail, a: p, b: q });
+                }
+                trimmers.push((mm(b[1] - a[1]), mm(b[0] - a[0])));
+            }
+            continue;
+        }
+        // a slab: the edges of its top
+        for face in &p.solid.faces {
+            for ring in &face.rings {
+                for k in 0..ring.len() {
+                    let (q, r) = (p.solid.positions[ring[k] as usize], p.solid.positions[ring[(k + 1) % ring.len()] as usize]);
+                    if (q.z - top).abs() < 1e-6 && (r.z - top).abs() < 1e-6 {
+                        let (from, to) = (flat(&q), flat(&r));
+                        // every edge lies in two faces: drawn once
+                        if (from[0], from[1]) < (to[0], to[1]) {
+                            d.lines.push(Line2d { pen: Pen::Cut, a: from, b: to });
+                        }
+                    }
+                }
+            }
+        }
+        (lo, hi) = ([lo[0].min(a[0]), lo[1].min(a[1])], [hi[0].max(b[0]), hi[1].max(b[1])]);
+        slabs.push((mm(b[0] - a[0]), mm(b[1] - a[1])));
+        seams.extend([a[0], b[0]]);
+    }
+    if slabs.is_empty() {
+        return None;
+    }
+    let dim = |d: &mut Drawing2d, from: [f64; 2], to: [f64; 2], rows: f64| {
+        let value = (to[0] - from[0]).hypot(to[1] - from[1]);
+        if value > LINEAR_TOLERANCE {
+            d.dimensions.push(Dim2d { from, to, value, offset: off * rows, text_height: text });
+        }
+    };
+    // over it the seams between its slabs, under it its length, to its left its width
+    seams.sort_by(f64::total_cmp);
+    seams.dedup_by(|a, b| (*a - *b).abs() < 0.05);
+    if seams.len() > 2 && seams.len() <= SEAMS + 8 {
+        for pair in seams.windows(2) {
+            dim(&mut d, [pair[0], hi[1]], [pair[1], hi[1]], 1.0);
+        }
+    }
+    dim(&mut d, [hi[0], lo[1]], [lo[0], lo[1]], 1.0);
+    dim(&mut d, [lo[0], lo[1]], [lo[0], hi[1]], 1.0);
+    let thick = mm(s.member.y.max(s.panel));
+    let on_it: Vec<String> = t.layers.iter().filter(|l| l.offset > 0.0).map(|l| format!(" + {} {}", named(&l.panels.material), mm(l.panels.thickness))).collect();
+    let title = format!("{} · {} {thick}{} · {} × {} mm · 1:{}", element.name, named(&t.panel_material), on_it.concat(), mm(hi[0] - lo[0]), mm(hi[1] - lo[1]), PLAN_SCALE as i64);
+    let mut y = lo[1] - (off * 2.5 + text);
+    write_list(&mut d, y, text, title, &slabs, &|width, long| format!("{thick} × {width} × {long}"));
+    y -= text * 1.8 * (1.4 + d.texts.len() as f64 - 1.0);
+    if !trimmers.is_empty() {
+        let mut list: Vec<(i64, usize)> = Vec::new();
+        for (_, long) in &trimmers {
+            match list.iter_mut().find(|(l, _)| l == long) {
+                Some((_, n)) => *n += 1,
+                None => list.push((*long, 1)),
+            }
+        }
+        for (long, n) in list {
+            d.texts.push(Text2d { pen: Pen::Text, at: [0.0, y], height: text, text: format!("{n} × {} L={long}", named("steel")), align: Align::Left });
+            y -= text * 1.8;
+        }
+    }
+    Some(d)
+}
+
 /// Whether a drawing of [`element_drawings`] is the frame's, not a layer's.
 pub fn is_frame(d: &Drawing2d) -> bool {
     !d.name.rsplit(' ').nth(1).is_some_and(|w| w.starts_with('L') && w[1..].parse::<usize>().is_ok())
@@ -283,7 +391,7 @@ mod tests {
     }
 
     fn typed(length: f64, openings: Vec<Opening>, id: &str) -> (Model, bim_core::ElementId) {
-        let generic = SystemDef { start: DVec2::new(2.0, 1.0), end: DVec2::new(2.0, 1.0 + length), base: 0.5, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings, breaks: Vec::new() };
+        let generic = SystemDef { start: DVec2::new(2.0, 1.0), end: DVec2::new(2.0, 1.0 + length), base: 0.5, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings, breaks: Vec::new(), outline: Vec::new() };
         let s = generic.typed_from(&Library::starter(), id).unwrap();
         let mut m = Model::new(TileGrid::default());
         let grid = m.grid;
@@ -334,7 +442,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_frame_has_no_element_drawing() {
-        let curtain = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+        let curtain = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let mut m = Model::new(TileGrid::default());
         let grid = m.grid;
         let id = m.add(Element::in_project(&grid, "Curtain wall", None, Shape::System(curtain))).unwrap();
@@ -397,5 +505,27 @@ mod tests {
             let (lo, hi) = d.lines.iter().filter(|l| l.pen == Pen::Cut).fold((f64::INFINITY, f64::NEG_INFINITY), |acc, l| (acc.0.min(l.a[0]).min(l.b[0]), acc.1.max(l.a[0]).max(l.b[0])));
             assert!(lo > -0.3 && hi < units[unit] + 0.3, "{}: {lo} to {hi} in a unit of {}", d.name, units[unit]);
         }
+    }
+    #[test]
+    fn a_floor_system_gets_a_laying_plan() {
+        use bim_core::OpeningFraming;
+        let generic = SystemDef { start: DVec2::new(1.0, 1.0), end: DVec2::new(5.8, 1.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let mut s = generic.laid(Library::starter().system_type("system.hollow-core-200").unwrap()).unwrap();
+        // an opening that takes the second slab out over a metre, and a core through the fourth
+        s.openings = vec![Opening { along: 1.5, sill: 2.0, width: 0.8, height: 1.0, framing: None }, Opening { along: 4.0, sill: 1.0, width: 0.2, height: 0.2, framing: Some(OpeningFraming { round: true, ..Default::default() }) }];
+        let mut m = Model::new(TileGrid::default());
+        let grid = m.grid;
+        let id = m.add(Element::in_project(&grid, "Floor", None, Shape::System(s))).unwrap();
+        let all = element_drawings(&m, m.get(id).unwrap(), &|key| key.to_string());
+        assert_eq!(all.len(), 1);
+        let d = &all[0];
+        // five slabs (one in two), each at least its four sides; the core's circle; two trimmers
+        assert!(d.lines.iter().filter(|l| l.pen == Pen::Cut).count() > 5 * 4 + 8);
+        assert_eq!(d.lines.iter().filter(|l| l.pen == Pen::Detail).count(), 2 * 4);
+        let values: Vec<i64> = d.dimensions.iter().map(|x| mm(x.value)).collect();
+        assert!(values.contains(&4780) && values.contains(&5980) && values.iter().filter(|v| **v == 1200).count() >= 2, "{values:?}");
+        let texts: Vec<&str> = d.texts.iter().map(|t| t.text.as_str()).collect();
+        assert!(texts[0].contains("hollow-core-concrete 200") && texts[0].contains("1:50"), "{texts:?}");
+        assert!(texts.contains(&"3 × 200 × 1180 × 5980") && texts.contains(&"1 × 200 × 1180 × 2990") && texts.contains(&"2 × steel L=1180"), "{texts:?}");
     }
 }

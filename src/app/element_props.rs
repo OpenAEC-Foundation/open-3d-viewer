@@ -144,7 +144,7 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
 fn openings_of(shape: &Shape) -> Option<(&[Opening], f64)> {
     match shape {
         Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, .. }, openings, .. }) => Some((openings, (end - start).length())),
-        Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some((&s.openings, (s.end - s.start).length())),
+        Shape::System(s) if s.lies() || s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some((&s.openings, (s.end - s.start).length())),
         _ => None,
     }
 }
@@ -153,7 +153,7 @@ fn openings_of(shape: &Shape) -> Option<(&[Opening], f64)> {
 pub(super) fn openings_mut(shape: &mut Shape) -> Option<&mut Vec<Opening>> {
     match shape {
         Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) => Some(openings),
-        Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some(&mut s.openings),
+        Shape::System(s) if s.lies() || s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some(&mut s.openings),
         _ => None,
     }
 }
@@ -288,6 +288,27 @@ impl App {
         if let Some(openings) = openings_mut(&mut shape) {
             openings.push(Opening { along: (length - width) / 2.0, sill, width, height, framing: None });
         }
+        self.modeller.refusal = None;
+        self.change_shape(&e, shape);
+    }
+
+    /// Adds an opening to the selected floor (a lying system), in its middle: a rectangular one
+    /// 600 square, or a round one of 200.
+    pub(super) fn add_recess(&mut self, round: bool) {
+        let Some(e) = self.defined().cloned() else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Shape::System(s) = &mut shape else { return };
+        if !s.lies() {
+            return;
+        }
+        // in the middle of what it covers, measured from its line's start
+        let Some(dir) = (s.end - s.start).try_normalize() else { return };
+        let outline = super::modeller::slab_handles::lying_outline(s).unwrap_or_default();
+        let middle = outline.iter().fold(glam::DVec2::ZERO, |sum, p| sum + *p) / outline.len().max(1) as f64 - s.start;
+        let (u, v) = (middle.dot(dir), middle.dot(dir.perp()));
+        let size = if round { 0.2 } else { 0.6 };
+        let framing = round.then(|| bim_core::OpeningFraming { round: true, ..Default::default() });
+        s.openings.push(Opening { along: u - size / 2.0, sill: v - size / 2.0, width: size, height: size, framing });
         self.modeller.refusal = None;
         self.change_shape(&e, shape);
     }
@@ -534,7 +555,30 @@ impl App {
                     .push(field(l.text("Bouten per rij", "Bolts per row"), F::BoltRows));
             }
         }
-        if let Some((openings, _)) = openings_of(&shape) {
+        // a floor made as a system: its openings, across it where a wall's are up it
+        let lying = matches!(&shape, Shape::System(s) if s.lies());
+        if let (true, Some((openings, _))) = (lying, openings_of(&shape)) {
+            for i in 0..openings.len() {
+                let round = openings[i].framing.is_some_and(|f| f.round);
+                let kind = if round { l.text("Ronde sparing", "Round opening") } else { l.text("Sparing", "Opening") };
+                let remove = a11y::named(button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveOpening(i)), a11y::Role::Button, l.text("Verwijderen", "Remove"));
+                rows = rows
+                    .push(row![text(format!("{kind} {}", i + 1)).size(12).width(Length::Fill), remove].align_y(Center))
+                    .push(field(l.text("Vanaf begin (m)", "From start (m)"), F::Along(i)))
+                    .push(field(l.text("Uit de lijn (m)", "Off the line (m)"), F::Sill(i)));
+                rows = if round {
+                    rows.push(field(l.text("Diameter (m)", "Diameter (m)"), F::OpeningWidth(i)))
+                } else {
+                    rows.push(field(l.text("Breedte (m)", "Width (m)"), F::OpeningWidth(i))).push(field(l.text("Lengte (m)", "Length (m)"), F::OpeningHeight(i)))
+                };
+            }
+            let add = |label: &str, round: bool| a11y::named(button(text(label.to_string()).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddRecess(round)), a11y::Role::Button, label);
+            rows = rows.push(row![add(l.text("Sparing toevoegen", "Add opening"), false), add(l.text("Ronde sparing toevoegen", "Add round opening"), true)].spacing(6));
+            // the plan its slabs are laid from
+            let label = l.text("Legplan…", "Laying plan…");
+            rows = rows.push(a11y::named(button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::ElementDrawings(l)), a11y::Role::Button, label));
+        }
+        if let (false, Some((openings, _))) = (lying, openings_of(&shape)) {
             for i in 0..openings.len() {
                 let kind = if openings[i].sill <= bim_core::LINEAR_TOLERANCE { l.text("Deur", "Door") } else { l.text("Raam", "Window") };
                 let remove = a11y::named(button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveOpening(i)), a11y::Role::Button, l.text("Verwijderen", "Remove"));
@@ -730,7 +774,7 @@ mod tests {
         use bim_core::SystemDef;
         let mut app = App::default();
         app.new_model("Level 0");
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         let system = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
@@ -774,7 +818,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let frame = |app: &App, start: DVec2, end: DVec2, id: &str| {
-            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
             Shape::System(s.typed_from(&app.library, id).unwrap())
         };
         let outer = frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0), "system.timber-frame-140");
@@ -823,7 +867,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let frame = |app: &App, start: DVec2, end: DVec2| {
-            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
             Shape::System(s.typed_from(&app.library, "system.timber-frame-140").unwrap())
         };
         let (long, short) = (frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0)), frame(&app, DVec2::new(4.8, 0.0), DVec2::new(4.8, 3.0)));
@@ -893,7 +937,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2, framing: None };
-        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(7.2, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: vec![window], breaks: Vec::new() };
+        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(7.2, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: vec![window], breaks: Vec::new(), outline: Vec::new() };
         let frame = generic.typed_from(&bim_library::Library::starter(), "system.timber-frame-140").unwrap();
         app.add_element("Frame", None, Shape::System(frame)).unwrap();
         app.select_modelled(ElementId(1));
@@ -948,5 +992,47 @@ mod tests {
         let _ = app.update(Message::RemoveBreak(0));
         assert!(frame(&app).breaks.is_empty());
         assert_eq!(units(&app), before);
+    }
+    #[test]
+    fn a_floor_system_is_sketched_gets_openings_and_keeps_its_place_mirrored() {
+        use crate::app::transform::{transformed, Map};
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(4.8, 0.0), base: 3.0, height: 6.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let floor = generic.laid(app.library.system_type("system.hollow-core-200").unwrap()).unwrap();
+        let id = app.add_element("Floor", None, Shape::System(floor)).unwrap();
+        app.select_modelled(id);
+        let system = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
+            Shape::System(s) => s,
+            _ => panic!("a system"),
+        };
+        let volume = |app: &App| app.modeller.model.evaluate(id).unwrap().iter().map(|p| p.solid.volume()).sum::<f64>();
+        let whole = volume(&app);
+        // its sketch opens on its rectangle, and finished it is laid in that outline
+        assert!(app.sketchable(id));
+        app.open_sketch(id);
+        assert_eq!(app.modeller.sketch.as_ref().unwrap().segments.len(), 4);
+        app.finish_sketch();
+        assert!(app.modeller.sketch.is_none() && app.modeller.refusal.is_none());
+        assert_eq!(system(&app).outline.len(), 4);
+        // an opening and a round one, in its middle
+        let _ = app.update(Message::AddRecess(false));
+        let _ = app.update(Message::AddRecess(true));
+        let s = system(&app);
+        assert_eq!(s.openings.len(), 2);
+        assert!((s.openings[0].along - 2.1).abs() < 1e-9 && (s.openings[0].sill - 2.7).abs() < 1e-9 && s.openings[1].framing.is_some_and(|f| f.round));
+        assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
+        // 600 wide in a floor of slabs: whole slabs stop at it, in trimmers
+        assert!(volume(&app) < whole - 0.6 * 0.6 * 0.2);
+        assert!(app.modeller.model.evaluate(id).unwrap().iter().any(|p| p.material.as_deref() == Some("steel")));
+        // mirrored in the line x = 6 it covers 7.2 to 12, its openings mirrored with it
+        let mirrored = transformed(&Shape::System(s.clone()), &Map::Flip { on: DVec2::new(6.0, 0.0), along: DVec2::Y }).unwrap();
+        let Shape::System(m) = &mirrored else { panic!("a system") };
+        let parts = bim_core::system::parts(m).unwrap();
+        let (lo, hi) = parts.iter().map(|p| p.solid.bounds()).fold((glam::DVec3::splat(f64::INFINITY), glam::DVec3::splat(f64::NEG_INFINITY)), |acc, b| (acc.0.min(b.0), acc.1.max(b.1)));
+        assert!((lo.x - 7.2).abs() < 0.02 && (hi.x - 12.0).abs() < 0.02 && lo.y.abs() < 0.02 && (hi.y - 6.0).abs() < 0.02, "{lo} {hi}");
+        let before: f64 = bim_core::system::parts(&s).unwrap().iter().map(|p| p.solid.volume()).sum();
+        let after: f64 = parts.iter().map(|p| p.solid.volume()).sum();
+        assert!((before - after).abs() < 1e-6, "{before} {after}");
     }
 }

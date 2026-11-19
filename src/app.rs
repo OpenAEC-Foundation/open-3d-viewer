@@ -817,6 +817,8 @@ pub enum Message {
     /// index) back.
     AddBreak,
     RemoveBreak(usize),
+    /// An opening more in the selected floor system: rectangular, or round.
+    AddRecess(bool),
     /// The element drawings of the selected system: ask for a folder, then write them there.
     ElementDrawings(openaec_ui::Language),
     ElementDrawingsTo(Option<std::path::PathBuf>, openaec_ui::Language),
@@ -2012,6 +2014,7 @@ impl App {
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),
             Message::AddBreak => self.add_break(),
+            Message::AddRecess(round) => self.add_recess(round),
             Message::RemoveBreak(index) => self.remove_break(index),
             Message::ElementDrawings(l) => return self.element_drawings_dialog(l),
             Message::ElementDrawingsTo(folder, l) => {

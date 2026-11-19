@@ -30,6 +30,7 @@ mod layers;
 pub mod collab;
 mod docs;
 mod drafts;
+mod element_drawings;
 pub mod drawn_props;
 mod edit;
 mod element_props;
@@ -816,6 +817,9 @@ pub enum Message {
     /// index) back.
     AddBreak,
     RemoveBreak(usize),
+    /// The element drawings of the selected system: ask for a folder, then write them there.
+    ElementDrawings(openaec_ui::Language),
+    ElementDrawingsTo(Option<std::path::PathBuf>, openaec_ui::Language),
     /// The rows of an element's top in the Modeller's properties.
     Top(modeller::tops::TopMessage),
     /// A row of the Modeller's model explorer.
@@ -2009,6 +2013,12 @@ impl App {
             Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),
             Message::AddBreak => self.add_break(),
             Message::RemoveBreak(index) => self.remove_break(index),
+            Message::ElementDrawings(l) => return self.element_drawings_dialog(l),
+            Message::ElementDrawingsTo(folder, l) => {
+                if let Some(folder) = folder {
+                    self.element_drawings_to(&folder, l);
+                }
+            }
             Message::JoinKind(kind) => self.set_join_kind(kind),
             Message::SwapJoin => self.swap_join(),
             Message::PickJoin(id) => self.select_modelled(id),

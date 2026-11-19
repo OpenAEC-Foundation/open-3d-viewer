@@ -13,8 +13,9 @@ use crate::theme::Palette;
 use bim_core::element::PlanarForm;
 use bim_core::{ConnectionDef, ConnectionKind, Element, Opening, PlanarDef, ProfileDef, Shape};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, row, text, text_input};
+use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Center, Element as Widget, Length};
+use openaec_ui::design::a11y;
 use openaec_ui::Language;
 
 /// A value of a modelled element typed in the right pane.
@@ -506,7 +507,7 @@ impl App {
                 let systems = [c.primary, c.secondary].iter().any(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() == bim_core::BaseKind::System));
                 rows = if systems {
                     // two building systems: joined butt (the first runs through a corner) or apart
-                    let turn = button(text(l.text("Andere loopt door", "Other runs through").to_string()).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::SwapJoin);
+                    let turn = a11y::named(button(text(l.text("Andere loopt door", "Other runs through")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::SwapJoin), a11y::Role::Button, l.text("Andere loopt door", "Other runs through"));
                     let rows = rows.push(row![choice(l.text("Stomp", "Butt"), ConnectionKind::Butt), choice(l.text("Los", "Apart"), ConnectionKind::Apart)].spacing(6));
                     if c.kind == ConnectionKind::Butt {
                         rows.push(prop_row(p, l.text("Loopt door", "Runs through").to_string(), name(c.primary))).push(prop_row(p, l.text("Stopt ertegen", "Stops against it").to_string(), name(c.secondary))).push(turn)
@@ -536,7 +537,7 @@ impl App {
         if let Some((openings, _)) = openings_of(&shape) {
             for i in 0..openings.len() {
                 let kind = if openings[i].sill <= bim_core::LINEAR_TOLERANCE { l.text("Deur", "Door") } else { l.text("Raam", "Window") };
-                let remove = button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveOpening(i));
+                let remove = a11y::named(button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveOpening(i)), a11y::Role::Button, l.text("Verwijderen", "Remove"));
                 rows = rows
                     .push(row![text(format!("{kind} {}", i + 1)).size(12).width(Length::Fill), remove].align_y(Center))
                     .push(field(l.text("Vanaf begin (m)", "From start (m)"), F::Along(i)))
@@ -550,25 +551,28 @@ impl App {
                         .push(field(l.text("Doorgaande stijlen per zijde", "King studs per side"), F::OpeningKings(i)))
                         .push(field(l.text("Zijstijlen per zijde", "Trimmers per side"), F::OpeningTrimmers(i)));
                     if openings[i].framing.is_some() {
-                        let reset = button(text(l.text("Als het type", "As the type")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::ResetOpeningFraming(i));
+                        let reset = a11y::named(button(text(l.text("Als het type", "As the type")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::ResetOpeningFraming(i)), a11y::Role::Button, l.text("Als het type", "As the type"));
                         rows = rows.push(row![text(l.text("Eigen regelwerk", "Framing of its own")).size(12).width(Length::Fill), reset].align_y(Center));
                     }
                 }
             }
-            let add = |label: &str, door: bool| button(text(label.to_string()).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddOpening(door));
+            let add = |label: &str, door: bool| a11y::named(button(text(label.to_string()).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddOpening(door)), a11y::Role::Button, label);
             rows = rows.push(row![add(l.text("Deur toevoegen", "Add door"), true), add(l.text("Raam toevoegen", "Add window"), false)].spacing(6));
         }
         // a timber frame: the joints between its prefab units that were asked for
         if let Shape::System(s) = &shape {
             if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) {
                 for i in 0..s.breaks.len() {
-                    let remove = button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveBreak(i));
+                    let remove = a11y::named(button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveBreak(i)), a11y::Role::Button, l.text("Verwijderen", "Remove"));
                     rows = rows
                         .push(row![text(format!("{} {}", l.text("Elementnaad", "Unit joint"), i + 1)).size(12).width(Length::Fill), remove].align_y(Center))
                         .push(field(l.text("Vanaf begin (m)", "From start (m)"), F::Break(i)));
                 }
-                let add = button(text(l.text("Elementnaad toevoegen", "Add unit joint")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddBreak);
+                let add = a11y::named(button(text(l.text("Elementnaad toevoegen", "Add unit joint")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddBreak), a11y::Role::Button, l.text("Elementnaad toevoegen", "Add unit joint"));
                 rows = rows.push(add);
+                // the drawings its units are made from in the workshop
+                let draw = a11y::named(button(text(l.text("Elementtekeningen…", "Element drawings…")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::ElementDrawings(l)), a11y::Role::Button, l.text("Elementtekeningen…", "Element drawings…"));
+                rows = rows.push(draw);
             }
         }
         let base = match e.base() {
@@ -587,12 +591,11 @@ impl App {
 fn field_row(p: Palette, label: &str, value: String, field: ElementField) -> Widget<'static, Message> {
     row![
         text(label.to_string()).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)),
-        text_input("", &value)
-            .on_input(move |typed| Message::ElementField(field, typed))
-            .on_submit(Message::ElementFieldDone)
-            .size(12)
-            .padding([2, 6])
-            .width(Length::FillPortion(3)),
+        container(a11y::node(
+            text_input("", &value).on_input(move |typed| Message::ElementField(field, typed)).on_submit(Message::ElementFieldDone).size(12).padding([2, 6]),
+            a11y::Node::new(a11y::Role::TextField, label).value(value.clone()),
+        ))
+        .width(Length::FillPortion(3)),
     ]
     .spacing(8)
     .align_y(Center)

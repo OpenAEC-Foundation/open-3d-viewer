@@ -315,19 +315,8 @@ fn element_drawings(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let mut app = App::default();
     app.set_model(Arc::new(loaders::load(file)?));
     let start = web_time::Instant::now();
-    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let model = &app.modeller.model;
-    let (mut frames, mut written) = (0, 0);
-    for element in model.iter() {
-        let drawings = crate::element_drawing::element_drawings(model, element);
-        frames += usize::from(!drawings.is_empty());
-        for d in &drawings {
-            let path = out.join(export::drawing::file_name(d, format));
-            std::fs::write(&path, export::drawing::write(d, format)?).map_err(|e| format!("{}: {e}", path.display()))?;
-            written += 1;
-        }
-    }
-    println!("{written} element drawings of {frames} timber frames -> {} in {:.2} s", out.display(), start.elapsed().as_secs_f32());
+    let w = app.write_element_drawings(out, format, &[], args.language.unwrap_or(Language::English))?;
+    println!("{} element drawings of {} framed systems -> {} in {:.2} s", w.drawings, w.systems, out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }
 

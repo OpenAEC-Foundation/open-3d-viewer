@@ -482,6 +482,30 @@ impl App {
                 let bytes = self.export_shown_to(std::path::Path::new(path))?;
                 Ok(json!({ "saved": path, "bytes": bytes }))
             }
+            "tool_type" => {
+                let language = a.get("language").and_then(|v| v.as_str()).and_then(openaec_ui::Language::from_code).unwrap_or(openaec_ui::Language::English);
+                let (types, picked) = self.tool_types(language).ok_or("no tool with types is on: press a tool of the Modeller first (Wall, Slab, Column, Beam, Curtain wall)")?;
+                let listed = |picked: &Option<String>| json!({ "picked": picked, "types": types.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>() });
+                let Some(wanted) = a.get("type").and_then(|v| v.as_str()).map(str::to_lowercase) else { return Ok(listed(&picked)) };
+                let is = |t: &&(Option<String>, String)| t.0.as_deref().is_some_and(|id| id.to_lowercase() == wanted) || t.1.to_lowercase() == wanted;
+                let holds = |t: &&(Option<String>, String)| t.0.as_deref().is_some_and(|id| id.to_lowercase().contains(&wanted)) || t.1.to_lowercase().contains(&wanted);
+                let found = types.iter().find(is).or_else(|| types.iter().find(holds)).ok_or_else(|| format!("no type '{wanted}'; call tool_type without a type to list them"))?.clone();
+                self.pick_tool_type(found.0.clone());
+                Ok(json!({ "picked": found.0, "name": found.1 }))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "element_drawings" => {
+                let folder = a.get("folder").and_then(|v| v.as_str()).ok_or("folder is required")?;
+                let wanted = a.get("format").and_then(|v| v.as_str()).unwrap_or("pdf").to_ascii_lowercase();
+                let format = crate::export::drawing::DrawingFormat::ALL.into_iter().find(|f| f.extension() == wanted).ok_or_else(|| format!("format is pdf, svg, dxf, dwg, png or ifccad, not '{wanted}'"))?;
+                let language = a.get("language").and_then(|v| v.as_str()).and_then(openaec_ui::Language::from_code).unwrap_or(openaec_ui::Language::English);
+                let only = if a.get("selection").and_then(|v| v.as_bool()).unwrap_or(false) { self.selected_modelled() } else { Vec::new() };
+                if a.get("selection").and_then(|v| v.as_bool()).unwrap_or(false) && only.is_empty() {
+                    return Err("nothing modelled is selected".into());
+                }
+                let w = self.write_element_drawings(std::path::Path::new(folder), format, &only, language)?;
+                Ok(json!({ "folder": folder, "systems": w.systems, "drawings": w.drawings, "files": w.files.iter().map(|f| f.file_name().map(|n| n.to_string_lossy().to_string())).collect::<Vec<_>>() }))
+            }
             "hover" => {
                 let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
                 let (vx, vy) = self.to_viewport(x, y);

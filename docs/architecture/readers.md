@@ -82,6 +82,9 @@ Together this is some 30,000 lines of format knowledge in the app.
 | VRML and X3D (`.wrl`, `.x3d`) | 1,024 | in the app | New repository. |
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
+| 3D Tiles (`tileset.json`, `.b3dm`, `.i3dm`, `.pnts`, `.cmpt`) and quantized-mesh terrain (`.terrain`) | 72 (`tiles.rs`) | `3d-tiles-dll`: `tiles-core`, `tiles-model`, `tiles-read` | Laid out as the model from the start (2026-11-18). |
+| Compressed glTF (Draco, meshopt, mesh quantization, KTX2/Basis) | glue in `gltf.rs` | `3d-tiles-dll`: `tiles-gltf` | Decodes into plain glTF before the published glTF crate reads it; 3D Tiles content uses it too. |
+| Smithsonian Voyager scene (`.svx.json`) | 114 (`svx.rs`) | `svx-dll`: `svx-model`, `svx-read` | Laid out as the model from the start (2026-11-18). Both adapters place the glTF the readers hand over through `placed.rs` and the glTF adapter. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
 | DICOM with an embedded model (`.dcm`) | 73 | `crates/dcm-read`, on the published `dicom-object` (MIT OR Apache-2.0): it takes the STL, OBJ or MTL document out of the file and says what other files hold | A crate in the suite for now, as the other new readers of 2026-11-18; it uses nothing of the app and moves one to one into a repository of its own (`dicom-dll`) later. The adapter reads the document with the app's STL and OBJ readers. |
 

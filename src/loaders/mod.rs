@@ -7,6 +7,9 @@
 //! [`add`] before the app starts.
 
 mod gltf;
+mod placed;
+mod svx;
+mod tiles;
 mod obj;
 mod stl;
 #[cfg(not(target_arch = "wasm32"))]
@@ -232,6 +235,11 @@ pub trait Loader: Send + Sync {
     fn source_y_up(&self) -> bool {
         false
     }
+    /// True when this loader opens a file by its whole lower-case name, whatever loader its
+    /// extension names (`tileset.json` of 3D Tiles before the CityJSON `.json`).
+    fn claims(&self, _name: &str) -> bool {
+        false
+    }
     /// Lower-case extensions of folders this loader opens as a whole (e.g. an Allplan `.prj`
     /// project folder dropped on the window); not part of the file dialog filter.
     fn folder_extensions(&self) -> &'static [&'static str] {
@@ -284,7 +292,7 @@ pub fn add(loaders: Vec<&'static dyn Loader>) {
 /// All available loaders.
 pub fn registry() -> Vec<&'static dyn Loader> {
     let builtin: Vec<&'static dyn Loader> = vec![
-        &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
+        &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &tiles::TilesLoader, &svx::SvxLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
         &cityjson::CityJsonLoader, &landxml::LandXmlLoader, &threemf::ThreeMfLoader, &collada::ColladaLoader,
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
@@ -391,6 +399,10 @@ fn loader_for(source: &Source) -> Result<&'static dyn Loader, String> {
     let dir = source.path().filter(|p| p.is_dir());
     let folder = dir.is_some();
     let loaders = registry();
+    let name = source.name().to_lowercase();
+    if let Some(l) = loaders.iter().copied().find(|l| dir.is_none() && l.claims(&name)) {
+        return Ok(l);
+    }
     loaders
         .iter()
         .copied()

@@ -1,0 +1,1 @@
+Box (glTF-Draco variant) from the Khronos glTF Sample Assets, licence CC-BY-4.0, by Cesium.

@@ -3,7 +3,8 @@
 //! metres; converted to Z up. Base colour = material factor times the average colour of its
 //! base-colour texture (no texture mapping yet). Triangle strips and fans are drawn as
 //! triangles; point primitives (scans, photogrammetry) as dots in a point layer per material, in
-//! their vertex colours. Lines are not drawn.
+//! their vertex colours. Lines are not drawn. Compressed files (Draco, meshopt, quantized, KTX2
+//! textures) are first made plain by the `tiles-gltf` reader.
 
 use super::{Loader, DEFAULT_COLOR, Source};
 use crate::model::{flat_shaded, y_up_to_z_up, Layer};
@@ -31,10 +32,11 @@ impl Loader for GltfLoader {
     }
 
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
-        let (doc, buffers, images) = match source.path() {
-            Some(path) => import_file(path)?,
+        let (doc, buffers, images) = match (unpacked(source)?, source.path()) {
+            (Some(glb), _) => gltf::import_slice(glb).map_err(|e| format!("glTF: {e}"))?,
+            (None, Some(path)) => import_file(path)?,
             // bytes from the browser: .glb or .gltf with embedded buffers
-            None => gltf::import_slice(source.read()?).map_err(|e| format!("glTF: {e}"))?,
+            (None, None) => gltf::import_slice(source.read()?).map_err(|e| format!("glTF: {e}"))?,
         };
         let texture_average: Vec<[f32; 4]> = images.iter().map(average_color).collect();
 
@@ -80,6 +82,20 @@ impl Loader for GltfLoader {
         }
         Ok(out)
     }
+}
+
+/// The file as a plain glTF binary when it is compressed or requires extensions (`tiles-gltf`);
+/// the files it refers to are read beside it, held to the work folder as `import_file` does.
+fn unpacked(source: &Source) -> Result<Option<Vec<u8>>, String> {
+    let bytes = source.read()?;
+    let path = source.path();
+    let mut resolve = |uri: &str| -> Result<Vec<u8>, String> {
+        let path = path.ok_or("the files beside a glTF cannot be read here: open a .glb or a .gltf with embedded data")?;
+        let file = referenced_file(path.parent().unwrap_or(Path::new("./")), uri).ok_or("unsupported URI")?;
+        super::check_reference(path, &file)?;
+        std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+    };
+    tiles_gltf::unpack(&bytes, &mut resolve).map_err(|e| format!("glTF: {e}"))
 }
 
 type Import = (gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>);
@@ -401,6 +417,15 @@ mod tests {
         // the node is a pickable element; unnamed, so "Node <index>"
         assert_eq!(model.layers[0].elements, vec![(1, 0, 3)]);
         assert_eq!(model.element_props(1), vec![("Name".to_string(), "Node 0".to_string())]);
+    }
+
+    /// A Draco-compressed glTF (Khronos sample "Box"): decoded, a unit cube of 12 triangles.
+    #[test]
+    fn loads_draco_compressed_box() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/gltf-draco/Box.gltf");
+        let model = crate::loaders::load(&path).expect("draco glTF");
+        assert_eq!(model.triangle_count(), 12);
+        assert!((model.bounds.max[0] - 0.5).abs() < 1e-3 && (model.bounds.min[2] + 0.5).abs() < 1e-3, "{:?}", model.bounds);
     }
 
     /// A glTF of four points (mode 0) with colours, and the same four as a triangle strip.

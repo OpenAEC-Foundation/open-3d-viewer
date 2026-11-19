@@ -1028,6 +1028,29 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
     (layers, of_parts)
 }
 
+/// The NL-SfB code of an element: of its build-up, its linear type (found by the name its
+/// profile has) or its system type as the library has it; of a type the library lacks, the
+/// rule's for its layers. None for what has no type.
+fn nlsfb_of(e: &Element, library: &bim_library::Library) -> Option<String> {
+    match &e.shape {
+        Shape::Planar(p) => {
+            let b = p.build_up.as_ref()?;
+            let role = match p.form {
+                PlanarForm::Wall { .. } => bim_library::Role::Wall,
+                _ => library.buildup(&b.id).map_or(bim_library::Role::Floor, |of| of.role),
+            };
+            let of = library.buildup(&b.id).cloned().unwrap_or_else(|| bim_library::BuildUp::new(&b.id, role, b.layers.iter().map(|l| bim_library::Layer::new(&l.material, l.thickness)).collect()));
+            Some(of.nlsfb(&library.materials))
+        }
+        Shape::Linear(l) => {
+            let name = l.profile.name();
+            library.linear_types.iter().find(|t| library.linear_name(&t.id, bim_library::Lang::En).as_deref() == Some(name.as_str())).map(|t| t.nlsfb())
+        }
+        Shape::System(s) => library.system_type(&s.system_type.as_ref()?.id).map(|t| t.nlsfb()),
+        _ => None,
+    }
+}
+
 /// An element's properties as a flat JSON object.
 fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], level: Option<&str>, library: &bim_library::Library) -> String {
     let grid = model.grid;
@@ -1090,6 +1113,10 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Primary", c.primary.0.to_string());
             put("Secondary", c.secondary.0.to_string());
         }
+    }
+    // its NL-SfB code: that of its type in the library, else the rule's for what it is
+    if let Some(code) = nlsfb_of(e, library) {
+        put(crate::export::ifc::NLSFB, code);
     }
     // what it is made of, when it is of one material: the cut of it takes that material's hatch
     if let Some(key) = parts.first().and_then(|p| p.material.as_deref()).filter(|key| parts.iter().all(|p| p.material.as_deref() == Some(key))) {

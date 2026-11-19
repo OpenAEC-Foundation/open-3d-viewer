@@ -397,6 +397,29 @@ mod tests {
     }
 
     #[test]
+    fn an_element_has_the_nl_sfb_code_of_its_type() {
+        let mut app = project();
+        let a = app.add_element("Wall", None, wall(&app, 0.0, "wall.cavity-pir-360")).unwrap();
+        let b = app.add_element("Wall", None, wall(&app, 3.0, "wall.metal-stud-75")).unwrap();
+        let code = |app: &App, id: ElementId| {
+            let shown = app.modeller.shown.and_then(|at| app.models.iter().find(|e| e.model.id == at)).expect("the model shows").model.clone();
+            shown.element_props(id.0).into_iter().find(|(k, _)| k == "NL-SfB").map(|(_, v)| v)
+        };
+        assert_eq!((code(&app, a).as_deref(), code(&app, b).as_deref()), (Some("21"), Some("21")));
+        // the partition's type is given the code of an internal wall: its elements have it
+        let _ = app.update(Message::BuildUp(BuildUpMessage::Pick("wall.metal-stud-75".into())));
+        let _ = app.update(Message::BuildUp(BuildUpMessage::Coded(Some("22".into()))));
+        assert_eq!((code(&app, a).as_deref(), code(&app, b).as_deref()), (Some("21"), Some("22")));
+        // and the file has it as IFCX has a classification
+        let shown = app.modeller.shown.and_then(|at| app.models.iter().find(|e| e.model.id == at)).unwrap().model.clone();
+        let mut out = Vec::new();
+        crate::export::ifcx::write(&shown, &app.document, "codes.ifcx", &mut out).unwrap();
+        let text = serde_json::to_string(&serde_json::from_slice::<serde_json::Value>(&out).unwrap()).unwrap();
+        assert!(text.contains(r#""nlsfb::class":{"code":"22","uri":"https://identifier.buildingsmart.org/uri/nlsfb/nlsfb2005/2.2/class/22"}"#), "the partition's node has its code");
+        assert!(!text.contains("bsi::ifc::prop::NL-SfB"));
+    }
+
+    #[test]
     fn systems_follow_their_type() {
         let mut app = project();
         let line = |y: f64| SystemDef { start: DVec2::new(0.0, y), end: DVec2::new(6.0, y), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };

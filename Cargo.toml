@@ -49,12 +49,14 @@ required-features = ["pointcloud"]
 # The products a build holds: all four by default, with the switch at the top right of the window.
 # Code that serves one product moves behind its feature module by module.
 [features]
-default = ["viewer", "modeller", "validator", "pointcloud"]
+default = ["viewer", "modeller", "validator", "pointcloud", "planner"]
 viewer = []
 modeller = []
 validator = []
 # Its meshing comes from the library of Open Pointcloud Studio, on the desktop.
 pointcloud = ["dep:pointcloud-core"]
+# A trial: the web version of Open Planner Studio in a web frame inside the window, on Windows.
+planner = ["dep:wry"]
 
 [dependencies]
 # GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
@@ -230,7 +232,10 @@ signal-hook = "0.3"
 [target.'cfg(windows)'.dependencies]
 # Which GPU the window gets, before wgpu starts (`gpu`), and the window's rectangle when its
 # display scale changes (`dpi_drag`); the version wgpu-hal uses (MIT OR Apache-2.0)
-windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The web frame of the Planner: the system's web view (WebView2) as a child of the app's window
+# (MIT OR Apache-2.0). On Windows only for now: elsewhere it needs system libraries the builds lack.
+wry = { version = "0.57", default-features = false, optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
 # The app icon and version info in the .exe (MIT)

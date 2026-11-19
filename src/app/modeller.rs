@@ -37,6 +37,8 @@ pub mod sketch;
 pub mod tops;
 pub mod typed_length;
 pub mod typed_move;
+#[cfg(test)]
+mod showcase;
 
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

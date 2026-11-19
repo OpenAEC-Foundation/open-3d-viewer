@@ -82,15 +82,6 @@ pub fn lang(l: Language) -> Lang {
     }
 }
 
-fn role_label(role: Role, l: Language) -> &'static str {
-    match role {
-        Role::Wall => l.text("Wanden", "Walls"),
-        Role::Floor => l.text("Vloeren", "Floors"),
-        Role::Roof => l.text("Daken", "Roofs"),
-        Role::Ceiling => l.text("Plafonds", "Ceilings"),
-    }
-}
-
 pub(super) fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
     match group {
         SystemGroup::CurtainWall => l.text("Vliesgevels", "Curtain walls"),
@@ -306,7 +297,7 @@ impl App {
         for role in Role::ALL {
             let group = Group::BuildUps(role);
             let names = lib.names(role, lg);
-            body = body.push(header(role_label(role, l).into(), names.len(), group));
+            body = body.push(header(super::buildups::role_title(role, l).into(), names.len(), group));
             if !open(group) {
                 continue;
             }

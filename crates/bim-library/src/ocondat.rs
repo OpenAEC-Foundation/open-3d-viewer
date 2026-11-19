@@ -70,19 +70,6 @@ struct Planar {
     thickness: f64,
 }
 
-/// A name as part of an id: lower case, letters, digits and points, hyphens between.
-fn slug(name: &str) -> String {
-    let mut out = String::new();
-    for c in name.chars().flat_map(char::to_lowercase) {
-        if c.is_alphanumeric() || c == '.' || c == '_' {
-            out.push(c);
-        } else if !out.ends_with('-') && !out.is_empty() {
-            out.push('-');
-        }
-    }
-    out.trim_end_matches('-').to_string()
-}
-
 /// The library of Ocondat: its materials and its types of one material. A type that does not
 /// check is left out.
 pub fn library() -> Library {
@@ -90,7 +77,7 @@ pub fn library() -> Library {
     let types: Types = serde_json::from_str(TYPES).expect("the types of Ocondat are compiled in");
     for t in &types.planar {
         let role = if t.role == "wall" { Role::Wall } else { Role::Floor };
-        let id = format!("{PREFIX}{}.{}", t.role, slug(&t.name));
+        let id = format!("{PREFIX}{}.{}", t.role, crate::library::slug(&t.name));
         let _ = library.add_buildup(BuildUp { name: Some(t.name.clone()), ..BuildUp::new(&id, role, vec![Layer::new(&t.material, t.thickness / 1000.0)]) });
     }
     for t in &types.linear {
@@ -100,7 +87,7 @@ pub fn library() -> Library {
         };
         for role in &t.roles {
             let of = if role == "column" { LinearRole::Column } else { LinearRole::Beam };
-            let id = format!("{PREFIX}{role}.{}", slug(&t.name));
+            let id = format!("{PREFIX}{role}.{}", crate::library::slug(&t.name));
             let _ = library.add_linear_type(LinearType { name: Some(t.name.clone()), ..LinearType::new(&id, of, &t.material, profile.clone()) });
         }
     }

@@ -61,19 +61,6 @@ fn own_materials() -> Vec<Material> {
     ]
 }
 
-/// A name as part of an id: lower case, letters, digits and points, hyphens between.
-fn slug(name: &str) -> String {
-    let mut out = String::new();
-    for c in name.chars().flat_map(char::to_lowercase) {
-        if c.is_alphanumeric() || c == '.' || c == '_' {
-            out.push(c);
-        } else if !out.ends_with('-') && !out.is_empty() {
-            out.push('-');
-        }
-    }
-    out.trim_end_matches('-').to_string()
-}
-
 /// The library of the INB template: its materials (the starter's and its own) and its types. A
 /// type of the catalogue whose material is unknown, or that does not check, is left out.
 pub fn library() -> Library {
@@ -85,7 +72,7 @@ pub fn library() -> Library {
     let key = |material: Option<&Value>| MATERIALS.iter().find(|(name, _)| Some(*name) == material.and_then(Value::as_str)).map(|(_, key)| *key);
     for t in catalogue["types"].as_array().into_iter().flatten() {
         let (Some(name), Some(role)) = (t["name"].as_str(), t["role"].as_str()) else { continue };
-        let id = format!("{PREFIX}{role}.{}", slug(name));
+        let id = format!("{PREFIX}{role}.{}", crate::library::slug(name));
         match role {
             "wall" | "floor" | "roof" => {
                 let role = match role {

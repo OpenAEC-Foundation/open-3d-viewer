@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Wokół ościeżnicy brakuje stali:",
     "all; e.g. *sandwich*": "wszystkie; np. *sandwich*",
     "no": "brak",
-    "without steel in": "bez stali w"
+    "without steel in": "bez stali w",
+    "Add unit joint": "Dodaj styk elementów",
+    "As the type": "Jak typ",
+    "Clearance at the sides, top, bottom": "Luz po bokach, u góry, u dołu",
+    "Framing of its own": "Własne obramowanie",
+    "Header (m)": "Nadproże (m)",
+    "King studs per side": "Słupki przelotowe na stronę",
+    "Opening wider than": "Otwór szerszy niż",
+    "Preferred lengths": "Długości preferowane",
+    "Shortest unit": "Najkrótszy element",
+    "Studs from the end": "Słupki od końca",
+    "Studs from the middle": "Słupki od środka",
+    "Trimmers per side": "Słupki podporowe na stronę",
+    "Unit joint": "Styk elementów"
   }
 }

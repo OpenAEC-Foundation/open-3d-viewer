@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn a_wall_turned_round_stands_where_it_stood() {
-        let door = bim_core::Opening { along: 1.0, sill: 0.0, width: 0.9, height: 2.1 };
+        let door = bim_core::Opening { along: 1.0, sill: 0.0, width: 0.9, height: 2.1, framing: None };
         let form = PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0 };
         let wall = turned_round(PlanarDef { form, thickness: 0.3, openings: vec![door], build_up: None });
         let PlanarForm::Wall { start, end, .. } = wall.form else { panic!() };

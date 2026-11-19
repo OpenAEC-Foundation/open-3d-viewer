@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Kasanın çevresinde çelik eksik:",
     "all; e.g. *sandwich*": "tümü; örn. *sandwich*",
     "no": "yok",
-    "without steel in": "çeliksiz, içinde"
+    "without steel in": "çeliksiz, içinde",
+    "Add unit joint": "Ünite derzi ekle",
+    "As the type": "Tipteki gibi",
+    "Clearance at the sides, top, bottom": "Yanlarda, üstte, altta boşluk",
+    "Framing of its own": "Kendi çerçevesi",
+    "Header (m)": "Lento (m)",
+    "King studs per side": "Her yanda kesintisiz dikme",
+    "Opening wider than": "Şundan geniş boşluk:",
+    "Preferred lengths": "Tercih edilen boylar",
+    "Shortest unit": "En kısa ünite",
+    "Studs from the end": "Dikmeler sondan",
+    "Studs from the middle": "Dikmeler ortadan",
+    "Trimmers per side": "Her yanda destek dikmesi",
+    "Unit joint": "Ünite derzi"
   }
 }

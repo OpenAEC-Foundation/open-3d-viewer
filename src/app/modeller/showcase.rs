@@ -37,7 +37,7 @@ fn p(x: f64, y: f64) -> DVec2 {
 
 /// A standing system of type `id` on the line `a`–`b`, or lying in the rectangle from `a` to `b`.
 fn system(app: &App, id: &str, a: DVec2, b: DVec2, height: f64, openings: Vec<Opening>) -> Option<Shape> {
-    let generic = SystemDef { start: a, end: b, base: 0.0, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings };
+    let generic = SystemDef { start: a, end: b, base: 0.0, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new() };
     let t = app.library.system_type(id)?;
     if let Some(above) = t.lying {
         let (lo, hi) = (a.min(b), a.max(b));
@@ -66,10 +66,10 @@ fn connect(app: &mut App, log: &mut Log, name: &str, kind: ConnectionKind, prima
     }
 }
 
-const DOOR: Opening = Opening { along: 0.9, sill: 0.0, width: 0.93, height: 2.315 };
+const DOOR: Opening = Opening { along: 0.9, sill: 0.0, width: 0.93, height: 2.315, framing: None };
 
 fn window(along: f64) -> Opening {
-    Opening { along, sill: 0.9, width: 1.2, height: 1.2 }
+    Opening { along, sill: 0.9, width: 1.2, height: 1.2, framing: None }
 }
 
 /// The project: section `SHOWCASE_ONLY` of it (1 to 5), or all of it.
@@ -92,7 +92,7 @@ fn build() -> (App, Log) {
     let mut frame = |app: &mut App, log: &mut Log, id: &str, a: DVec2, b: DVec2, openings: Vec<Opening>| system(app, id, a, b, h, openings).and_then(|s| add(app, log, &name(id), s));
     let south = frame(&mut app, &mut log, outer, p(0.0, 0.0), p(w, 0.0), vec![DOOR, window(2.7), window(5.1)]);
     let east = frame(&mut app, &mut log, outer, p(w, 0.0), p(w, d), vec![window(1.8)]);
-    frame(&mut app, &mut log, outer, p(w, d), p(0.0, d), vec![window(1.2), Opening { along: 4.2, sill: 0.0, width: 1.8, height: 2.315 }]);
+    frame(&mut app, &mut log, outer, p(w, d), p(0.0, d), vec![window(1.2), Opening { along: 4.2, sill: 0.0, width: 1.8, height: 2.315, framing: None }]);
     frame(&mut app, &mut log, outer, p(0.0, d), p(0.0, 0.0), Vec::new());
     frame(&mut app, &mut log, "system.timber-frame-internal-89", p(4.2, 0.0), p(4.2, d), vec![Opening { along: 1.5, ..DOOR }]);
     // the short gable runs through at the south-east corner, by a connection of its own
@@ -312,7 +312,7 @@ fn report_overlaps(app: &App) {
 
 /// A standing system of type `id` on the line `a`–`b` from `base` up `height`.
 fn standing(app: &App, id: &str, a: DVec2, b: DVec2, base: f64, height: f64, openings: Vec<Opening>) -> Option<Shape> {
-    let generic = SystemDef { start: a, end: b, base, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings };
+    let generic = SystemDef { start: a, end: b, base, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new() };
     generic.typed_from(&app.library, id).map(Shape::System)
 }
 
@@ -321,7 +321,7 @@ fn standing(app: &App, id: &str, a: DVec2, b: DVec2, base: f64, height: f64, ope
 fn lying(app: &App, id: &str, a: DVec2, b: DVec2, level: f64) -> Option<Shape> {
     let t = app.library.system_type(id)?;
     let (lo, hi) = (a.min(b), a.max(b));
-    let rectangle = SystemDef { start: lo, end: p(hi.x, lo.y), base: level + t.lying?, height: hi.y - lo.y, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new() };
+    let rectangle = SystemDef { start: lo, end: p(hi.x, lo.y), base: level + t.lying?, height: hi.y - lo.y, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new() };
     rectangle.laid(t).map(Shape::System)
 }
 
@@ -334,7 +334,7 @@ fn windows(length: f64, junctions: &[f64], fixed: &[Opening]) -> Vec<Opening> {
     while along + 1.2 <= length - 0.9 {
         let free = junctions.iter().all(|j| *j < along - CLEAR || *j > along + 1.2 + CLEAR) && fixed.iter().all(|o| o.along + o.width < along - CLEAR || o.along > along + 1.2 + CLEAR);
         if free {
-            out.push(Opening { along, sill: 0.9, width: 1.2, height: 1.35 });
+            out.push(Opening { along, sill: 0.9, width: 1.2, height: 1.35, framing: None });
         }
         along += 2.4;
     }
@@ -351,11 +351,23 @@ fn build_building() -> (App, Log) {
     let mut log = Log::default();
     let _ = app.document.add_level("Level 1", 3.0);
     let _ = app.document.add_level("Level 2", 6.0);
+    // an exterior type with rules of its own: units of 3600 or 2400 and none under 1200, a higher
+    // header over a wider opening, and its framing clear of its openings
+    let ruled = "system.timber-frame-184-prefab";
+    if let Some(mut t) = app.library.system_type("system.timber-frame-184").cloned() {
+        t.id = ruled.into();
+        t.members.framing = t.members.framing.map(|f| {
+            f.with_unit(4.2).with_lengths(&[3.6, 2.4], 1.2).with_wide(&[(1.1, 0.24), (2.0, 0.3)]).with_clearance(bim_library::Clearance { sides: 0.01, top: 0.015, bottom: 0.005 })
+        });
+        if let Err(e) = app.library.add_system_type(t) {
+            log.refused.push(format!("{ruled}: {e:?}"));
+        }
+    }
     let lib = app.library.clone();
     let name = |id: &str| lib.system_name(id, Lang::En).unwrap_or_else(|| id.to_string());
     let (party, inner, floor, ceiling) = ("system.timber-frame-235", "system.timber-frame-internal-89", "system.hollow-core-260", "system.ceiling-600x600");
     let height = 2.7;
-    let door = |along: f64| Opening { along, sill: 0.0, width: 0.93, height: 2.315 };
+    let door = |along: f64| Opening { along, sill: 0.0, width: 0.93, height: 2.315, framing: None };
 
     // the ground slab under all of it
     let outline = vec![p(0.0, 0.0), p(15.6, 0.0), p(15.6, 4.8), p(9.6, 4.8), p(9.6, 7.2), p(0.0, 7.2)];
@@ -376,12 +388,14 @@ fn build_building() -> (App, Log) {
         }
         // where the dividers stand: south of the corridor and north of it
         let (south, north): (&[f64], &[f64]) = if storey == 0 { (&[3.0, 5.4], &[4.2]) } else { (&[2.4, 4.8], &[3.0, 6.0]) };
-        let outer = if storey == 0 { "system.timber-frame-184" } else { "system.timber-frame-140" };
+        let outer = if storey == 0 { ruled } else { "system.timber-frame-140" };
 
         // the exterior, counter-clockwise, its outside to the right of every line
         let on_south: Vec<f64> = south.iter().copied().chain([8.4, 12.0]).collect();
         let on_north: Vec<f64> = north.iter().map(|x| 9.6 - x).chain([1.2]).collect();
-        let entrances = if storey == 0 { vec![Opening { along: 6.4, sill: 0.0, width: 1.0, height: 2.315 }, Opening { along: 13.2, sill: 0.0, width: 1.0, height: 2.315 }] } else { Vec::new() };
+        // the front door has a framing of its own: two king studs and two trimmers either side
+        let doubled = bim_core::OpeningFraming { header: Some(0.3), kings: Some(2), trimmers: Some(2) };
+        let entrances = if storey == 0 { vec![Opening { along: 6.4, sill: 0.0, width: 1.0, height: 2.315, framing: Some(doubled) }, Opening { along: 13.2, sill: 0.0, width: 1.0, height: 2.315, framing: None }] } else { Vec::new() };
         let exterior: [(DVec2, DVec2, Vec<f64>, Vec<Opening>); 6] = [
             (outline[0], outline[1], on_south, entrances),
             (outline[1], outline[2], Vec::new(), Vec::new()),

@@ -417,7 +417,7 @@ mod tests {
         let mut e = app.modeller.model.get(id).cloned().unwrap();
         let mut shape = e.shape_in_project(&grid);
         if let Shape::Planar(p) = &mut shape {
-            p.openings.push(Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1 });
+            p.openings.push(Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1, framing: None });
         }
         e = e.reshaped(&grid, shape);
         app.modeller.model.replace(e).unwrap();

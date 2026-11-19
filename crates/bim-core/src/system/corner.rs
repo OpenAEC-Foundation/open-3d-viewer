@@ -469,7 +469,7 @@ pub(super) mod tests {
     pub(in crate::system) const BATTEN: f64 = 0.045;
 
     pub(in crate::system) fn def(a: (f64, f64), b: (f64, f64), height: f64, id: &str) -> SystemDef {
-        let s = SystemDef { start: DVec2::new(a.0, a.1), end: DVec2::new(b.0, b.1), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let s = SystemDef { start: DVec2::new(a.0, a.1), end: DVec2::new(b.0, b.1), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
         s.typed_from(&Library::starter(), id).unwrap()
     }
 
@@ -758,7 +758,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_corner_an_opening_leaves_no_room_for_is_not_made() {
-        let window = |along: f64| Opening { along, sill: 0.9, width: 1.2, height: 1.2 };
+        let window = |along: f64| Opening { along, sill: 0.9, width: 1.2, height: 1.2, framing: None };
         let opened = |a: (f64, f64), b: (f64, f64), along: f64| Shape::System(SystemDef { openings: vec![window(along)], ..def(a, b, 2.7, EXTERIOR) });
         // a window whose framing would stand in the corner's: both frames stay as they are
         let mut m = Model::new(TileGrid::default());
@@ -788,7 +788,7 @@ pub(super) mod tests {
         let bare = |a: (f64, f64), b: (f64, f64), along: Option<f64>| {
             let mut s = def(a, b, 2.7, EXTERIOR);
             s.system_type.as_mut().unwrap().layers.clear();
-            s.openings = along.map(|along| Opening { along, sill: 0.9, width: 1.2, height: 1.2 }).into_iter().collect();
+            s.openings = along.map(|along| Opening { along, sill: 0.9, width: 1.2, height: 1.2, framing: None }).into_iter().collect();
             Shape::System(s)
         };
         let grid = TileGrid::default();

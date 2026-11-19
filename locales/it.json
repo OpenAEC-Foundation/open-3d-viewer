@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Manca acciaio attorno al telaio:",
     "all; e.g. *sandwich*": "tutti; es. *sandwich*",
     "no": "senza",
-    "without steel in": "senza acciaio in"
+    "without steel in": "senza acciaio in",
+    "Add unit joint": "Aggiungi giunto di elemento",
+    "As the type": "Come il tipo",
+    "Clearance at the sides, top, bottom": "Gioco ai lati, sopra, sotto",
+    "Framing of its own": "Intelaiatura propria",
+    "Header (m)": "Architrave (m)",
+    "King studs per side": "Montanti passanti per lato",
+    "Opening wider than": "Apertura più larga di",
+    "Preferred lengths": "Lunghezze preferite",
+    "Shortest unit": "Elemento più corto",
+    "Studs from the end": "Montanti dalla fine",
+    "Studs from the middle": "Montanti dal centro",
+    "Trimmers per side": "Montanti di appoggio per lato",
+    "Unit joint": "Giunto di elemento"
   }
 }

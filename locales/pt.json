@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Falta aço à volta do caixilho:",
     "all; e.g. *sandwich*": "todas; p. ex. *sandwich*",
     "no": "sem",
-    "without steel in": "sem aço em"
+    "without steel in": "sem aço em",
+    "Add unit joint": "Adicionar junta de módulo",
+    "As the type": "Como o tipo",
+    "Clearance at the sides, top, bottom": "Folga nos lados, em cima, em baixo",
+    "Framing of its own": "Estrutura própria",
+    "Header (m)": "Verga (m)",
+    "King studs per side": "Montantes contínuos por lado",
+    "Opening wider than": "Vão mais largo que",
+    "Preferred lengths": "Comprimentos preferidos",
+    "Shortest unit": "Módulo mais curto",
+    "Studs from the end": "Montantes a partir do fim",
+    "Studs from the middle": "Montantes a partir do meio",
+    "Trimmers per side": "Montantes de apoio por lado",
+    "Unit joint": "Junta de módulo"
   }
 }

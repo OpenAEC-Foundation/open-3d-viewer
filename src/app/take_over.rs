@@ -205,7 +205,7 @@ fn boxed(id: u64, lo: [f32; 3], hi: [f32; 3]) -> crate::model::Layer {
 pub(crate) fn house() -> Arc<Model> {
     let mut model = Model::new(std::path::PathBuf::from("C:/work/house.rvt"), "Revit", vec![boxed(7, [0.0, 0.0, 0.0], [6.0, 0.3, 3.0]), boxed(8, [0.0, 0.3, 0.0], [0.3, 4.0, 3.0])]);
     model.project.levels = vec![("Level 0".into(), 0.0)];
-    let door = bim_core::Opening { along: 1.0, sill: 0.0, width: 0.9, height: 2.1 };
+    let door = bim_core::Opening { along: 1.0, sill: 0.0, width: 0.9, height: 2.1, framing: None };
     let wall = crate::model::SourceWall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, thickness: 0.3, openings: vec![door], level: Some("Level 0".into()), layers: Vec::new(), exterior_left: false };
     model.project.walls.insert(7, wall);
     Arc::new(model)
@@ -442,7 +442,7 @@ mod tests {
     fn a_wall_the_kernel_cannot_make_stays_the_files() {
         let mut model = Arc::try_unwrap(house()).unwrap();
         // two openings that overlap
-        model.project.walls.get_mut(&7).unwrap().openings.push(bim_core::Opening { along: 1.5, sill: 1.0, width: 1.0, height: 1.0 });
+        model.project.walls.get_mut(&7).unwrap().openings.push(bim_core::Opening { along: 1.5, sill: 1.0, width: 1.0, height: 1.0, framing: None });
         let mut app = opened();
         app.set_model(Arc::new(model));
         app.modeller.in_modeller = true;

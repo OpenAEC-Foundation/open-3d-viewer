@@ -459,7 +459,7 @@ mod tests {
     fn lying_selected() -> (App, ElementId) {
         let mut app = modelling();
         let library = bim_library::Library::starter();
-        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.6, 0.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.2, 6.0), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.6, 0.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.2, 6.0), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
         let floor = generic.laid(library.system_type("system.hollow-core-260").unwrap()).unwrap();
         let id = app.add_element("Floor", None, Shape::System(floor)).unwrap();
         app.keep_model_history();

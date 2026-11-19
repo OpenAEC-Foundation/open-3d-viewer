@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn a_t_junction_an_opening_leaves_no_room_for_is_not_made() {
-        let window = |along: f64| vec![Opening { along, sill: 0.9, width: 1.2, height: 1.2 }];
+        let window = |along: f64| vec![Opening { along, sill: 0.9, width: 1.2, height: 1.2, framing: None }];
         let both = |runs: Vec<Opening>, stands: Vec<Opening>| {
             let mut m = Model::new(TileGrid::default());
             let x = add(&mut m, Shape::System(SystemDef { openings: runs, ..def((0.0, 0.0), (L, 0.0), 2.7, EXTERIOR) }));

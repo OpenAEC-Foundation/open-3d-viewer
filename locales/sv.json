@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Stål saknas runt karmen:",
     "all; e.g. *sandwich*": "alla; t.ex. *sandwich*",
     "no": "ingen",
-    "without steel in": "utan stål i"
+    "without steel in": "utan stål i",
+    "Add unit joint": "Lägg till elementskarv",
+    "As the type": "Som typen",
+    "Clearance at the sides, top, bottom": "Spel vid sidorna, upptill, nedtill",
+    "Framing of its own": "Egen regling",
+    "Header (m)": "Överstycke (m)",
+    "King studs per side": "Genomgående reglar per sida",
+    "Opening wider than": "Öppning bredare än",
+    "Preferred lengths": "Föredragna längder",
+    "Shortest unit": "Kortaste element",
+    "Studs from the end": "Reglar från slutet",
+    "Studs from the middle": "Reglar från mitten",
+    "Trimmers per side": "Avväxlingsreglar per sida",
+    "Unit joint": "Elementskarv"
   }
 }

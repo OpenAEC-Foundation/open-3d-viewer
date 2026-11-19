@@ -428,7 +428,7 @@ fn merged(mut openings: Vec<bim_core::Opening>) -> Vec<bim_core::Opening> {
             let other = if k < openings.len() { openings.swap_remove(k) } else { out.swap_remove(k - openings.len()) };
             let (from, to) = (o.along.min(other.along), (o.along + o.width).max(other.along + other.width));
             let (bottom, top) = (o.sill.min(other.sill), (o.sill + o.height).max(other.sill + other.height));
-            o = bim_core::Opening { along: from, sill: bottom, width: to - from, height: top - bottom };
+            o = bim_core::Opening { along: from, sill: bottom, width: to - from, height: top - bottom, framing: None };
         }
         out.push(o);
     }
@@ -496,7 +496,7 @@ fn cut_of(wall: &SourceWall, hole: &Hole) -> Cut {
     let (from, to) = (from.max(0.0), to.min(length));
     let (bottom, top) = ((bottom - wall.base).max(0.0), (top - wall.base).min(wall.height));
     if to - from > 1e-3 && top - bottom > 1e-3 {
-        Cut::Opening(bim_core::Opening { along: from, sill: bottom, width: to - from, height: top - bottom })
+        Cut::Opening(bim_core::Opening { along: from, sill: bottom, width: to - from, height: top - bottom, framing: None })
     } else {
         Cut::Nothing
     }
@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn the_parts_of_one_door_make_one_opening_and_apart_ones_stay_apart() {
-        let o = |along: f64, sill: f64, width: f64, height: f64| bim_core::Opening { along, sill, width, height };
+        let o = |along: f64, sill: f64, width: f64, height: f64| bim_core::Opening { along, sill, width, height, framing: None };
         // frame, leaf and lining of one door, overlapping; a window beside it
         let got = merged(vec![o(1.7, 0.07, 1.58, 2.45), o(4.0, 0.9, 1.0, 1.2), o(1.78, 0.14, 1.44, 2.39), o(1.7, 0.07, 1.58, 2.44)]);
         assert_eq!(got.len(), 2);

@@ -292,7 +292,7 @@ impl Model {
             if left < 0.0 || left + p.size.x > length || sill < 0.0 || sill >= height {
                 continue;
             }
-            out.push(Opening { along: left, sill, width: p.size.x, height: p.size.z.min(height - sill) });
+            out.push(Opening { along: left, sill, width: p.size.x, height: p.size.z.min(height - sill), framing: None });
         }
         out
     }
@@ -679,7 +679,7 @@ mod tests {
         let point = add(&mut m, Shape::Point(PointDef { at: DVec3::new(1.0, 1.0, 0.0), rotation: 0.5, size: DVec3::new(0.6, 0.6, 0.9), opening: None }));
         let system = add(
             &mut m,
-            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
+            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() }),
         );
         assert!((m.evaluate(point).unwrap()[0].solid.volume() - 0.6 * 0.6 * 0.9).abs() < 1e-12);
         assert!(m.evaluate(system).unwrap().len() > 10);
@@ -742,7 +742,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let s = add(
             &mut m,
-            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
+            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() }),
         );
         let parts = m.evaluate(s).unwrap().len();
         let b = add(&mut m, beam(DVec3::new(0.75, -1.0, 2.0), DVec3::new(0.75, 1.0, 2.0)));
@@ -874,7 +874,7 @@ mod tests {
         assert!(glass.len() == 1 && glass[0].class == "IfcPlate" && (glass[0].solid.volume() - 1.08 * 1.08 * 0.02).abs() < 1e-9);
         m.remove(window);
         assert!((volume(&m, south) - (whole - hole)).abs() < 1e-9 && (volume(&m, north) - whole).abs() < 1e-9);
-        assert_eq!(m.openings_of(south), vec![Opening { along: 1.55, sill: 0.0, width: 0.9, height: 2.1 }]);
+        assert_eq!(m.openings_of(south), vec![Opening { along: 1.55, sill: 0.0, width: 0.9, height: 2.1, framing: None }]);
         // moved into the north wall: the south wall closes, the north one opens
         let mut moved = m.get(id).unwrap().clone();
         moved.shape = door(3.0, 4.0, std::f64::consts::PI);

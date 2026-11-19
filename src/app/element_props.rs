@@ -44,6 +44,14 @@ pub enum ElementField {
     Sill(usize),
     OpeningWidth(usize),
     OpeningHeight(usize),
+    /// An opening in a timber frame: how high its header is, and how many king studs and trimmers
+    /// stand either side of it (one or two).
+    OpeningHeader(usize),
+    OpeningKings(usize),
+    OpeningTrimmers(usize),
+    /// A joint between two prefab units of a timber frame that the user asked for: how far from
+    /// the frame's start it lies.
+    Break(usize),
     /// An end plate's thickness, its margin past the profile, its bolts' and holes' diameter, and
     /// how many bolts in each row.
     PlateThickness,
@@ -110,6 +118,14 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::System(s), F::Sill(i)) => opening(&s.openings, i).map(|o| o.sill),
         (Shape::System(s), F::OpeningWidth(i)) => opening(&s.openings, i).map(|o| o.width),
         (Shape::System(s), F::OpeningHeight(i)) => opening(&s.openings, i).map(|o| o.height),
+        // its own header, else the one its type gives an opening of its width
+        (Shape::System(s), F::OpeningHeader(i)) => {
+            let framing = s.system_type.as_ref()?.framing?;
+            opening(&s.openings, i).map(|o| o.framing.and_then(|f| f.header).unwrap_or_else(|| framing.header_for(o.width + 2.0 * framing.clearance.sides)))
+        }
+        (Shape::System(s), F::OpeningKings(i)) => opening(&s.openings, i).map(|o| f64::from(o.studs_beside().0)),
+        (Shape::System(s), F::OpeningTrimmers(i)) => opening(&s.openings, i).map(|o| f64::from(o.studs_beside().1)),
+        (Shape::System(s), F::Break(i)) => s.breaks.get(i).copied(),
         (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
             F::PlateThickness => Some(e.thickness),
             F::PlateMargin => Some(e.margin),
@@ -192,6 +208,11 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::System(s), F::Sill(i)) => set(&mut s.openings.get_mut(i)?.sill),
         (Shape::System(s), F::OpeningWidth(i)) => set(&mut s.openings.get_mut(i)?.width),
         (Shape::System(s), F::OpeningHeight(i)) => set(&mut s.openings.get_mut(i)?.height),
+        (Shape::System(s), F::OpeningHeader(i)) if v > 0.0 => s.openings.get_mut(i)?.framing.get_or_insert_with(Default::default).header = Some(v),
+        // one or two either side; one is what the type gives, so it is not kept
+        (Shape::System(s), F::OpeningKings(i)) if v == 1.0 || v == 2.0 => s.openings.get_mut(i)?.framing.get_or_insert_with(Default::default).kings = Some(v as u8).filter(|n| *n > 1),
+        (Shape::System(s), F::OpeningTrimmers(i)) if v == 1.0 || v == 2.0 => s.openings.get_mut(i)?.framing.get_or_insert_with(Default::default).trimmers = Some(v as u8).filter(|n| *n > 1),
+        (Shape::System(s), F::Break(i)) => set(s.breaks.get_mut(i)?),
         (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
             F::PlateThickness => set(&mut e.thickness),
             F::PlateMargin => set(&mut e.margin),
@@ -264,7 +285,7 @@ impl App {
         let Some((_, length)) = openings_of(&shape) else { return };
         let (width, height, sill) = if door { DOOR } else { WINDOW };
         if let Some(openings) = openings_mut(&mut shape) {
-            openings.push(Opening { along: (length - width) / 2.0, sill, width, height });
+            openings.push(Opening { along: (length - width) / 2.0, sill, width, height, framing: None });
         }
         self.modeller.refusal = None;
         self.change_shape(&e, shape);
@@ -293,6 +314,58 @@ impl App {
         changed.shape = Shape::Connection(ConnectionDef { kind: c.kind, primary: c.secondary, secondary: c.primary });
         self.modeller.refusal = None;
         self.change_element(changed);
+    }
+
+    /// Gives opening `index` of the selected timber frame the framing of its type again.
+    pub(super) fn reset_opening_framing(&mut self, index: usize) {
+        let Some(e) = self.defined().cloned() else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Shape::System(s) = &mut shape else { return };
+        if let Some(o) = s.openings.get_mut(index).filter(|o| o.framing.is_some()) {
+            o.framing = None;
+            self.modeller.refusal = None;
+            self.change_shape(&e, shape);
+        }
+    }
+
+    /// Asks for a joint between two prefab units of the selected timber frame: on the stud line
+    /// nearest the middle of the longest unit it has now where a joint can be made.
+    pub(super) fn add_break(&mut self) {
+        let Some(e) = self.defined().cloned() else { return };
+        let Ok(units) = bim_core::system::joined_units(&self.modeller.model, &e) else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Shape::System(s) = &mut shape else { return };
+        let Some(longest) = (0..units.len()).max_by(|a, b| units[*a].total_cmp(&units[*b])) else { return };
+        let (from, length) = (units[..longest].iter().sum::<f64>(), units[longest]);
+        let bay = s.spacing.x.max(bim_core::LINEAR_TOLERANCE);
+        // the stud lines inside that unit, the one nearest its middle first
+        let mut lines: Vec<f64> = (1..).map(|k| k as f64 * bay).skip_while(|u| *u <= from + bay / 2.0).take_while(|u| *u < from + length - bay / 2.0).collect();
+        lines.sort_by(|a, b| (a - from - length / 2.0).abs().total_cmp(&(b - from - length / 2.0).abs()));
+        let fits = |at: f64| {
+            let mut tried = s.clone();
+            tried.breaks.push(at);
+            bim_core::system::units(&tried).is_ok()
+        };
+        self.modeller.refusal = None;
+        match lines.into_iter().find(|at| fits(*at)) {
+            Some(at) => {
+                s.breaks.push(at);
+                self.change_shape(&e, shape);
+            }
+            None => self.modeller.refusal = Some(bim_core::Refusal::NoUnitJoint),
+        }
+    }
+
+    /// Takes back joint `index` of those asked for in the selected timber frame.
+    pub(super) fn remove_break(&mut self, index: usize) {
+        let Some(e) = self.defined().cloned() else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Shape::System(s) = &mut shape else { return };
+        if index < s.breaks.len() {
+            s.breaks.remove(index);
+            self.modeller.refusal = None;
+            self.change_shape(&e, shape);
+        }
     }
 
     /// Removes opening `index` of the selected wall or timber frame.
@@ -378,7 +451,8 @@ impl App {
             let name = self.library.system_name(&t.id, crate::app::library::lang(l)).unwrap_or_else(|| t.id.clone());
             rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
             // a frame made in prefab units: their lengths, its frame as long as its corners make it
-            if t.framing.is_some_and(|f| f.unit.is_some()) {
+            let asked = matches!(&e.shape, Shape::System(s) if !s.breaks.is_empty());
+            if t.framing.is_some_and(|f| f.unit.is_some()) || asked {
                 if let Ok(units) = bim_core::system::joined_units(&self.modeller.model, e) {
                     let lengths: Vec<String> = units.iter().map(|u| bim_library::millimetres(*u, crate::app::library::lang(l))).collect();
                     rows = rows.push(prop_row(p, l.text("Prefab-elementen", "Prefab units").to_string(), lengths.join(" + ")));
@@ -469,9 +543,33 @@ impl App {
                     .push(field(l.text("Borstwering (m)", "Sill (m)"), F::Sill(i)))
                     .push(field(l.text("Breedte (m)", "Width (m)"), F::OpeningWidth(i)))
                     .push(field(l.text("Hoogte (m)", "Height (m)"), F::OpeningHeight(i)));
+                // in a timber frame: its framing, the type's until it is given its own
+                if matches!(&shape, Shape::System(_)) {
+                    rows = rows
+                        .push(field(l.text("Latei (m)", "Header (m)"), F::OpeningHeader(i)))
+                        .push(field(l.text("Doorgaande stijlen per zijde", "King studs per side"), F::OpeningKings(i)))
+                        .push(field(l.text("Zijstijlen per zijde", "Trimmers per side"), F::OpeningTrimmers(i)));
+                    if openings[i].framing.is_some() {
+                        let reset = button(text(l.text("Als het type", "As the type")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::ResetOpeningFraming(i));
+                        rows = rows.push(row![text(l.text("Eigen regelwerk", "Framing of its own")).size(12).width(Length::Fill), reset].align_y(Center));
+                    }
+                }
             }
             let add = |label: &str, door: bool| button(text(label.to_string()).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddOpening(door));
             rows = rows.push(row![add(l.text("Deur toevoegen", "Add door"), true), add(l.text("Raam toevoegen", "Add window"), false)].spacing(6));
+        }
+        // a timber frame: the joints between its prefab units that were asked for
+        if let Shape::System(s) = &shape {
+            if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) {
+                for i in 0..s.breaks.len() {
+                    let remove = button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveBreak(i));
+                    rows = rows
+                        .push(row![text(format!("{} {}", l.text("Elementnaad", "Unit joint"), i + 1)).size(12).width(Length::Fill), remove].align_y(Center))
+                        .push(field(l.text("Vanaf begin (m)", "From start (m)"), F::Break(i)));
+                }
+                let add = button(text(l.text("Elementnaad toevoegen", "Add unit joint")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::AddBreak);
+                rows = rows.push(add);
+            }
         }
         let base = match e.base() {
             bim_core::BaseKind::Point => l.text("Puntvormig", "Point"),
@@ -581,10 +679,10 @@ mod tests {
         assert_eq!(wall(&app).openings.len(), 1);
         assert_eq!(app.modeller.refusal, Some(Refusal::OpeningsOverlap));
         type_in(&mut app, ElementField::Along(0), "0.5");
-        assert_eq!(wall(&app).openings[0], Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1 });
+        assert_eq!(wall(&app).openings[0], Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1, framing: None });
         let _ = app.update(Message::AddOpening(false));
         assert_eq!(wall(&app).openings.len(), 2);
-        assert_eq!(wall(&app).openings[1], Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2 });
+        assert_eq!(wall(&app).openings[1], Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2, framing: None });
         let volume = app.modeller.model.evaluate(ElementId(1)).unwrap()[0].solid.volume();
         assert!((volume - (15.0 - 0.9 * 2.1 - 1.2 * 1.2) * 0.2).abs() < 1e-9);
         let _ = app.update(Message::RemoveOpening(0));
@@ -629,7 +727,7 @@ mod tests {
         use bim_core::SystemDef;
         let mut app = App::default();
         app.new_model("Level 0");
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         let system = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
@@ -646,7 +744,7 @@ mod tests {
             assert!(ui.find("Prefab units").is_ok() && ui.find("2400 + 2600").is_ok());
         }
         let _ = app.update(Message::AddOpening(false));
-        assert_eq!(system(&app).openings, [Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2 }]);
+        assert_eq!(system(&app).openings, [Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2, framing: None }]);
         // its header: a member as deep as the studs, 200 high, over the window and its trimmers
         let header = |app: &App| {
             app.modeller.model.evaluate(id).unwrap().iter().any(|p| {
@@ -660,7 +758,7 @@ mod tests {
         let _ = app.update(Message::AddOpening(true));
         assert_eq!(system(&app).openings.len(), 2, "a door in the middle beside the window");
         let _ = app.update(Message::RemoveOpening(0));
-        assert_eq!(system(&app).openings, [Opening { along: 2.05, sill: 0.0, width: 0.9, height: 2.1 }]);
+        assert_eq!(system(&app).openings, [Opening { along: 2.05, sill: 0.0, width: 0.9, height: 2.1, framing: None }]);
         // the right pane lists it with its fields and the buttons to add more
         let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
         assert!(ui.find("Door 1").is_ok() && ui.find("Add window").is_ok());
@@ -673,7 +771,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let frame = |app: &App, start: DVec2, end: DVec2, id: &str| {
-            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
             Shape::System(s.typed_from(&app.library, id).unwrap())
         };
         let outer = frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0), "system.timber-frame-140");
@@ -722,7 +820,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let frame = |app: &App, start: DVec2, end: DVec2| {
-            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() };
             Shape::System(s.typed_from(&app.library, "system.timber-frame-140").unwrap())
         };
         let (long, short) = (frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0)), frame(&app, DVec2::new(4.8, 0.0), DVec2::new(4.8, 3.0)));
@@ -786,5 +884,66 @@ mod tests {
                 }
             }
         }
+    }
+    /// A new model with a timber frame 7.2 m long with a window in it, selected.
+    fn frame_selected() -> App {
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2, framing: None };
+        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(7.2, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: vec![window], breaks: Vec::new() };
+        let frame = generic.typed_from(&bim_library::Library::starter(), "system.timber-frame-140").unwrap();
+        app.add_element("Frame", None, Shape::System(frame)).unwrap();
+        app.select_modelled(ElementId(1));
+        app
+    }
+
+    fn frame(app: &App) -> bim_core::SystemDef {
+        let Shape::System(s) = app.modeller.model.get(ElementId(1)).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
+        s
+    }
+
+    #[test]
+    fn an_opening_of_a_timber_frame_takes_a_framing_of_its_own() {
+        use ElementField as F;
+        let mut app = frame_selected();
+        // it shows what its type gives it
+        let nominal = frame(&app).system_type.unwrap().framing.unwrap().header;
+        assert_eq!(value(&Shape::System(frame(&app)), F::OpeningHeader(0)), Some(nominal));
+        assert_eq!(value(&Shape::System(frame(&app)), F::OpeningKings(0)), Some(1.0));
+        type_in(&mut app, F::OpeningHeader(0), "0,3");
+        type_in(&mut app, F::OpeningKings(0), "2");
+        type_in(&mut app, F::OpeningTrimmers(0), "2");
+        let own = frame(&app).openings[0].framing.expect("a framing of its own");
+        assert_eq!((own.header, own.kings, own.trimmers), (Some(0.3), Some(2), Some(2)));
+        assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
+        // three either side is not a framing; back to one is the type's again
+        type_in(&mut app, F::OpeningKings(0), "3");
+        assert_eq!(frame(&app).openings[0].studs_beside(), (2, 2));
+        type_in(&mut app, F::OpeningKings(0), "1");
+        assert_eq!(frame(&app).openings[0].framing.unwrap().kings, None);
+        let _ = app.update(Message::ResetOpeningFraming(0));
+        assert_eq!(frame(&app).openings[0].framing, None);
+    }
+
+    #[test]
+    fn a_timber_frame_takes_the_unit_joints_asked_for() {
+        use ElementField as F;
+        let mut app = frame_selected();
+        let units = |app: &App| bim_core::system::joined_units(&app.modeller.model, app.modeller.model.get(ElementId(1)).unwrap()).unwrap();
+        let before = units(&app);
+        let _ = app.update(Message::AddBreak);
+        assert_eq!(frame(&app).breaks.len(), 1);
+        assert_eq!(units(&app).len(), before.len() + 1, "{:?} after {before:?}", units(&app));
+        // typed in: the joint goes there, and the first unit is as long
+        type_in(&mut app, F::Break(0), "4,8");
+        assert_eq!(frame(&app).breaks, vec![4.8]);
+        assert!(units(&app).iter().scan(0.0, |at, u| { *at += u; Some(*at) }).any(|at| (at - 4.8).abs() < 1e-9), "{:?}", units(&app));
+        // in the window's framing it cannot be made: refused, and the frame stays as it was
+        type_in(&mut app, F::Break(0), "1,8");
+        assert_eq!(frame(&app).breaks, vec![4.8]);
+        assert_eq!(app.modeller.refusal, Some(Refusal::NoUnitJoint));
+        let _ = app.update(Message::RemoveBreak(0));
+        assert!(frame(&app).breaks.is_empty());
+        assert_eq!(units(&app), before);
     }
 }

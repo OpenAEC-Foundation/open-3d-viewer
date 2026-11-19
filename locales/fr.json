@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Il manque de l'acier autour du cadre :",
     "all; e.g. *sandwich*": "tous ; p. ex. *sandwich*",
     "no": "pas de",
-    "without steel in": "sans acier dans"
+    "without steel in": "sans acier dans",
+    "Add unit joint": "Ajouter un joint d'élément",
+    "As the type": "Comme le type",
+    "Clearance at the sides, top, bottom": "Jeu sur les côtés, en haut, en bas",
+    "Framing of its own": "Ossature propre",
+    "Header (m)": "Linteau (m)",
+    "King studs per side": "Montants continus par côté",
+    "Opening wider than": "Baie plus large que",
+    "Preferred lengths": "Longueurs préférées",
+    "Shortest unit": "Élément le plus court",
+    "Studs from the end": "Montants depuis la fin",
+    "Studs from the middle": "Montants depuis le milieu",
+    "Trimmers per side": "Montants d'appui par côté",
+    "Unit joint": "Joint d'élément"
   }
 }

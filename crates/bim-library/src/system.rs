@@ -139,19 +139,59 @@ impl Grid {
     }
 }
 
+/// A header for wider openings: openings wider than `over` get a header `high` high.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HeaderBand {
+    pub over: f64,
+    pub high: f64,
+}
+
+/// Where a frame's studs are counted from: its start, its end, or its middle (a stud stands on
+/// the middle of the frame, and the bays are counted out from it to both ends).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StudStart {
+    #[default]
+    Start,
+    End,
+    Centre,
+}
+
+/// How much larger than an opening its framing is made: the room for setting a door or window,
+/// at either side, over it and (a window) under it. The opening keeps its own size.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct Clearance {
+    #[serde(default)]
+    pub sides: f64,
+    #[serde(default)]
+    pub top: f64,
+    #[serde(default)]
+    pub bottom: f64,
+}
+
+impl Clearance {
+    fn is_none(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// How a framed face's members lie, as a timber frame's: plates along its foot and its head run
 /// through its length; studs stand between them, one at either end and one at every bay's centre
-/// from the start; noggins between the studs at every row up from the foot, where boards meet. As
-/// many plates lie on one another as it says (a double top plate is two). The frame lies inside
-/// its face.
+/// counted from where `studs` says (the frame's start, unless it says otherwise); noggins between
+/// the studs at every row up from the foot, where boards meet. As many plates lie on one another
+/// as it says (a double top plate is two). The frame lies inside its face.
 ///
 /// An opening in it is framed: a king stud either side runs from plate to plate, a trimmer inside
-/// it carries a header `header` high (as deep as the studs) over the opening, a window has a sill
-/// under it, and cripple studs stand above the header (over the trimmers too) and below the sill
-/// at the bay's centres. The header is the type's nominal size, not a lintel sized for its load.
+/// it carries a header over the opening, a window has a sill under it, and cripple studs stand
+/// above the header (over the trimmers too) and below the sill at the bay's centres. The header is
+/// `header` high (as deep as the studs), or as high as the last of `wide` the opening is wider
+/// than: a table of nominal sizes by width, not a lintel sized for its load. The framing stands
+/// `clearance` clear of the opening.
 ///
 /// A frame longer than its `unit` is made of prefab units, each with its own plates and end studs;
-/// no board crosses a joint between them.
+/// no board crosses a joint between them. With `lengths` the units are as long as the first of
+/// those that fits, one after the other from the frame's start, the last one what is left; without
+/// them the units are as few and as equal as can be. No unit is shorter than `shortest`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Framing {
     pub bottom_plates: u8,
@@ -160,11 +200,44 @@ pub struct Framing {
     pub header: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<f64>,
+    #[serde(default, skip_serializing_if = "no_bands")]
+    pub wide: [Option<HeaderBand>; 2],
+    #[serde(default, skip_serializing_if = "no_lengths")]
+    pub lengths: [Option<f64>; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortest: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_from_start")]
+    pub studs: StudStart,
+    #[serde(default, skip_serializing_if = "Clearance::is_none")]
+    pub clearance: Clearance,
+}
+
+fn no_bands(b: &[Option<HeaderBand>; 2]) -> bool {
+    b.iter().all(Option::is_none)
+}
+
+fn no_lengths(l: &[Option<f64>; 4]) -> bool {
+    l.iter().all(Option::is_none)
+}
+
+fn is_from_start(s: &StudStart) -> bool {
+    *s == StudStart::Start
 }
 
 impl Framing {
-    /// One plate at the foot and one at the head, headers 200 high, made in one piece.
-    pub const PLATES: Framing = Framing { bottom_plates: 1, top_plates: 1, header: 0.2, unit: None };
+    /// One plate at the foot and one at the head, headers 200 high, made in one piece, its studs
+    /// from its start, its framing against its openings.
+    pub const PLATES: Framing = Framing {
+        bottom_plates: 1,
+        top_plates: 1,
+        header: 0.2,
+        unit: None,
+        wide: [None; 2],
+        lengths: [None; 4],
+        shortest: None,
+        studs: StudStart::Start,
+        clearance: Clearance { sides: 0.0, top: 0.0, bottom: 0.0 },
+    };
 
     fn nominal_header() -> f64 {
         Self::PLATES.header
@@ -175,9 +248,60 @@ impl Framing {
         Self { header, ..self }
     }
 
+    /// This framing with higher headers over wider openings: `(over, high)` for at most two
+    /// widths, a header `high` high over an opening wider than `over`.
+    pub fn with_wide(self, bands: &[(f64, f64)]) -> Self {
+        let mut wide = [None; 2];
+        for (slot, &(over, high)) in wide.iter_mut().zip(bands) {
+            *slot = Some(HeaderBand { over, high });
+        }
+        Self { wide, ..self }
+    }
+
     /// This framing made in prefab units at most `unit` long.
     pub fn with_unit(self, unit: f64) -> Self {
         Self { unit: Some(unit), ..self }
+    }
+
+    /// This framing made in prefab units of the first of `lengths` (at most four) that fits, none
+    /// shorter than `shortest`.
+    pub fn with_lengths(self, lengths: &[f64], shortest: f64) -> Self {
+        let mut ranked = [None; 4];
+        for (slot, &length) in ranked.iter_mut().zip(lengths) {
+            *slot = Some(length);
+        }
+        Self { lengths: ranked, shortest: Some(shortest), ..self }
+    }
+
+    /// This framing with its studs counted from `studs`.
+    pub fn with_studs(self, studs: StudStart) -> Self {
+        Self { studs, ..self }
+    }
+
+    /// This framing standing `clearance` clear of its openings.
+    pub fn with_clearance(self, clearance: Clearance) -> Self {
+        Self { clearance, ..self }
+    }
+
+    /// How high the header over an opening `width` wide is: that of the widest band the opening
+    /// is wider than, else the nominal one.
+    pub fn header_for(&self, width: f64) -> f64 {
+        self.wide.iter().flatten().filter(|b| width > b.over).max_by(|a, b| a.over.total_cmp(&b.over)).map_or(self.header, |b| b.high)
+    }
+
+    /// Whether its sizes can be made: lengths above zero, clearances not below it, no unit longer
+    /// than the longest or shorter than the shortest.
+    pub fn fits(&self) -> bool {
+        let positive = |v: f64| v.is_finite() && v > 0.0;
+        let longest = self.unit.unwrap_or(f64::INFINITY);
+        let shortest = self.shortest.unwrap_or(0.0);
+        positive(self.header)
+            && self.unit.is_none_or(positive)
+            && self.shortest.is_none_or(positive)
+            && shortest <= longest
+            && self.wide.iter().flatten().all(|b| positive(b.over) && positive(b.high))
+            && self.lengths.iter().flatten().all(|l| positive(*l) && *l <= longest && *l >= shortest)
+            && [self.clearance.sides, self.clearance.top, self.clearance.bottom].into_iter().all(|c| c.is_finite() && c >= 0.0)
     }
 }
 
@@ -282,7 +406,7 @@ impl SystemType {
                 return Err(LibraryError::NotPositive);
             }
             if let Some(m) = members {
-                if !thick(m.width) || !thick(m.depth) || m.framing.is_some_and(|f| !thick(f.header) || f.unit.is_some_and(|u| !thick(u))) {
+                if !thick(m.width) || !thick(m.depth) || m.framing.is_some_and(|f| !thick(f.header) || f.unit.is_some_and(|u| !thick(u)) || !f.fits()) {
                     return Err(LibraryError::NotPositive);
                 }
                 known(&m.material)?;

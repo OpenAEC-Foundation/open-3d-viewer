@@ -810,6 +810,12 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// Give an opening (its index) of the selected timber frame its type's framing again.
+    ResetOpeningFraming(usize),
+    /// Ask for a joint between two prefab units of the selected timber frame, and take one (its
+    /// index) back.
+    AddBreak,
+    RemoveBreak(usize),
     /// The rows of an element's top in the Modeller's properties.
     Top(modeller::tops::TopMessage),
     /// A row of the Modeller's model explorer.
@@ -2000,6 +2006,9 @@ impl App {
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
+            Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),
+            Message::AddBreak => self.add_break(),
+            Message::RemoveBreak(index) => self.remove_break(index),
             Message::JoinKind(kind) => self.set_join_kind(kind),
             Message::SwapJoin => self.swap_join(),
             Message::PickJoin(id) => self.select_modelled(id),

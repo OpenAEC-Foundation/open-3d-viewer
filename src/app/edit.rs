@@ -674,8 +674,8 @@ mod tests {
 
     #[test]
     fn a_system_whose_start_moves_keeps_its_openings_where_they_stand() {
-        let opening = bim_core::Opening { along: 2.0, sill: 0.9, width: 1.2, height: 1.2 };
-        let system = Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(0.6, 2.7), member: DVec2::new(0.038, 0.14), panel: 0.14, system_type: None, openings: vec![opening] });
+        let opening = bim_core::Opening { along: 2.0, sill: 0.9, width: 1.2, height: 1.2, framing: None };
+        let system = Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(0.6, 2.7), member: DVec2::new(0.038, 0.14), panel: 0.14, system_type: None, openings: vec![opening], breaks: Vec::new() });
         // the start half a metre along the line: the window is that much nearer to it
         let Shape::System(moved) = with_points(&system, &[DVec3::new(0.5, 0.0, 0.0), DVec3::new(6.0, 0.0, 0.0)]) else { panic!("a system") };
         assert!((moved.openings[0].along - 1.5).abs() < 1e-12, "{}", moved.openings[0].along);
@@ -791,7 +791,7 @@ mod tests {
                 openings: Vec::new(),
                 build_up: None,
             }),
-            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
+            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new() }),
         ];
         for shape in shapes {
             let (points, _) = edit_points(&shape);

@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Um den Rahmen fehlt Stahl:",
     "all; e.g. *sandwich*": "alle; z. B. *sandwich*",
     "no": "kein",
-    "without steel in": "ohne Stahl in"
+    "without steel in": "ohne Stahl in",
+    "Add unit joint": "Elementstoß hinzufügen",
+    "As the type": "Wie der Typ",
+    "Clearance at the sides, top, bottom": "Luft seitlich, oben, unten",
+    "Framing of its own": "Eigene Rahmung",
+    "Header (m)": "Sturz (m)",
+    "King studs per side": "Durchgehende Ständer je Seite",
+    "Opening wider than": "Öffnung breiter als",
+    "Preferred lengths": "Vorzugslängen",
+    "Shortest unit": "Kürzestes Fertigteil",
+    "Studs from the end": "Ständer vom Ende aus",
+    "Studs from the middle": "Ständer von der Mitte aus",
+    "Trimmers per side": "Wechselständer je Seite",
+    "Unit joint": "Elementstoß"
   }
 }

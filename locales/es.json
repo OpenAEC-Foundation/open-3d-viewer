@@ -1218,6 +1218,19 @@
     "Steel is missing around the frame:": "Falta acero alrededor del marco:",
     "all; e.g. *sandwich*": "todos; p. ej. *sandwich*",
     "no": "sin",
-    "without steel in": "sin acero en"
+    "without steel in": "sin acero en",
+    "Add unit joint": "Añadir junta de módulo",
+    "As the type": "Como el tipo",
+    "Clearance at the sides, top, bottom": "Holgura a los lados, arriba, abajo",
+    "Framing of its own": "Entramado propio",
+    "Header (m)": "Dintel (m)",
+    "King studs per side": "Montantes pasantes por lado",
+    "Opening wider than": "Hueco más ancho que",
+    "Preferred lengths": "Longitudes preferidas",
+    "Shortest unit": "Módulo más corto",
+    "Studs from the end": "Montantes desde el final",
+    "Studs from the middle": "Montantes desde el centro",
+    "Trimmers per side": "Montantes de apoyo por lado",
+    "Unit joint": "Junta de módulo"
   }
 }

@@ -22,6 +22,8 @@ use openaec_ui::Language;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementField {
     Name,
+    /// A member's strength class (S235, C30/37), as text; empty: not given.
+    Grade,
     /// A wall's, curtain wall's or object's height.
     Height,
     /// A wall's or slab's thickness, a curtain wall's panel thickness.
@@ -127,6 +129,14 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::System(s), F::OpeningKings(i)) => opening(&s.openings, i).map(|o| f64::from(o.studs_beside().0)),
         (Shape::System(s), F::OpeningTrimmers(i)) => opening(&s.openings, i).map(|o| f64::from(o.studs_beside().1)),
         (Shape::System(s), F::Break(i)) => s.breaks.get(i).copied(),
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::FinPlate(e), .. }), f) => match f {
+            F::PlateThickness => Some(e.thickness),
+            F::PlateMargin => Some(e.edge),
+            F::Bolt => Some(e.bolt),
+            F::Hole => Some(e.hole),
+            F::BoltRows => Some(f64::from(e.rows)),
+            _ => None,
+        },
         (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
             F::PlateThickness => Some(e.thickness),
             F::PlateMargin => Some(e.margin),
@@ -214,6 +224,14 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::System(s), F::OpeningKings(i)) if v == 1.0 || v == 2.0 => s.openings.get_mut(i)?.framing.get_or_insert_with(Default::default).kings = Some(v as u8).filter(|n| *n > 1),
         (Shape::System(s), F::OpeningTrimmers(i)) if v == 1.0 || v == 2.0 => s.openings.get_mut(i)?.framing.get_or_insert_with(Default::default).trimmers = Some(v as u8).filter(|n| *n > 1),
         (Shape::System(s), F::Break(i)) => set(s.breaks.get_mut(i)?),
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::FinPlate(e), .. }), f) => match f {
+            F::PlateThickness => set(&mut e.thickness),
+            F::PlateMargin => set(&mut e.edge),
+            F::Bolt => set(&mut e.bolt),
+            F::Hole => set(&mut e.hole),
+            F::BoltRows if v >= 1.0 && v.fract() == 0.0 && v <= 64.0 => e.rows = v as u32,
+            _ => return None,
+        },
         (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
             F::PlateThickness => set(&mut e.thickness),
             F::PlateMargin => set(&mut e.margin),
@@ -245,6 +263,9 @@ impl App {
         if field == ElementField::Name {
             return e.name.clone();
         }
+        if field == ElementField::Grade {
+            return e.grade.clone().unwrap_or_default();
+        }
         let digits = match field {
             ElementField::Turn | ElementField::Slope => 1,
             ElementField::BoltRows | ElementField::Eave => 0,
@@ -264,6 +285,13 @@ impl App {
                 let mut renamed = e.clone();
                 renamed.name = name.to_string();
                 self.change_element(renamed);
+            }
+        } else if field == ElementField::Grade {
+            let grade = Some(typed.trim().to_string()).filter(|g| !g.is_empty());
+            if grade != e.grade {
+                let mut graded = e.clone();
+                graded.grade = grade;
+                self.change_element(graded);
             }
         } else if let Some(shape) = number(&typed).and_then(|v| with_value(&e.shape_in_project(&self.modeller.model.grid), field, v)) {
             if field == ElementField::Height && e.top.is_some() {
@@ -443,6 +471,10 @@ impl App {
         let field = |label: &str, f: ElementField| field_row(p, label, self.element_field_text(e, f), f);
         use ElementField as F;
         let mut rows = column![field(l.text("Naam", "Name"), F::Name)].spacing(5);
+        // a drawing of this element alone, on a sheet of its own
+        if super::element_drawing::frame(&shape).is_some() {
+            rows = rows.push(button(text(l.text("Elementtekening", "Element drawing")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::ElementDrawing(l)));
+        }
         let has = |f: F| value(&shape, f).is_some();
         let fields: [(F, &str); 11] = [
             (F::Height, l.text("Hoogte (m)", "Height (m)")),
@@ -508,7 +540,10 @@ impl App {
             };
             rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
-        // a member: its ends and its length
+        // a member: its strength class, its ends and its length
+        if matches!(shape, Shape::Linear(_)) {
+            rows = rows.push(field(l.text("Sterkteklasse", "Grade"), F::Grade));
+        }
         for (label, value) in self.member_rows(e, l) {
             rows = rows.push(prop_row(p, label, value));
         }
@@ -541,10 +576,27 @@ impl App {
                             choice(l.text("Verstek", "Mitre"), ConnectionKind::Mitre),
                             choice(l.text("Stomp", "Butt"), ConnectionKind::Butt),
                             choice(l.text("Kopplaat", "End plate"), ConnectionKind::EndPlate(bim_core::join::EndPlate::default())),
+                            choice(l.text("Lip", "Fin plate"), ConnectionKind::FinPlate(bim_core::join::FinPlate::default())),
                         ]
                         .spacing(6),
                     )
                 };
+            }
+            // what it is to the analysis model
+            if let Some(fixity) = c.kind.fixity() {
+                let word = match fixity {
+                    bim_core::Fixity::Pinned => l.text("Scharnierend", "Pinned"),
+                    bim_core::Fixity::Rigid => l.text("Momentvast", "Rigid"),
+                };
+                rows = rows.push(prop_row(p, l.text("Voor de berekening", "For the analysis").to_string(), word.to_string()));
+            }
+            if matches!(c.kind, ConnectionKind::FinPlate(_)) {
+                rows = rows
+                    .push(field(l.text("Plaatdikte (m)", "Plate thickness (m)"), F::PlateThickness))
+                    .push(field(l.text("Randafstand (m)", "Edge distance (m)"), F::PlateMargin))
+                    .push(field(l.text("Bout (m)", "Bolt (m)"), F::Bolt))
+                    .push(field(l.text("Gat (m)", "Hole (m)"), F::Hole))
+                    .push(field(l.text("Aantal bouten", "Number of bolts"), F::BoltRows));
             }
             if matches!(c.kind, ConnectionKind::EndPlate(_)) {
                 rows = rows
@@ -764,6 +816,14 @@ mod tests {
         type_in(&mut app, ElementField::BoltRows, "2,5");
         let ConnectionKind::EndPlate(plate) = kind(&app) else { panic!() };
         assert_eq!(plate.rows, 3, "not a whole number of bolts: kept");
+        // to a fin plate: a plate and three bolts, a hinge; two bolts typed
+        let _ = app.update(Message::JoinKind(ConnectionKind::FinPlate(bim_core::join::FinPlate::default())));
+        assert_eq!((app.modeller.model.evaluate(joint).unwrap().len(), kind(&app).fixity()), (4, Some(bim_core::Fixity::Pinned)));
+        type_in(&mut app, ElementField::BoltRows, "2");
+        type_in(&mut app, ElementField::PlateMargin, "0.05");
+        let ConnectionKind::FinPlate(plate) = kind(&app) else { panic!() };
+        assert_eq!((plate.rows, plate.edge), (2, 0.05));
+        assert_eq!(app.modeller.model.evaluate(joint).unwrap().len(), 3);
         // and back to a mitre
         let _ = app.update(Message::JoinKind(ConnectionKind::Butt));
         assert_eq!(kind(&app), ConnectionKind::Butt);
@@ -903,6 +963,20 @@ mod tests {
         let model = &app.modeller.model;
         assert_eq!(corners(model, model.get(x).unwrap()), [None, None]);
         assert!((reach(&app, x) - 4.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_grade_typed_is_kept_with_the_member_and_shown_in_its_properties() {
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(4.0, 0.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let id = app.add_element("Beam", None, beam).unwrap();
+        app.select_modelled(id);
+        type_in(&mut app, ElementField::Grade, " S355 ");
+        assert_eq!(app.modeller.model.get(id).unwrap().grade.as_deref(), Some("S355"));
+        // emptied: not given
+        type_in(&mut app, ElementField::Grade, "");
+        assert_eq!(app.modeller.model.get(id).unwrap().grade, None);
     }
 
     #[test]

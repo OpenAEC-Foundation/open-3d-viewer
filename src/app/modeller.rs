@@ -32,6 +32,7 @@ pub(super) mod shape_handles;
 pub mod slab_handles;
 pub mod snaps;
 pub mod spaces;
+pub mod structure;
 pub mod temp_dims;
 pub mod sketch;
 pub mod tops;
@@ -190,6 +191,12 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// What joins made automatically are called, in the interface language.
     pub join_word: &'static str,
+    /// What the top of a beam is called on a structural plan, in the interface language ("b.k.").
+    pub top_word: &'static str,
+    /// What the pile schedule and its columns are called, in the interface language (see
+    /// `structure::PILE_WORDS`), and the name the schedule has now.
+    pub pile_words: [&'static str; 10],
+    pub pile_schedule: String,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
     /// The length being typed for what a tool draws, in millimetres (see `typed_length`).
@@ -593,7 +600,17 @@ impl App {
         // with no height typed, what stands reaches the level above, when there is one
         let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
         let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
-        match self.add_element_reaching(name, level, top, shape) {
+        // a column or a beam takes the strip's strength class
+        let grade = self.modeller.placement.of(tool).grade.filter(|_| matches!(tool, ModelTool::Column | ModelTool::Beam));
+        let added = self.add_element_reaching(name, level, top, shape);
+        if let (Ok(id), Some(grade)) = (&added, grade) {
+            if let Some(mut graded) = self.modeller.model.get(*id).cloned() {
+                graded.grade = Some(grade);
+                let _ = self.modeller.model.replace(graded);
+                self.show_modelled();
+            }
+        }
+        match added {
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];
                 self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
@@ -675,7 +692,7 @@ impl App {
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
             ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
-            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -788,6 +805,7 @@ impl App {
         self.follow_dimensions();
         // and the floor plans say their spaces and draw their doors' swings again
         self.tag_plans();
+        self.list_piles();
     }
 
     /// Puts `model` in the place of the scene shown, keeping the camera, the views and the
@@ -931,11 +949,15 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
 
 impl App {
     /// What the tool places from `a` to `b` (scene coordinates, as clicked) with the strip's type
-    /// and sizes: a wall on its location line.
+    /// and sizes: a wall on its location line, a beam with the side picked on the line.
     pub(super) fn shape_for(&self, tool: ModelTool, a: DVec3, b: DVec3) -> Shape {
         let (z, storey, _) = self.work_plane();
         let s = self.modeller.placement.of(tool);
-        let (a, b) = if tool == ModelTool::Wall { self.wall_axis(a, b, &s) } else { (a, b) };
+        let (a, b) = match tool {
+            ModelTool::Wall => self.wall_axis(a, b, &s),
+            ModelTool::Beam => self.beam_axis(a, b, &s),
+            _ => (a, b),
+        };
         tool_shape(tool, a, b, z, storey, &s, &self.library)
     }
 
@@ -1086,6 +1108,9 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
         }
         Shape::Linear(l) => {
             put("Profile", l.profile.name());
+            if let Some(grade) = &e.grade {
+                put("Grade", grade.clone());
+            }
             put("Length", m((l.end - l.start).length()));
         }
         Shape::Planar(p) => {
@@ -1115,9 +1140,15 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Mitre => "Mitre",
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
+                ConnectionKind::FinPlate(_) => "Fin plate",
                 ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
+            match c.kind.fixity() {
+                Some(bim_core::Fixity::Pinned) => put("Fixity", "Pinned".into()),
+                Some(bim_core::Fixity::Rigid) => put("Fixity", "Rigid".into()),
+                None => {}
+            }
             put("Primary", c.primary.0.to_string());
             put("Secondary", c.secondary.0.to_string());
         }

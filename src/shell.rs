@@ -1835,6 +1835,19 @@ impl Studio {
                 // joins made automatically are named in the interface language
                 self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
                 self.app.modeller.space_word = self.l().text("Ruimte", "Space");
+                self.app.modeller.top_word = self.l().text("b.k.", "top");
+                self.app.modeller.pile_words = [
+                    self.l().text("Palenstaat", "Pile schedule"),
+                    self.l().text("Peil", "Level"),
+                    self.l().text("Nr.", "No."),
+                    "X (mm)",
+                    "Y (mm)",
+                    self.l().text("Paal", "Pile"),
+                    self.l().text("Sterkteklasse", "Grade"),
+                    self.l().text("Afhakhoogte", "Cut-off level"),
+                    self.l().text("Paalpunt", "Pile tip"),
+                    self.l().text("Lengte (mm)", "Length (mm)"),
+                ];
                 self.app.modeller.snap_words = crate::app::modeller::snaps::Snap::ALL.map(|s| s.label(self.l()));
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),

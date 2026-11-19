@@ -382,9 +382,10 @@ impl App {
         self.modeller.space_typing = Some((k, typed));
     }
 
-    /// What every floor plan says and draws by itself, made again from the model: the name and
-    /// the area of each space of its level, and the swing of each door standing on it. Called
-    /// after every change of the model and when a plan is made.
+    /// What every plan says and draws by itself, made again from the model: the name and the
+    /// area of each space of its level, and the swing of each door standing on it; a structural
+    /// plan the labels of its beams and columns and the numbers of its piles instead (see
+    /// `structure`). Called after every change of the model and when a plan is made.
     pub(in crate::app) fn tag_plans(&mut self) {
         use crate::document::{Align, Note, NOTE_HEIGHT};
         let spaces = self.spaces();
@@ -399,7 +400,14 @@ impl App {
                 _ => None,
             })
             .collect();
+        let levels: Vec<(String, f64)> = self.document.levels().iter().map(|l| (l.path.clone(), l.elevation)).collect();
+        let top_word = if self.modeller.top_word.is_empty() { "top" } else { self.modeller.top_word };
+        let model = &self.modeller.model;
         self.document.set_plan_tags(|plan| {
+            if plan.kind.structural() {
+                let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);
+                return (super::structure::tags(model, &plan.level, elevation, plan.scale, top_word), Vec::new());
+            }
             let on = |level: &Option<String>| level.as_deref().is_none_or(|l| l == plan.level);
             let line = plan.scale * NOTE_HEIGHT * 1.6;
             let mut notes = Vec::new();

@@ -556,7 +556,8 @@ impl LinearType {
 }
 
 /// The linear types a library starts with: Open BIM Studio's columns, beams, a mullion, a
-/// skirting and a pipe.
+/// skirting and a pipe, and the usual sections of a structure in concrete, timber and glulam
+/// (steel has its profile table).
 pub fn starter() -> Vec<LinearType> {
     use LinearRole::*;
     let rect = |w: f64, d: f64| ProfileShape::Rectangle { width: w, depth: d };
@@ -568,6 +569,22 @@ pub fn starter() -> Vec<LinearType> {
         LinearType::new("beam.concrete-300x500", Beam, "concrete", rect(0.3, 0.5)),
         LinearType::new("beam.steel-200x400", Beam, "steel", rect(0.2, 0.4)),
         LinearType::new("beam.timber-75x225", Beam, "timber", rect(0.075, 0.225)),
+        LinearType::new("column.concrete-400x400", Column, "concrete", rect(0.4, 0.4)),
+        LinearType::new("column.concrete-500x500", Column, "concrete", rect(0.5, 0.5)),
+        LinearType::new("column.concrete-round-400", Column, "concrete", ProfileShape::Circle { diameter: 0.4 }),
+        LinearType::new("column.concrete-round-500", Column, "concrete", ProfileShape::Circle { diameter: 0.5 }),
+        LinearType::new("column.timber-200x200", Column, "timber", rect(0.2, 0.2)),
+        LinearType::new("column.glulam-200x200", Column, "glulam", rect(0.2, 0.2)),
+        LinearType::new("column.glulam-240x240", Column, "glulam", rect(0.24, 0.24)),
+        LinearType::new("beam.concrete-300x600", Beam, "concrete", rect(0.3, 0.6)),
+        LinearType::new("beam.concrete-400x500", Beam, "concrete", rect(0.4, 0.5)),
+        LinearType::new("beam.concrete-400x600", Beam, "concrete", rect(0.4, 0.6)),
+        LinearType::new("beam.concrete-500x500", Beam, "concrete", rect(0.5, 0.5)),
+        LinearType::new("beam.timber-75x200", Beam, "timber", rect(0.075, 0.2)),
+        LinearType::new("beam.timber-100x250", Beam, "timber", rect(0.1, 0.25)),
+        LinearType::new("beam.glulam-140x400", Beam, "glulam", rect(0.14, 0.4)),
+        LinearType::new("beam.glulam-160x480", Beam, "glulam", rect(0.16, 0.48)),
+        LinearType::new("beam.glulam-200x600", Beam, "glulam", rect(0.2, 0.6)),
         LinearType::new("mullion.aluminium-50x100", Mullion, "aluminium", rect(0.05, 0.1)),
         LinearType::new("skirting.timber-12x70", Skirting, "timber", rect(0.012, 0.07)),
         LinearType::new("pipe.generic-110", Pipe, "generic", ProfileShape::Circle { diameter: 0.11 }),

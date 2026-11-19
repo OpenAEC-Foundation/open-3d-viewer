@@ -84,8 +84,9 @@ pub fn cad_document(d: &Drawing2d) -> Document {
             let shift = if align == TextHorizontalAlignment::Center { t.width() / 2.0 } else { t.width() };
             text.horizontal_alignment = align;
             text.alignment_point = Some(mm(t.at));
-            text.insertion_point = mm([t.at[0] - shift, t.at[1]]);
+            text.insertion_point = mm([t.at[0] - shift * t.angle.cos(), t.at[1] - shift * t.angle.sin()]);
         }
+        text.rotation = t.angle.to_degrees();
         let _ = doc.add_entity(EntityType::Text(text));
     }
     for dim in &d.dimensions {
@@ -144,7 +145,7 @@ mod tests {
                 Line2d::new(Pen::Cut, [8.0, 0.0], [8.0, 5.0]),
                 Line2d::new(Pen::Beyond, [1.0, 1.0], [7.0, 1.0]),
             ],
-            texts: vec![Text2d { pen: Pen::Text, at: [1.0, 2.0], height: 0.25, text: "Kamer ë".into(), align: Align::Left }],
+            texts: vec![Text2d { pen: Pen::Text, at: [1.0, 2.0], height: 0.25, text: "Kamer ë".into(), align: Align::Left, angle: 0.0 }],
             dimensions: vec![Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25 }],
         }
     }
@@ -209,7 +210,7 @@ mod tests {
     #[test]
     fn texts_and_dimension_texts_stand_where_they_are_drawn() {
         let mut d = drawing();
-        d.texts.push(Text2d { pen: Pen::Text, at: [8.0, 6.0], height: 0.25, text: "Noord".into(), align: Align::Right });
+        d.texts.push(Text2d { pen: Pen::Text, at: [8.0, 6.0], height: 0.25, text: "Noord".into(), align: Align::Right, angle: 0.0 });
         let doc = cad_document(&d);
         let right = doc.entities().find_map(|e| match e {
             EntityType::Text(t) if t.value == "Noord" => Some(t.clone()),

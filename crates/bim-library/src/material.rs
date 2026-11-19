@@ -231,6 +231,8 @@ pub fn starter() -> Vec<Material> {
         m("insulation-pir", "isolatie PIR", "PIR insulation", "PIR-Dämmung", "isolant PIR", Insulation, INSULATION),
         m("mineral-wool", "minerale wol", "mineral wool", "Mineralwolle", "laine minérale", Insulation, [236, 214, 120]),
         m("timber", "hout", "timber", "Holz", "bois", Timber, TIMBER),
+        m("clt", "kruislaaghout", "cross-laminated timber", "Brettsperrholz", "bois lamellé-croisé", Timber, [214, 178, 128]),
+        m("glulam", "gelamineerd hout", "glulam", "Brettschichtholz", "bois lamellé-collé", Timber, [210, 172, 120]),
         m("timber-cladding", "houten gevelbekleding", "timber cladding", "Holzverschalung", "bardage bois", Timber, TIMBER),
         m("timber-frame-insulated", "houtskelet met isolatie", "timber frame with insulation", "Holzständerwerk mit Dämmung", "ossature bois isolée", Insulation, INSULATION),
         m("osb", "OSB", "OSB", "OSB", "OSB", Timber, [214, 182, 128]),

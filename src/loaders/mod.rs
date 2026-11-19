@@ -75,6 +75,7 @@ mod rhino;
 mod blend;
 mod fcstd;
 mod dicom;
+mod xodr;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -298,7 +299,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &fem::INP, &fem::BDF, &fem::MSH, &fem::S2K, &fem::SAF, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &fem::INP, &fem::BDF, &fem::MSH, &fem::S2K, &fem::SAF, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader, &xodr::XodrLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -614,6 +615,22 @@ mod tests {
         // a 10 mm radius sphere, in metres
         assert!(model.bounds.size().iter().all(|&s| (s - 0.02).abs() < 0.001), "{:?}", model.bounds.size());
         assert!(model.props.values().any(|p| p.contains("\"Object id\"")));
+    }
+
+    #[test]
+    fn loads_an_opendrive_network_at_its_place() {
+        let model = load(&repo_file("test-models/opendrive-street.xodr")).expect("OpenDRIVE file");
+        assert_eq!(model.format, "OpenDRIVE");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["biking", "border", "driving", "parking", "shoulder", "sidewalk", "reference lines"]);
+        // the lanes are pickable, with their road and lane
+        assert!(model.props.values().any(|p| p.contains("\"Road name\":\"Hoofdstraat\"") && p.contains("\"Lane\":\"-3\"")));
+        // the reference lines are lines, the lanes triangles
+        let lines = model.layers.last().unwrap();
+        assert!(lines.indices.is_empty() && !lines.lines.is_empty());
+        // placed by the header offset in the Dutch grid, which the file properties name
+        assert!(model.project.info.iter().any(|(k, v)| k == "Coordinate reference system" && v.contains("+proj=sterea")));
+        assert!(model.project.info.iter().any(|(k, v)| k == "OpenDRIVE world origin" && v == "155000, 463000, 0"));
     }
 
     #[test]

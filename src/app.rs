@@ -3312,9 +3312,13 @@ impl App {
     /// The ray through viewport point (x, y) (model space) and the nearest visible triangle it
     /// hits: (layer, triangle, how far the exploded view moved it (model space)).
     fn cast(&mut self, model: &Model, x: f32, y: f32, width: f32, height: f32) -> (Vec3, Vec3, Option<(usize, usize, Vec3)>) {
-        let mm = self.model_matrix();
-        let inv = (self.camera.view_proj(width / height) * mm).inverse();
         let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        self.cast_from_view(model, self.camera.view_proj(width / height), nx, ny)
+    }
+
+    fn cast_from_view(&mut self, model: &Model, view_proj: glam::Mat4, nx: f32, ny: f32) -> (Vec3, Vec3, Option<(usize, usize, Vec3)>) {
+        let mm = self.model_matrix();
+        let inv = (view_proj * mm).inverse();
         let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
         let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
         let shown = self.shown();

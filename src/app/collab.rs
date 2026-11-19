@@ -1441,6 +1441,40 @@ impl App {
         }
     }
 
+    /// Keep the building in frame and look for an exterior view onto the finding.
+    fn collab_frame_finding(&mut self, model: &Model, id: u64) {
+        let Some(bounds) = self.selection_bounds() else { return };
+        let mut view = self.fitted(self.camera);
+        let centre = Vec3::from_array(bounds.center());
+        let outward = centre - view.target;
+        if outward.truncate().length() > view.scene_radius * 0.001 {
+            view.yaw = outward.y.atan2(outward.x);
+        }
+        view.pitch = 20_f32.to_radians();
+        let fallback = view;
+        // A point on a real face also works for hollow and L-shaped elements.
+        let Some(&(layer, first, _)) = self.selection.first() else { return };
+        let mesh = &model.layers[layer];
+        let Some(face) = mesh.indices.get(first as usize..first as usize + 3) else { return };
+        let matrix = self.model_matrix();
+        let sample = face.iter().map(|&i| {
+            let at = 3 * i as usize;
+            matrix.transform_point3(Vec3::from_slice(&mesh.positions[at..at + 3])) + self.explode_offset(layer, i)
+        }).sum::<Vec3>() / 3.0;
+        let mut chosen = fallback;
+        for angle in [0_f32, 45., -45., 90., -90., 135., -135., 180.] {
+            view.yaw = fallback.yaw + angle.to_radians();
+            let projection = view.view_proj(self.aspect());
+            let point = projection.project_point3(sample);
+            let (_, _, hit) = self.cast_from_view(model, projection, point.x, point.y);
+            if hit.is_some_and(|(l, t, _)| model.layers[l].element_at(t) == Some(id)) {
+                chosen = view;
+                break;
+            }
+        }
+        self.anim = Some((self.camera, chosen, Instant::now()));
+    }
+
     /// What a clash test can take as a side, worked out once per model and language: everything,
     /// the structure and the services, each model, each layer and each class of the model.
     pub(crate) fn collab_refresh_sides(&mut self) {
@@ -2757,7 +2791,12 @@ impl App {
                     Some(id) if !model.element_ranges(id).is_empty() => {
                         // a room's walk to its way out is drawn with it
                         self.collab.route_shown = self.collab.routes.contains_key(&id).then_some(id);
-                        self.collab_go_to([id]);
+                        if self.collab.isolate {
+                            self.collab_go_to([id]);
+                        } else {
+                            self.collab_select([id]);
+                            self.collab_frame_finding(&model, id);
+                        }
                         self.refresh_overlay();
                     }
                     _ => self.collab_note(Tone::Info, l.text("Dit element heeft geen geometrie in het model.", "This element has no geometry in the model.")),
@@ -4908,6 +4947,29 @@ mod tests {
             layer.props.push((id, format!("{{\"IfcType\":\"{class}\",\"Name\":\"E{id}\",\"GlobalId\":\"guid-{id}\"}}")));
         }
         Model::new(PathBuf::from("house.ifc"), "IFC", vec![layer])
+    }
+
+    #[test]
+    fn finding_frames_the_building_from_a_visible_side() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let model = app.model.clone().unwrap();
+        let before = app.fitted(app.camera);
+        let _ = app.collab_update(Event::Finding(0, 2));
+        let (_, camera, _) = app.anim.expect("finding starts a camera move");
+        assert_eq!(camera.target, before.target);
+        assert_eq!(camera.distance, before.distance);
+        assert!(app.hidden.is_empty());
+        let mesh = &model.layers[0];
+        let sample = mesh.indices[36..39].iter().map(|&i| {
+            let start = 3 * i as usize;
+            app.model_matrix().transform_point3(Vec3::from_slice(&mesh.positions[start..start + 3]))
+        }).sum::<Vec3>() / 3.0;
+        let projection = camera.view_proj(app.aspect());
+        let point = projection.project_point3(sample);
+        let (_, _, hit) = app.cast_from_view(&model, projection, point.x, point.y);
+        let (layer, triangle, _) = hit.expect("finding visible from chosen camera");
+        assert_eq!(model.layers[layer].element_at(triangle), Some(2));
     }
 
     #[test]

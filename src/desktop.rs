@@ -7,7 +7,7 @@
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,supports,loads,next-set,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
-//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
+//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME] [--project NAME]... [--zoom STEPS,X,Y]
 //!                  [--recent PATH]... [--docs FOLDER [--doc FILE]] [--gis PLACE (an address or coordinates: its parcels and buildings are fetched) [--map background|aerial] [--soundings] [--borings]]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
@@ -53,6 +53,10 @@ struct Args {
     mesh: Option<String>,
     /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
     draft: Option<String>,
+    /// Views laid in the 3D view for `--screenshot` (the "In 3D" switch of a view), by name.
+    project: Vec<String>,
+    /// Zoom for `--screenshot`: wheel steps towards a point of the 3D view (x and y from -1 to 1).
+    zoom: Option<[f32; 3]>,
     /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
     pick: Option<u64>,
     /// For `--screenshot` of the Validator: a BCF file to open, an IDS to check on, and what
@@ -130,6 +134,11 @@ fn parse_args() -> Result<Args, String> {
             "--saved-view" => args.saved_view = Some(value()?),
             "--mesh" => args.mesh = Some(value()?),
             "--draft" => args.draft = Some(value()?),
+            "--project" => args.project.push(value()?),
+            "--zoom" => {
+                let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--zoom STEPS,X,Y")).collect::<Result<_, _>>()?;
+                args.zoom = Some(<[f32; 3]>::try_from(v).map_err(|_| "--zoom STEPS,X,Y")?);
+            }
             "--pick" => args.pick = Some(value()?.parse().map_err(|_| "--pick takes an element id")?),
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
             "--ids" => args.ids = Some(PathBuf::from(value()?)),
@@ -571,7 +580,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         }
         if let Some(name) = &args.draft {
             let model = app.model.clone().ok_or("no model")?;
-            let i = model.project.drafts.iter().position(|d| &d.name == name).ok_or(format!("no legend or drafting view {name} in the file"))?;
+            let i = model.project.drafts.iter().position(|d| &d.name == name).ok_or_else(|| format!("no legend or drafting view {name} in the file; it has: {}", model.project.drafts.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(" | ")))?;
             let _ = app.update(Message::OpenDraft(i));
             if let Some(element) = args.pick {
                 app.pick_drawn(element);
@@ -583,6 +592,17 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let path = plan.or_else(|| document.sections().iter().find(|s| &s.name == name).map(|s| s.path.clone())).ok_or(format!("no drawing {name} in the file"))?;
             let _ = app.update(Message::OpenPlan(Arc::from(path.as_str())));
             app.finish_animation();
+        }
+        for name in &args.project {
+            let document = app.document_now();
+            let plan = document.plans().iter().find(|p| &p.name == name).map(|p| p.path.clone());
+            let path = plan.or_else(|| document.sections().iter().find(|s| &s.name == name).map(|s| s.path.clone())).ok_or(format!("no drawing {name} in the file"))?;
+            let _ = app.update(Message::ProjectView(Arc::from(path.as_str())));
+        }
+        if let Some([steps, x, y]) = args.zoom {
+            app.finish_animation();
+            let aspect = app.aspect();
+            app.camera.zoom_at(steps, (x, y), aspect);
         }
     }
     // `--gis PLACE`: the place found, its surroundings fetched and the GIS tab shown

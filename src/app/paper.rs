@@ -249,7 +249,7 @@ impl App {
     /// The drawings of views as the sheet layout takes them (`crate::sheet_layout`): the crop, or
     /// else the whole cut, with the points its dimensions measure, around the middle of the
     /// whole cut (the point a placed view's place stands for). Views not cut yet are cut first.
-    fn layout_items(&mut self, views: &[String]) -> Vec<Item> {
+    pub(super) fn layout_items(&mut self, views: &[String]) -> Vec<Item> {
         for view in views {
             self.cut_view(view);
         }

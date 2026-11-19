@@ -404,7 +404,7 @@ impl Model {
             return Err(Refusal::SameMember);
         }
         match c.kind {
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
             ConnectionKind::Cut => {
                 let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
                 let parts = self.body(target)?;
@@ -473,6 +473,7 @@ impl Model {
             ConnectionKind::Butt => JoinKind::Butt,
             ConnectionKind::Mitre => JoinKind::Mitre,
             ConnectionKind::EndPlate(plate) => JoinKind::EndPlate(plate),
+            ConnectionKind::FinPlate(plate) => JoinKind::FinPlate(plate),
             // two members kept apart: no join
             ConnectionKind::Apart => {
                 self.member(c.primary)?;
@@ -777,6 +778,39 @@ mod tests {
         // and it reads back from JSON with its sizes
         let json = serde_json::to_string(m.get(joint).unwrap()).unwrap();
         assert!(json.contains("end_plate") && json.contains("0.015"), "{json}");
+        assert_eq!(&serde_json::from_str::<Element>(&json).unwrap(), m.get(joint).unwrap());
+    }
+
+    #[test]
+    fn a_fin_plate_connection_is_a_hinge_with_a_plate_and_bolts_through_the_web() {
+        let mut m = Model::new(TileGrid::default());
+        let column = add(&mut m, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::steel("HEA 200").unwrap(), roll: 0.0 }));
+        let b = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::steel("IPE 300").unwrap(), roll: 0.0 }));
+        let free = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(0.0, 9.0, 2.5), end: DVec3::new(5.0, 9.0, 2.5), profile: ProfileDef::steel("IPE 300").unwrap(), roll: 0.0 }));
+        let whole = m.evaluate(free).unwrap()[0].solid.volume();
+        let plate = crate::join::FinPlate::default();
+        let kind = ConnectionKind::FinPlate(plate);
+        assert_eq!((kind.fixity(), ConnectionKind::EndPlate(Default::default()).fixity(), ConnectionKind::Butt.fixity()), (Some(crate::Fixity::Pinned), Some(crate::Fixity::Rigid), None));
+        let joint = add(&mut m, Shape::Connection(ConnectionDef { kind, primary: column, secondary: b }));
+        assert_eq!(m.get(joint).unwrap().class(), "IfcElementAssembly");
+        let parts = m.evaluate(joint).unwrap();
+        assert_eq!(parts.iter().map(|p| p.class).collect::<Vec<_>>(), ["IfcPlate", "IfcMechanicalFastener", "IfcMechanicalFastener", "IfcMechanicalFastener"]);
+        // the plate: 90 by 240 by 10 with three 22 mm holes
+        let hole = crate::profile::Profile::circle(0.022).unwrap().area();
+        assert!((parts[0].solid.volume() - (0.09 * 0.24 - 3.0 * hole) * 0.01).abs() < 1e-9, "{}", parts[0].solid.volume());
+        // against the web's side: an IPE 300's web is 7.1 mm, so the plate lies from y = 3.55 mm
+        let (lo, hi) = parts[0].solid.positions.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y.abs()), hi.max(p.y.abs())));
+        assert!((lo - 0.00355).abs() < 1e-4 && (hi - 0.01355).abs() < 1e-4, "{lo} {hi}");
+        // the beam is shorter than a free one and its web is drilled
+        let joined = m.evaluate(b).unwrap()[0].solid.volume();
+        assert!(joined < whole - 3.0 * hole * 0.007, "{joined} {whole}");
+        // a plate too high for the profile is refused
+        let high = ConnectionKind::FinPlate(crate::join::FinPlate { rows: 5, ..plate });
+        let mut changed = m.get(joint).unwrap().clone();
+        changed.shape = Shape::Connection(ConnectionDef { kind: high, primary: column, secondary: b });
+        assert_eq!(m.replace(changed), Err(Refusal::BoltsDoNotFit));
+        let json = serde_json::to_string(m.get(joint).unwrap()).unwrap();
+        assert!(json.contains("fin_plate"), "{json}");
         assert_eq!(&serde_json::from_str::<Element>(&json).unwrap(), m.get(joint).unwrap());
     }
 

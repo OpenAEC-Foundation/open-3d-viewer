@@ -11,6 +11,10 @@
 //!   or its interior face (the exterior is on the wall's right). Walls drawn one after the other
 //!   on a face still meet at their corners: the last one's end and the next one's start go to
 //!   where their axes cross.
+//! - **Alignment**: whether a beam lies on the line drawn with its axis, its left side or its
+//!   right side (left and right as seen from its start to its end).
+//! - **Grade**: a column's or beam's strength class (steel S235, concrete C30/37), kept with the
+//!   element.
 //! - **Chain**: whether the next wall, beam or curtain wall starts where the last one ended.
 //!
 //! A value is used as soon as it is valid; until then the field keeps what was typed. The preview
@@ -28,30 +32,35 @@ use iced::{Center, Element, Fill};
 use openaec_ui::Language;
 use std::collections::HashMap;
 
-/// Where a wall stands on the line drawn.
+/// Where a wall or a beam stands on the line drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocationLine {
     /// Its axis on the line.
     #[default]
     Centre,
-    /// Its exterior face (on its right) on the line.
+    /// Its exterior face (on its right) on the line; a beam's right side.
     Exterior,
-    /// Its interior face (on its left) on the line.
+    /// Its interior face (on its left) on the line; a beam's left side.
     Interior,
 }
 
 impl LocationLine {
     pub const ALL: [LocationLine; 3] = [LocationLine::Centre, LocationLine::Exterior, LocationLine::Interior];
 
-    fn label(self, l: Language) -> &'static str {
-        match self {
-            LocationLine::Centre => l.text("Hartlijn", "Centre line"),
-            LocationLine::Exterior => l.text("Buitenzijde", "Exterior face"),
-            LocationLine::Interior => l.text("Binnenzijde", "Interior face"),
+    /// Its name for `tool`: a wall has an exterior and an interior face, a beam a left and a
+    /// right side.
+    fn label(self, tool: ModelTool, l: Language) -> &'static str {
+        match (self, tool == ModelTool::Beam) {
+            (LocationLine::Centre, _) => l.text("Hartlijn", "Centre line"),
+            (LocationLine::Exterior, false) => l.text("Buitenzijde", "Exterior face"),
+            (LocationLine::Interior, false) => l.text("Binnenzijde", "Interior face"),
+            (LocationLine::Exterior, true) => l.text("Rechterzijde", "Right side"),
+            (LocationLine::Interior, true) => l.text("Linkerzijde", "Left side"),
         }
     }
 
-    /// How far the axis lies to the left of the line drawn, for a wall `thickness` thick.
+    /// How far the axis lies to the left of the line drawn, for a wall or a beam `thickness`
+    /// thick.
     fn shift(self, thickness: f64) -> f64 {
         match self {
             LocationLine::Centre => 0.0,
@@ -80,6 +89,8 @@ pub struct Settings {
     /// A window's sill.
     pub sill: f64,
     pub location: LocationLine,
+    /// A column's or beam's strength class (see [`GRADES`]); `None`: not given.
+    pub grade: Option<String>,
     /// What the Slab tool makes: a floor, a roof or a ceiling.
     pub role: bim_core::SlabRole,
 }
@@ -87,7 +98,7 @@ pub struct Settings {
 impl Settings {
     /// What a tool places when nothing was typed.
     pub fn default_for(tool: ModelTool) -> Self {
-        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, role: bim_core::SlabRole::Floor };
+        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, grade: None, role: bim_core::SlabRole::Floor };
         use super::element_props::{DOOR, WINDOW};
         use super::modeller::{BEAM, COLUMN, OBJECT, SLAB_THICKNESS, WALL_THICKNESS};
         match tool {
@@ -102,6 +113,10 @@ impl Settings {
         }
     }
 }
+
+/// The strength classes the strip offers a column or a beam: structural steel (EN 10025),
+/// concrete (EN 206) and timber (EN 338, EN 14080).
+pub const GRADES: [&str; 12] = ["S235", "S275", "S355", "S460", "C20/25", "C25/30", "C30/37", "C35/45", "C18", "C24", "GL24h", "GL28h"];
 
 /// A value of the strip typed in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,6 +137,8 @@ pub enum PlaceMessage {
     /// Enter: the fields show the values in use.
     Done,
     Location(LocationLine),
+    /// A column's or beam's strength class (`None`: not given).
+    Grade(Option<String>),
     /// What the Slab tool makes; its type goes, as types are per role.
     Role(bim_core::SlabRole),
     Chain(bool),
@@ -185,6 +202,7 @@ impl App {
                     }
                     _ => {}
                 }
+                s.grade = e.grade.clone();
                 (tool, s)
             }
             Shape::System(d) => (ModelTool::System, Settings { kind: d.system_type.as_ref().map(|t| t.id.clone()), height: e.top.is_none().then_some(d.height), ..of(ModelTool::System) }),
@@ -264,7 +282,8 @@ fn shown(s: &Settings, field: PlaceField) -> String {
 }
 
 /// `s` with `field` typed as `typed`, if that is a value it can take: sizes above 0, a sill not
-/// below 0, a height left empty (up to the next level) where the tool allows it.
+/// below 0, a height left empty (up to the next level) where the tool allows it. A beam's height
+/// is where its top lies to its level, so it may be 0 or below it (a foundation beam).
 fn with_typed(tool: ModelTool, s: &Settings, field: PlaceField, typed: &str) -> Option<Settings> {
     let mut s = s.clone();
     let typed = typed.trim();
@@ -277,7 +296,7 @@ fn with_typed(tool: ModelTool, s: &Settings, field: PlaceField, typed: &str) -> 
     match field {
         PlaceField::Width if v > 0.0 => s.width = v,
         PlaceField::Depth if v > 0.0 => s.depth = v,
-        PlaceField::Height if v > 0.0 => s.height = Some(v),
+        PlaceField::Height if v > 0.0 || tool == ModelTool::Beam => s.height = Some(v),
         PlaceField::Offset => s.offset = v,
         PlaceField::Sill if v >= 0.0 => s.sill = v,
         _ => return None,
@@ -299,6 +318,7 @@ impl App {
         match message {
             PlaceMessage::Kind(kind) => s.kind = kind,
             PlaceMessage::Location(location) => s.location = location,
+            PlaceMessage::Grade(grade) => s.grade = grade,
             PlaceMessage::Role(role) => {
                 if s.role != role {
                     s.role = role;
@@ -344,6 +364,22 @@ impl App {
             (ModelTool::System, Some(group), Some(l)) => group.name(super::library::lang(l)),
             _ => name,
         }
+    }
+
+    /// The axis of the beam the Beam tool places on the line from `a` to `b` (scene coordinates):
+    /// moved so the side picked lies on the line. Its width is its profile's, turned as placed.
+    pub(super) fn beam_axis(&self, a: DVec3, b: DVec3, s: &Settings) -> (DVec3, DVec3) {
+        let d = (b - a).truncate();
+        if s.location == LocationLine::Centre || d.length() <= 0.0 {
+            return (a, b);
+        }
+        let Shape::Linear(beam) = super::modeller::tool_shape(ModelTool::Beam, a, b, 0.0, 0.0, s, &self.library) else { return (a, b) };
+        let width = beam.profile.profile().map_or(s.width, |p| {
+            let (lo, hi) = p.outer().iter().fold((f64::MAX, f64::MIN), |(lo, hi), q| (lo.min(q.x), hi.max(q.x)));
+            hi - lo
+        });
+        let left = d.normalize().perp().extend(0.0) * s.location.shift(width);
+        (a + left, b + left)
     }
 
     /// The axis of the wall the Wall tool places on the line from `a` to `b` (scene coordinates):
@@ -414,10 +450,18 @@ impl App {
                 bar = bar.push(button(text(name).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Role(role))));
             }
         }
-        if tool == ModelTool::Wall {
-            let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(l))).collect();
+        if matches!(tool, ModelTool::Column | ModelTool::Beam) {
+            let none = Choice { id: None, name: "-".to_string() };
+            let choices: Vec<Choice> = std::iter::once(none).chain(GRADES.iter().map(|g| Choice { id: Some(g.to_string()), name: g.to_string() })).collect();
+            let picked = choices.iter().find(|c| c.id == s.grade).cloned();
+            let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Grade(c.id))).text_size(12).padding([2, 6]).width(150);
+            bar = bar.push(pair(label(l.text("Sterkteklasse", "Grade")), pick));
+        }
+        if matches!(tool, ModelTool::Wall | ModelTool::Beam) {
+            let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(tool, l))).collect();
             let picked = options.iter().find(|o| o.0 == s.location).copied();
-            bar = bar.push(label(l.text("Locatielijn", "Location line"))).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]).width(120));
+            let name = if tool == ModelTool::Wall { l.text("Locatielijn", "Location line") } else { l.text("Uitlijning", "Alignment") };
+            bar = bar.push(label(name)).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]).width(120));
         }
         if tool == ModelTool::Wall {
             let on = self.modeller.placement.rectangle;
@@ -826,5 +870,74 @@ mod tests {
             assert!(!fields(tool, Language::Dutch).is_empty());
             app.set_model_tool(None);
         }
+    }
+
+    fn beam(app: &App) -> bim_core::LinearDef {
+        let beam = app.modeller.model.iter().last().unwrap();
+        let Shape::Linear(l) = beam.shape_in_project(&app.modeller.model.grid) else { panic!() };
+        l
+    }
+
+    #[test]
+    fn a_beam_lies_with_the_side_picked_on_the_line_drawn() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Beam, "Beam")));
+        place(&mut app, PlaceMessage::Chain(false));
+        place(&mut app, PlaceMessage::Field(PlaceField::Width, "0.4".into()));
+        // drawn along +x: its left is +y
+        for (location, y) in [(LocationLine::Centre, 0.0), (LocationLine::Interior, -0.2), (LocationLine::Exterior, 0.2)] {
+            place(&mut app, PlaceMessage::Location(location));
+            click(&mut app, 0.0, 0.0);
+            click(&mut app, 4.0, 0.0);
+            let l = beam(&app);
+            assert!((l.start.y - y).abs() < 1e-9 && (l.end.y - y).abs() < 1e-9 && l.start.x.abs() < 1e-9, "{location:?}: {l:?}");
+        }
+        // a steel profile is as wide as its flanges: an HEA 200 is 200 mm
+        place(&mut app, PlaceMessage::Kind(Some("HEA 200".into())));
+        place(&mut app, PlaceMessage::Location(LocationLine::Interior));
+        click(&mut app, 0.0, 5.0);
+        click(&mut app, 0.0, 9.0);
+        let l = beam(&app);
+        // drawn along +y: its left is -x, so its axis lies 100 mm to the right of the line
+        assert!((l.start.x - 0.1).abs() < 1e-6 && (l.end.x - 0.1).abs() < 1e-6, "{l:?}");
+    }
+
+    #[test]
+    fn a_member_takes_the_grade_picked_and_create_similar_takes_it_back() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Beam, "Beam")));
+        place(&mut app, PlaceMessage::Kind(Some("IPE 200".into())));
+        place(&mut app, PlaceMessage::Grade(Some("S355".into())));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        let placed = app.modeller.model.iter().last().unwrap().clone();
+        assert_eq!(placed.grade.as_deref(), Some("S355"));
+        // a wall has none
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        click(&mut app, 0.0, 10.0);
+        click(&mut app, 4.0, 10.0);
+        assert_eq!(app.modeller.model.iter().last().unwrap().grade, None);
+        // create similar: the beam's grade is the strip's again
+        place(&mut app, PlaceMessage::Grade(None));
+        app.set_model_tool(None);
+        app.select_modelled(placed.id);
+        app.create_similar(Language::English);
+        assert_eq!(app.tool_settings().map(|(tool, s)| (tool, s.grade)), Some((ModelTool::Beam, Some("S355".to_string()))));
+    }
+
+    /// A foundation beam: its top typed below the level it is drawn on.
+    #[test]
+    fn a_beams_top_may_lie_below_its_level() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Beam, "Beam")));
+        place(&mut app, PlaceMessage::Field(PlaceField::Depth, "0.5".into()));
+        place(&mut app, PlaceMessage::Field(PlaceField::Height, "-0.43".into()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        let beam = app.modeller.model.iter().last().unwrap();
+        let Shape::Linear(l) = beam.shape_in_project(&app.modeller.model.grid) else { panic!() };
+        assert!((l.start.z - (-0.43 - 0.25)).abs() < 1e-9 && (l.end.z - l.start.z).abs() < 1e-9, "{l:?}");
+        // a column keeps to heights above 0
+        assert!(with_typed(ModelTool::Column, &Settings::default_for(ModelTool::Column), PlaceField::Height, "-1").is_none());
     }
 }

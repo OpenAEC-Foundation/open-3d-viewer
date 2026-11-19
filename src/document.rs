@@ -1061,6 +1061,18 @@ impl Document {
         self.plan(path).map(|p| p.scale).or_else(|| self.section(path).map(|s| s.scale))
     }
 
+    /// Sets the scale a view's texts and dimensions are sized for (1 : `scale`).
+    pub fn set_view_scale(&mut self, path: &str, scale: f64) -> bool {
+        if !(scale.is_finite() && scale > 0.0) {
+            return false;
+        }
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            p.scale = scale;
+            return true;
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| s.scale = scale).is_some()
+    }
+
     /// The dimensions and the crop of a view (floor plan, section or elevation).
     pub fn view_marks(&self, path: &str) -> Option<(&[Dimension], Option<([f64; 2], [f64; 2])>)> {
         if let Some(p) = self.plan(path) {
@@ -1357,6 +1369,17 @@ impl Document {
             return false;
         }
         view.at = [at[0].clamp(0.0, paper[0]), at[1].clamp(0.0, paper[1])];
+        true
+    }
+
+    /// Puts a placed view's middle at `at`, wherever that is: the middle of all a view cuts may
+    /// lie off the paper while the part its crop keeps lies on it.
+    pub fn put_placed(&mut self, sheet: &str, index: usize, at: [f64; 2]) -> bool {
+        let Some(view) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.views.get_mut(index)) else { return false };
+        if !(at[0].is_finite() && at[1].is_finite()) {
+            return false;
+        }
+        view.at = at;
         true
     }
 

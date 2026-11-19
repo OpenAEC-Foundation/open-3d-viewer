@@ -32,6 +32,7 @@ mod docs;
 mod drafts;
 pub mod drawn_props;
 mod edit;
+mod element_drawing;
 mod element_props;
 mod grips;
 mod openings;
@@ -813,6 +814,8 @@ pub enum Message {
     Place(placement::PlaceMessage),
     /// Add a door (`true`) or a window to the selected wall.
     AddOpening(bool),
+    /// Make the element drawing of the element selected, on a sheet of its own, and show it.
+    ElementDrawing(Language),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
     /// The rows of an element's top in the Modeller's properties.
@@ -2005,6 +2008,7 @@ impl App {
             Message::SpaceNameDone => self.modeller.space_typing = None,
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
+            Message::ElementDrawing(l) => self.element_drawing(l),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::JoinKind(kind) => self.set_join_kind(kind),
             Message::SwapJoin => self.swap_join(),
@@ -2304,7 +2308,10 @@ impl App {
                 self.new_plan(&level);
                 self.tag_plans();
             }
-            Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
+            Message::NewPlanOf(level, kind, word) => {
+                self.new_plan_of(&level, kind, word);
+                self.tag_plans();
+            }
             Message::PickLevelFor(kind) => {
                 // the levels to pick from are listed in the Views tab
                 if kind.is_some() {

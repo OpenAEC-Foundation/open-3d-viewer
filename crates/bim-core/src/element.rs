@@ -297,9 +297,34 @@ pub enum ConnectionKind {
     /// A steel end plate: the secondary stops a plate's thickness short of the primary's face,
     /// and a plate against that face is bolted to the primary (see [`crate::join::EndPlate`]).
     EndPlate(crate::join::EndPlate),
+    /// A steel fin plate: the secondary stops a gap short of the primary's face, and a plate
+    /// welded to that face is bolted through the secondary's web (see [`crate::join::FinPlate`]).
+    FinPlate(crate::join::FinPlate),
     /// The two are not joined where they meet: two building systems that would meet at a corner
     /// or a T junction are each made as they are alone, and two linear members get no join.
     Apart,
+}
+
+/// What a connection is to the analysis model: whether it passes a bending moment on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fixity {
+    /// A hinge: it passes forces on, no moment.
+    Pinned,
+    /// It passes moments on.
+    Rigid,
+}
+
+impl ConnectionKind {
+    /// What a steel connection is to the analysis model: a fin plate is a hinge, an end plate
+    /// passes moments on. `None` for a join that is no connection of its own (a butt, a mitre,
+    /// a cut).
+    pub fn fixity(&self) -> Option<Fixity> {
+        match self {
+            ConnectionKind::FinPlate(_) => Some(Fixity::Pinned),
+            ConnectionKind::EndPlate(_) => Some(Fixity::Rigid),
+            _ => None,
+        }
+    }
 }
 
 /// A connection between two elements: two linear ones joined (butt, mitre), any two with a body
@@ -346,6 +371,10 @@ pub struct Element {
     /// The level its top reaches, if it reaches one (see [`Top`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<Top>,
+    /// The strength class of what it is made of, when it is given: a steel grade (S235), a
+    /// concrete class (C30/37), a timber class (C24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<String>,
     pub shape: Shape,
 }
 
@@ -356,12 +385,12 @@ impl Element {
     pub fn in_project(grid: &TileGrid, name: impl Into<String>, level: Option<String>, mut shape: Shape) -> Self {
         let tile = shape.placement().map_or(TileKey::default(), |p| grid.tile_of(p));
         shape.translate(-grid.origin(tile));
-        Self { id: ElementId(0), name: name.into(), tile, level, top: None, shape }
+        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, shape }
     }
 
-    /// The same element (its id, name, level and top) with `shape`, given in project coordinates.
+    /// The same element (its id, name, level, top and grade) with `shape`, given in project coordinates.
     pub fn reshaped(&self, grid: &TileGrid, shape: Shape) -> Self {
-        Self { id: self.id, top: self.top.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
+        Self { id: self.id, top: self.top.clone(), grade: self.grade.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
     }
 
     /// Its definition in project coordinates.
@@ -389,7 +418,7 @@ impl Element {
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { .. }, .. }) => "IfcSlab",
             Shape::System(_) => "IfcCurtainWall",
             // a join with parts of its own is an assembly of them; one without is a relation only
-            Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(_), .. }) => "IfcElementAssembly",
+            Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_), .. }) => "IfcElementAssembly",
             Shape::Connection(_) => "IfcRelConnectsElements",
         }
     }
@@ -1115,5 +1144,19 @@ mod tests {
         let moved = e.reshaped(&grid, wall(5.0));
         assert_eq!((moved.id, moved.name.as_str(), moved.level.as_deref(), moved.top.clone()), (e.id, "Wall 1", Some("ground"), e.top.clone()));
         assert_eq!(moved.shape_in_project(&grid), wall(5.0));
+    }
+
+    #[test]
+    fn an_element_keeps_its_grade_when_reshaped_and_reads_without_one() {
+        let grid = TileGrid::default();
+        let beam = |x: f64| Shape::Linear(LinearDef { start: DVec3::new(x, 0.0, 3.0), end: DVec3::new(x + 4.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let mut e = Element::in_project(&grid, "Beam 1", None, beam(0.0));
+        let old = serde_json::to_string(&e).unwrap();
+        assert!(!old.contains("grade"), "{old}");
+        assert_eq!(serde_json::from_str::<Element>(&old).unwrap().grade, None);
+        e.grade = Some("S355".into());
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(serde_json::from_str::<Element>(&json).unwrap(), e, "{json}");
+        assert_eq!(e.reshaped(&grid, beam(5.0)).grade.as_deref(), Some("S355"));
     }
 }

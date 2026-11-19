@@ -70,7 +70,9 @@ pub fn svg(d: &Drawing2d) -> String {
             Align::Right => "end",
         };
         let size = num(t.height * k / CAPITALS);
-        let _ = write!(s, r##"<text x="{x}" y="{y}" font-family="Inter, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="#000">{}</text>"##, escape(&t.text));
+        // the page's y runs down: a turn counter-clockwise is a negative one there
+        let turn = if t.angle == 0.0 { String::new() } else { format!(r#" transform="rotate({} {x} {y})""#, num(-t.angle.to_degrees())) };
+        let _ = write!(s, r##"<text x="{x}" y="{y}" font-family="Inter, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="#000"{turn}>{}</text>"##, escape(&t.text));
     }
     s.push_str("</svg>");
     s
@@ -123,7 +125,7 @@ mod tests {
             space: Space::Paper,
             paper: Some(paper),
             lines: vec![Line2d { pen: Pen::Cut, a: [0.05, 0.05], b: [0.30, 0.05] }, Line2d { pen: Pen::Beyond, a: [0.05, 0.10], b: [0.30, 0.10] }],
-            texts: vec![Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left }],
+            texts: vec![Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 }],
             dimensions: Vec::new(),
         }
     }

@@ -13,7 +13,9 @@
 //!   ground).
 //!
 //! Sizes are millimetres on paper. Nothing is added to what the template draws, and where it
-//! draws the same hatch twice the catalogue has it once.
+//! draws the same hatch twice the catalogue has it once. The signs of NEN 47 that are a solid
+//! fill (reinforced concrete cast in situ, steel, the other metals, bitumen) are no pattern of
+//! the template; they stand in both sets as a tile with its fill alone.
 //!
 //! A material names a hatch of this catalogue as its own ([`crate::Material::sign`]), and a
 //! drawing cuts it with that hatch: the hatch's lines as rows ([`Hatch::rows`]) over its colour.
@@ -132,10 +134,32 @@ struct File {
     hatches: Vec<Hatch>,
 }
 
+/// The signs of NEN 47 that are a solid fill, which the template's patterns do not hold: their
+/// number, their names and their tone, as Project Ocondat's workbook names them for its
+/// materials (`BlenderBIM/Library.xlsx`, sheet materials; LGPL-3.0). A solid sign is a tile with
+/// its fill and no marks, the same in both sets.
+const SOLID: [(u32, [&str; 4], [u8; 3]); 4] = [
+    (5, ["gewapend beton, in het werk gestort", "reinforced concrete, cast in situ", "Stahlbeton, Ortbeton", "béton armé coulé en place"], [192, 192, 192]),
+    (18, ["staal", "steel", "Stahl", "acier"], [0, 0, 0]),
+    (19, ["aluminium, brons, koper", "aluminium, bronze, copper", "Aluminium, Bronze, Kupfer", "aluminium, bronze, cuivre"], [192, 192, 192]),
+    (24, ["bitumen", "bitumen", "Bitumen", "bitume"], [16, 16, 16]),
+];
+
 /// Every hatch of the catalogue: NEN 47's own, then the suite's, each by its sign.
 pub fn catalogue() -> &'static [Hatch] {
     static HATCHES: OnceLock<Vec<Hatch>> = OnceLock::new();
-    HATCHES.get_or_init(|| serde_json::from_str::<File>(CATALOGUE).expect("the hatch catalogue is compiled in").hatches)
+    HATCHES.get_or_init(|| {
+        let mut hatches = serde_json::from_str::<File>(CATALOGUE).expect("the hatch catalogue is compiled in").hatches;
+        for set in HatchSet::ALL {
+            for (sign, [nl, en, de, fr], fill) in SOLID {
+                let solid = Hatch { key: format!("{}-{sign}", set.prefix()), set, sign, names: Names::new(nl, en, de, fr), tile: [1.0, 1.0], angle: 0.0, scale: [1.0, 1.0], fill: Some(fill), marks: Vec::new() };
+                // among its set, before the first sign after it
+                let at = hatches.iter().position(|h| h.set == set && h.sign > sign).or_else(|| hatches.iter().rposition(|h| h.set == set).map(|last| last + 1)).unwrap_or(hatches.len());
+                hatches.insert(at, solid);
+            }
+        }
+        hatches
+    })
 }
 
 /// The hatches of `set`.
@@ -318,14 +342,15 @@ mod tests {
 
     #[test]
     fn the_catalogue_has_the_signs_of_nen_47_and_the_suites_coloured_ones() {
-        assert_eq!((of(HatchSet::Nen47).count(), of(HatchSet::OpenAec).count()), (23, 72));
+        assert_eq!((of(HatchSet::Nen47).count(), of(HatchSet::OpenAec).count()), (27, 76));
         let keys: BTreeSet<&str> = catalogue().iter().map(|h| h.key.as_str()).collect();
         assert_eq!(keys.len(), catalogue().len(), "a key twice");
         // NEN 47's own are black on the paper, by their number; each has the suite's coloured one
         let signs: Vec<u32> = of(HatchSet::Nen47).map(|h| h.sign).collect();
-        assert_eq!(signs, [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 20, 22, 23, 25, 26, 27, 28, 29]);
+        assert_eq!(signs, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29]);
         for own in of(HatchSet::Nen47) {
-            assert!(own.general() && own.fill.is_none(), "{}", own.key);
+            // (a solid sign is its fill, and has no marks)
+            assert!(own.general() && own.fill.is_none() != own.marks.is_empty(), "{}", own.key);
             assert_eq!(hatch(&own.key), Some(own));
             let coloured = sign(HatchSet::OpenAec, own.sign).unwrap_or_else(|| panic!("sign {} in colour", own.sign));
             assert_eq!((&coloured.names, coloured.tile == own.tile || own.sign == 6), (&own.names, true), "{}", coloured.key);
@@ -417,7 +442,7 @@ mod tests {
         // read back, it is the hatch
         let back: Hatch = serde_json::from_value(node["attributes"][HATCH].clone()).expect("a hatch");
         assert_eq!(&back, pir);
-        assert_eq!((nodes(HatchSet::Nen47).len(), nodes(HatchSet::OpenAec).len()), (23, 72));
+        assert_eq!((nodes(HatchSet::Nen47).len(), nodes(HatchSet::OpenAec).len()), (27, 76));
         assert_ne!(hatch_path("nen47-1"), hatch_path("openaec-1"));
     }
 }
@@ -564,6 +589,10 @@ mod rows_tests {
             let (rows, whole) = of(key);
             assert!(rows.is_empty() && !whole, "{key}");
         }
+        // a solid sign has no rows and lacks none: it is its fill
+        let steel = hatch("openaec-18").expect("steel");
+        assert_eq!((steel.rows(), steel.fill, steel.name(Lang::En)), ((Vec::new(), true), Some([0, 0, 0]), "steel"));
+        assert_eq!(hatch("nen47-5").map(|h| (h.fill, h.marks.len(), h.name(Lang::Nl))), Some((Some([192, 192, 192]), 0, "gewapend beton, in het werk gestort")));
         // every hatch of the catalogue gives rows that are sound
         for h in catalogue() {
             for row in h.rows().0 {

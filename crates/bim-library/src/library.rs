@@ -5,6 +5,7 @@ use crate::annotate::{self, DrawingSet};
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
 use crate::nlsfb::{self, Code};
+use crate::object::{self, ObjectGroup, ObjectType};
 use crate::profile::{self, LinearRole, LinearType};
 use crate::system::{self, SystemGroup, SystemType};
 use crate::template::{self, ViewTemplate};
@@ -35,6 +36,10 @@ pub struct Library {
     /// Its view templates: what a drawing of a kind shows in a phase ([`crate::template`]).
     #[serde(default)]
     pub view_templates: Vec<ViewTemplate>,
+    /// Its object types: doors, windows, fittings and the terminals of the services
+    /// ([`crate::object`]).
+    #[serde(default)]
+    pub object_types: Vec<ObjectType>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -69,7 +74,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -234,6 +239,30 @@ impl Library {
         self.buildups_of(buildup.role).find(|b| same(b))
     }
 
+    /// The object type `id` of the library.
+    pub fn object_type(&self, id: &str) -> Option<&ObjectType> {
+        self.object_types.iter().find(|o| o.id == id)
+    }
+
+    /// The object types of `group`, in the order they were added.
+    pub fn object_types_of(&self, group: ObjectGroup) -> impl Iterator<Item = &ObjectType> {
+        self.object_types.iter().filter(move |o| o.group == group)
+    }
+
+    /// Adds an object type. Refused when it does not hold together, its id is taken, or it is
+    /// of a material the library lacks.
+    pub fn add_object_type(&mut self, object: ObjectType) -> Result<(), LibraryError> {
+        object.check()?;
+        if self.object_type(&object.id).is_some() {
+            return Err(LibraryError::Duplicate(object.id));
+        }
+        if let Some(material) = object.material.as_ref().filter(|key| self.material(key).is_none()) {
+            return Err(LibraryError::UnknownMaterial(material.clone()));
+        }
+        self.object_types.push(object);
+        Ok(())
+    }
+
     /// The drawing set `key` of the library.
     pub fn drawing_set(&self, key: &str) -> Option<&DrawingSet> {
         self.drawing_sets.iter().find(|s| s.key == key)
@@ -355,6 +384,12 @@ impl Library {
                 added += 1;
             }
         }
+        // (after the materials: an object names what it is made of)
+        for o in &other.object_types {
+            if self.add_object_type(o.clone()).is_ok() {
+                added += 1;
+            }
+        }
         added
     }
 }
@@ -368,7 +403,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }

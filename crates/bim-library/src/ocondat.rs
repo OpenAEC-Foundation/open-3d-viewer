@@ -10,8 +10,8 @@
 //! - A material of one kind the hatch catalogue has a hatch for (a species of wood, a kind of
 //!   board, of insulation, of stone, of ground) names that hatch ([`Material::sign`]) and is
 //!   called as the hatch is; another names the suite's hatch of its sign of NEN 47 where the
-//!   catalogue has it. Solid fills (concrete cast in situ, steel, the other metals, bitumen)
-//!   are no hatch of the catalogue: such a material is drawn by its hatch kind.
+//!   catalogue has it: also the solid fills of concrete cast in situ, steel, the other metals
+//!   and bitumen.
 //! - A material the starter library has keeps that library's key (`concrete`, `steel`,
 //!   `insulation-pir`), so it is the same material and a library has it once.
 //!
@@ -143,7 +143,7 @@ mod tests {
                 assert!(m.catalogue_hatch().is_some(), "{}: the catalogue has no hatch {sign}", m.key);
             }
         }
-        assert_eq!(materials.iter().filter(|m| m.sign.is_some()).count(), 69);
+        assert_eq!(materials.iter().filter(|m| m.sign.is_some()).count(), 99);
     }
 
     #[test]
@@ -159,10 +159,12 @@ mod tests {
         for (key, sign) in [("stone-wool", "openaec-17-stone-wool"), ("bluestone", "openaec-9-bluestone"), ("peat", "openaec-25-peat"), ("sand", "openaec-26"), ("gravel", "openaec-27"), ("precast-concrete", "openaec-6")] {
             assert_eq!(of(key).sign.as_deref(), Some(sign), "{key}");
         }
-        // solid fills are no hatch of the catalogue: the hatch kind draws them
-        for (key, kind) in [("concrete", HatchKind::Concrete), ("steel-s355", HatchKind::Steel), ("reinforcing-steel-b500", HatchKind::Steel), ("copper", HatchKind::Generic), ("gypsum", HatchKind::Gypsum)] {
-            assert_eq!((of(key).sign.as_deref(), of(key).hatch), (None, kind), "{key}");
+        // the solid signs: concrete cast in situ, steel, the other metals, bitumen
+        for (key, sign, kind) in [("concrete", "openaec-5", HatchKind::Concrete), ("steel-s355", "openaec-18", HatchKind::Steel), ("reinforcing-steel-b500", "openaec-18", HatchKind::Steel), ("copper", "openaec-19", HatchKind::Generic), ("epdm", "openaec-24", HatchKind::Generic)] {
+            assert_eq!((of(key).sign.as_deref(), of(key).hatch), (Some(sign), kind), "{key}");
         }
+        // what NEN 47 has no sign for is drawn by its hatch kind
+        assert_eq!((of("gypsum").sign.as_deref(), of("gypsum").hatch, of("reed").sign.as_deref()), (None, HatchKind::Gypsum, None));
         assert_eq!(of("concrete-c20-25").name(Lang::De), "Beton C20/25");
         // a graded material keeps its grade; a timber class gives its stiffness
         assert_eq!((of("concrete-c20-25").grade.as_deref(), of("steel-s355").grade.as_deref(), of("spruce").grade.as_deref()), (Some("C20/25"), Some("S355"), None));

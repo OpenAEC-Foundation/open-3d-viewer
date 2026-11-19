@@ -167,6 +167,7 @@ pub fn nodes(library: &Library) -> Vec<Value> {
             }
         }));
     }
+    nodes.extend(library.object_types.iter().map(crate::object::node));
     nodes.extend(library.codes.iter().map(nlsfb::code_node));
     nodes.extend(library.drawing_sets.iter().map(crate::annotate::node));
     nodes.extend(library.view_templates.iter().map(crate::template::node));
@@ -213,6 +214,7 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
     let mut buildups: Vec<(BuildUp, Option<String>)> = Vec::new();
     let mut linear_types: Vec<LinearType> = Vec::new();
     let mut system_types: Vec<SystemType> = Vec::new();
+    let mut object_types: Vec<crate::object::ObjectType> = Vec::new();
     for path in order {
         let attributes = &composed[path];
         if let Some(own) = attributes.get(MATERIAL) {
@@ -266,6 +268,13 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
             }
             linear_types.push(linear);
         }
+        if let Some(own) = attributes.get(crate::object::OBJECT_TYPE) {
+            let mut object: crate::object::ObjectType = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?;
+            if let Some(class) = &class {
+                object.code = Some(class.clone()).filter(|class| class != object.group.code());
+            }
+            object_types.push(object);
+        }
         if let Some(own) = attributes.get(SYSTEM_TYPE) {
             let mut system: SystemType = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?;
             if let Some(class) = &class {
@@ -286,6 +295,10 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
     }
     for t in system_types {
         library.add_system_type(t)?;
+    }
+    // (an object names its material, which may stand after it in the file)
+    for o in object_types {
+        library.add_object_type(o)?;
     }
     Ok(library)
 }
@@ -336,7 +349,7 @@ mod tests {
         assert_eq!(masonry["attributes"][SYSTEM_TYPE]["grid"]["pattern"], "running_bond");
         let ceiling = nodes.iter().find(|n| n["path"] == system_type_path("system.ceiling-600x600")).unwrap();
         assert_eq!(ceiling["attributes"]["bsi::ifc::prop::PredefinedType"], "CEILING");
-        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len() + library.view_templates.len());
+        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len() + library.view_templates.len() + library.object_types.len());
         // paths are stable
         assert_eq!(nodes, self::nodes(&Library::starter()));
     }

@@ -191,10 +191,13 @@ impl Material {
 }
 
 /// The hatch of the catalogue a starter material is drawn with: the suite's sign for its kind
-/// of material. Concrete cast in situ and steel are solid fills, which the catalogue does not
-/// hold; they and the materials NEN 47 has no sign for are drawn by their hatch kind.
+/// of material. The materials NEN 47 has no sign for are drawn by their hatch kind.
 fn starter_sign(key: &str) -> Option<&'static str> {
     Some(match key {
+        "concrete" => "openaec-5",
+        "steel" => "openaec-18",
+        "aluminium" | "zinc" => "openaec-19",
+        "roofing" => "openaec-24",
         "hollow-core-concrete" => "openaec-6",
         "brick" => "openaec-1",
         "sand-lime" => "openaec-3",

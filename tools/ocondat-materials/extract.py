@@ -17,8 +17,7 @@ The reinforcing bars of the sheet are not taken over: the library has no type fo
   board, of insulation, of stone, of ground) takes that hatch and its names; the others are
   named here.
 - The sheet's sign of NEN 47 gives the hatch kind and, where the catalogue has the sign, the
-  hatch. Signs 5, 18, 19 and 24 are solid fills the catalogue does not hold: such a material
-  has its hatch kind only.
+  hatch. Signs 5, 18, 19 and 24 are solid fills, which the catalogue has as a fill alone.
 - The sheet puts every species of wood but spruce under hardwood (sign 13), softwoods too, and
   gravel under asphalt. The catalogue has the species under sign 12 and gravel as sign 27, and
   is followed.
@@ -109,7 +108,13 @@ def hatch_named(nl):
     return next((h for h in own if h["key"].count("-") > 1), next(iter(own), None))
 
 
+# the signs that are a solid fill: `hatch.rs` adds them to the catalogue
+SOLID = {5, 18, 19, 24}
+
+
 def general(sign):
+    if sign in SOLID:
+        return f"openaec-{sign}"
     return next((h["key"] for h in hatches if h["set"] == "openaec" and h["sign"] == sign and h["key"] == f"openaec-{sign}"), None)
 
 

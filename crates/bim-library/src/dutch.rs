@@ -59,6 +59,17 @@ pub fn buildups() -> Vec<BuildUp> {
     ]
 }
 
+/// The Dutch library: the types of the INB template, with them the materials and the types of
+/// one material of Project Ocondat that the template lacks, and the usual Dutch layered
+/// build-ups.
+pub fn library() -> crate::Library {
+    let mut library = crate::inb::library();
+    library.merge(&crate::ocondat::library());
+    let layered = crate::Library { materials: library.materials.clone(), buildups: buildups(), ..crate::Library::default() };
+    library.merge(&layered);
+    library
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

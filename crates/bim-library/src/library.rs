@@ -7,6 +7,7 @@ use crate::material::{self, Material};
 use crate::nlsfb::{self, Code};
 use crate::profile::{self, LinearRole, LinearType};
 use crate::system::{self, SystemGroup, SystemType};
+use crate::template::{self, ViewTemplate};
 use crate::{Lang, LibraryError};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,9 @@ pub struct Library {
     /// Its drawing sets: the rules by which a drawing of a kind is annotated ([`crate::annotate`]).
     #[serde(default)]
     pub drawing_sets: Vec<DrawingSet>,
+    /// Its view templates: what a drawing of a kind shows in a phase ([`crate::template`]).
+    #[serde(default)]
+    pub view_templates: Vec<ViewTemplate>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -65,7 +69,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), drawing_sets: annotate::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -245,6 +249,21 @@ impl Library {
         Ok(())
     }
 
+    /// The view template `key` of the library.
+    pub fn view_template(&self, key: &str) -> Option<&ViewTemplate> {
+        self.view_templates.iter().find(|t| t.key == key)
+    }
+
+    /// Adds a view template. Refused when it does not hold together or the library has its key.
+    pub fn add_view_template(&mut self, template: ViewTemplate) -> Result<(), LibraryError> {
+        template.check()?;
+        if self.view_template(&template.key).is_some() {
+            return Err(LibraryError::Duplicate(template.key));
+        }
+        self.view_templates.push(template);
+        Ok(())
+    }
+
     /// The code `code` of the library.
     pub fn code(&self, code: &str) -> Option<&Code> {
         self.codes.iter().find(|c| c.code == code)
@@ -287,6 +306,11 @@ impl Library {
     /// Returns how many materials and types were added.
     pub fn merge(&mut self, other: &Library) -> usize {
         let mut added = 0;
+        for t in &other.view_templates {
+            if self.add_view_template(t.clone()).is_ok() {
+                added += 1;
+            }
+        }
         for s in &other.drawing_sets {
             if self.add_drawing_set(s.clone()).is_ok() {
                 added += 1;
@@ -344,7 +368,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }

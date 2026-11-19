@@ -36,6 +36,7 @@ pub mod nlsfb;
 pub mod ocondat;
 pub mod profile;
 pub mod system;
+pub mod template;
 
 pub use buildup::{BuildUp, Layer, Role};
 pub use hatch::{Hatch, HatchSet};

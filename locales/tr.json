@@ -1472,6 +1472,24 @@
     "Click a drawing set to see its labels and rules.": "Etiketlerini ve kurallarını görmek için bir çizim setine tıklayın.",
     "Label types": "Etiket tipleri",
     "Rules, in order": "Kurallar, sırayla",
-    "Preview: what elements get": "Önizleme: elemanların aldıkları"
+    "Preview: what elements get": "Önizleme: elemanların aldıkları",
+    "View templates": "Görünüm şablonları",
+    "outline": "dış hat",
+    "one hatch": "tek tarama",
+    "all of it": "tamamı",
+    "not shown": "gösterilmez",
+    "hatched": "taralı",
+    "not hatched": "taramasız",
+    "cut pen": "kesit kalemi",
+    "seen pen": "görünüş kalemi",
+    "faint": "soluk",
+    "as the kind of drawing": "çizim türü gibi",
+    "Click a view template to see what it shows.": "Ne gösterdiğini görmek için bir görünüm şablonuna tıklayın.",
+    "yes": "evet",
+    "Phase": "Aşama",
+    "Dimensions": "Ölçüler",
+    "Drawing set": "Çizim seti",
+    "Everything else": "Diğer her şey",
+    "Preview: how elements are drawn": "Önizleme: elemanlar nasıl çizilir"
   }
 }

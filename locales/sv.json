@@ -1472,6 +1472,24 @@
     "Click a drawing set to see its labels and rules.": "Klicka på en ritningsuppsättning för att se dess etiketter och regler.",
     "Label types": "Etikettyper",
     "Rules, in order": "Regler, i ordning",
-    "Preview: what elements get": "Förhandsvisning: vad element får"
+    "Preview: what elements get": "Förhandsvisning: vad element får",
+    "View templates": "Vymallar",
+    "outline": "kontur",
+    "one hatch": "en skraffering",
+    "all of it": "fullständigt",
+    "not shown": "visas inte",
+    "hatched": "skrafferad",
+    "not hatched": "inte skrafferad",
+    "cut pen": "penna snitt",
+    "seen pen": "penna vy",
+    "faint": "nedtonad",
+    "as the kind of drawing": "som ritningstypen",
+    "Click a view template to see what it shows.": "Klicka på en vymall för att se vad den visar.",
+    "yes": "ja",
+    "Phase": "Skede",
+    "Dimensions": "Mått",
+    "Drawing set": "Ritningsuppsättning",
+    "Everything else": "Allt annat",
+    "Preview: how elements are drawn": "Förhandsvisning: hur element ritas"
   }
 }

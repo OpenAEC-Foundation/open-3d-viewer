@@ -1472,6 +1472,24 @@
     "Click a drawing set to see its labels and rules.": "Klicken Sie einen Zeichnungssatz an, um seine Beschriftungen und Regeln zu sehen.",
     "Label types": "Beschriftungstypen",
     "Rules, in order": "Regeln, in Reihenfolge",
-    "Preview: what elements get": "Vorschau: was Elemente erhalten"
+    "Preview: what elements get": "Vorschau: was Elemente erhalten",
+    "View templates": "Ansichtsvorlagen",
+    "outline": "Umriss",
+    "one hatch": "eine Schraffur",
+    "all of it": "vollständig",
+    "not shown": "nicht gezeigt",
+    "hatched": "schraffiert",
+    "not hatched": "nicht schraffiert",
+    "cut pen": "Stift geschnitten",
+    "seen pen": "Stift Ansicht",
+    "faint": "grau",
+    "as the kind of drawing": "wie die Zeichnungsart",
+    "Click a view template to see what it shows.": "Klicken Sie eine Ansichtsvorlage an, um zu sehen, was sie zeigt.",
+    "yes": "ja",
+    "Phase": "Phase",
+    "Dimensions": "Maße",
+    "Drawing set": "Zeichnungssatz",
+    "Everything else": "Alles andere",
+    "Preview: how elements are drawn": "Vorschau: wie Elemente gezeichnet werden"
   }
 }

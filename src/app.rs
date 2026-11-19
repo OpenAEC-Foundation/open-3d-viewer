@@ -46,6 +46,7 @@ mod levels;
 pub mod buildups;
 pub mod codes;
 pub mod drawing_sets;
+pub mod view_templates;
 pub mod house;
 pub mod libraries;
 pub mod library;
@@ -391,6 +392,7 @@ pub struct App {
     pub material_view: materials::MaterialView,
     pub code_view: codes::CodeView,
     pub drawing_set_view: drawing_sets::DrawingSetView,
+    pub view_template_view: view_templates::ViewTemplateView,
     /// The house style the project follows: how its sheets and documents look.
     pub house: bim_library::house::HouseStyle,
     pub house_view: house::HouseView,
@@ -585,6 +587,7 @@ pub enum Message {
     Material(materials::MaterialMessage),
     Code(codes::CodeMessage),
     DrawingSet(drawing_sets::DrawingSetMessage),
+    ViewTemplate(view_templates::ViewTemplateMessage),
     House(house::HouseMessage),
     /// The linear types of the project on the Library page: picking one and editing its profile.
     Profile(profiles::ProfileMessage),
@@ -1087,6 +1090,7 @@ impl Default for App {
             material_view: materials::MaterialView::default(),
             code_view: codes::CodeView::default(),
             drawing_set_view: drawing_sets::DrawingSetView::default(),
+            view_template_view: view_templates::ViewTemplateView::default(),
             house: bim_library::house::HouseStyle::starter(),
             house_view: house::HouseView::default(),
             profile_view: profiles::ProfileView::default(),
@@ -2358,6 +2362,7 @@ impl App {
             Message::Material(message) => return self.material_update(message),
             Message::Code(message) => return self.code_update(message),
             Message::DrawingSet(message) => self.drawing_set_update(message),
+            Message::ViewTemplate(message) => self.view_template_update(message),
             Message::House(message) => return self.house_update(message),
             Message::Profile(message) => return self.profile_update(message),
             Message::SystemType(message) => return self.system_update(message),

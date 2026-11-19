@@ -35,6 +35,7 @@ impl ModelKey {
             ModelKey::Copy => TransformKind::Copy.label(l),
             ModelKey::Rotate => TransformKind::Rotate.label(l),
             ModelKey::Mirror => TransformKind::Mirror.label(l),
+            ModelKey::Align => TransformKind::Align.label(l),
             ModelKey::Delete => l.text("Verwijderen", "Delete"),
             ModelKey::LevelUp => l.text("Niveau hoger", "Level up"),
             ModelKey::LevelDown => l.text("Niveau lager", "Level down"),
@@ -134,6 +135,7 @@ impl App {
             ModelKey::Copy => self.begin_transform(TransformKind::Copy),
             ModelKey::Rotate => self.begin_transform(TransformKind::Rotate),
             ModelKey::Mirror => self.begin_transform(TransformKind::Mirror),
+            ModelKey::Align => self.begin_transform(TransformKind::Align),
             ModelKey::Delete => {
                 let _ = self.update(Message::DeletePicked);
             }

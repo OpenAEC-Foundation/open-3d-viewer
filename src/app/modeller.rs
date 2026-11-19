@@ -159,7 +159,7 @@ const SYSTEM_PANEL: f64 = 0.02;
 /// The height of what stands on the work plane when no level lies above it.
 const STOREY: f64 = 3.0;
 /// Clicks within this of a point of an element (logical pixels) take that point.
-const SNAP_PIXELS: f32 = 12.0;
+pub(super) const SNAP_PIXELS: f32 = 12.0;
 /// A second point within this angle of the first point's horizontal or vertical is put on it.
 const ORTHO_DEGREES: f64 = 4.0;
 /// Clicks off every snap are rounded to this (metres).

@@ -547,6 +547,15 @@ pub struct Note {
     pub angle: f64,
     /// The typeface of its letters: the app's own unless its file names one.
     pub face: crate::typeface::Face,
+    /// A level mark of a section or an elevation: its text is the height it stands at
+    /// ([`level_text`]), kept so when it moves, and it is drawn with a triangle on that height.
+    pub level: bool,
+}
+
+/// What a level mark says of height `z` (metres): "+2.700", and "+0.000" at zero.
+pub fn level_text(z: f64) -> String {
+    let z = if z.abs() < 0.0005 { 0.0 } else { z };
+    format!("{z:+.3}")
 }
 
 /// The height of the letters of a new text on paper (metres).
@@ -703,6 +712,9 @@ impl Document {
                 if n.angle != 0.0 {
                     note["angle"] = n.angle.into();
                 }
+                if n.level {
+                    note["level"] = true.into();
+                }
                 if let Some(font) = n.face.to_json() {
                     note["font"] = font;
                 }
@@ -787,7 +799,7 @@ impl Document {
         };
         let notes = |v: Option<&Value>| -> Vec<Note> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
-            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0), face: crate::typeface::Face::from_json(n.get("font")) })).filter(|n| !n.text.trim().is_empty()).collect()
+            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0), face: crate::typeface::Face::from_json(n.get("font")), level: n.get("level").and_then(Value::as_bool).unwrap_or(false) })).filter(|n| !n.text.trim().is_empty()).collect()
         };
         let lines = |v: Option<&Value>| -> Vec<[[f64; 2]; 2]> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
@@ -1508,7 +1520,18 @@ impl Document {
             return false;
         }
         let Some(notes) = self.notes_mut(view) else { return false };
-        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() });
+        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false });
+        true
+    }
+
+    /// Adds a level mark to a section or an elevation at a point of its drawing: it says the
+    /// height of that point. A floor plan has no heights to mark, so it gets none.
+    pub fn add_level_mark(&mut self, view: &str, at: [f64; 2]) -> bool {
+        if !at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(section) = self.sections.iter_mut().find(|s| s.path == view) else { return false };
+        section.notes.push(Note { at, text: level_text(at[1]), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: true });
         true
     }
 
@@ -1519,12 +1542,17 @@ impl Document {
         }
         let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
         note.at = at;
+        // a level mark says the height it stands at now
+        if note.level {
+            note.text = level_text(at[1]);
+        }
         true
     }
 
-    /// Gives a view's text another wording; it keeps one.
+    /// Gives a view's text another wording; it keeps one. A level mark's text is its height, so
+    /// it is not typed over.
     pub fn set_note_text(&mut self, view: &str, index: usize, text: &str) -> bool {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() || self.view_notes(view).and_then(|n| n.get(index)).is_some_and(|n| n.level) {
             return false;
         }
         let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
@@ -2065,6 +2093,29 @@ mod tests {
     }
 
     #[test]
+    fn a_level_mark_says_its_height_follows_a_move_and_comes_back_from_the_file() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 0.0], [8.0, 0.0], 6.0).unwrap();
+        assert!(!document.add_level_mark(&plan, [1.0, 2.0]), "a floor plan has no heights");
+        assert!(document.add_level_mark(&section, [1.0, 2.7]));
+        let note = &document.view_notes(&section).unwrap()[0];
+        assert_eq!((note.text.as_str(), note.level), ("+2.700", true));
+        // moved: its text is the height it stands at; typed over: it is not
+        assert!(document.move_note(&section, 0, [1.0, -0.0001]));
+        assert_eq!(document.view_notes(&section).unwrap()[0].text, "+0.000");
+        assert!(!document.set_note_text(&section, 0, "Roof"));
+        assert!(document.move_note(&section, 0, [1.0, -1.25]));
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        let back = &again.view_notes(&section).unwrap()[0];
+        assert_eq!((back.text.as_str(), back.level, back.at), ("-1.250", true, [1.0, -1.25]));
+    }
+
+    #[test]
     fn scale_paper_and_cut_can_change() {
         let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
         let level = document.levels()[0].path.clone();
@@ -2211,7 +2262,7 @@ mod tests {
         assert!(!document.set_note_text(&plan, 1, ""), "a note keeps a text");
         assert!(!document.move_note(&plan, 7, [0.0, 0.0]));
         let notes = document.view_notes(&plan).unwrap();
-        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
+        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }]);
         assert!(document.remove_note(&plan, 0));
         assert!(!document.remove_note(&plan, 3));
         // saved with the drawings and taken over again
@@ -2219,8 +2270,8 @@ mod tests {
             document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
         let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
         again.adopt_ifcx(&nodes);
-        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
-        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
+        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }]);
+        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }]);
     }
 
     #[test]

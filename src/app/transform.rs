@@ -18,10 +18,13 @@ pub enum TransformKind {
     Copy,
     Rotate,
     Mirror,
+    /// The line clicked first is where the point clicked next comes to lie: the elements move
+    /// square to that line, as Revit's Align does.
+    Align,
 }
 
 impl TransformKind {
-    pub const ALL: [TransformKind; 4] = [TransformKind::Move, TransformKind::Copy, TransformKind::Rotate, TransformKind::Mirror];
+    pub const ALL: [TransformKind; 5] = [TransformKind::Move, TransformKind::Copy, TransformKind::Rotate, TransformKind::Mirror, TransformKind::Align];
 
     /// Its command id.
     pub fn id(self) -> &'static str {
@@ -30,6 +33,7 @@ impl TransformKind {
             TransformKind::Copy => "model.copy",
             TransformKind::Rotate => "model.rotate",
             TransformKind::Mirror => "model.mirror",
+            TransformKind::Align => "model.align",
         }
     }
 
@@ -39,6 +43,7 @@ impl TransformKind {
             TransformKind::Copy => l.text("Kopiëren", "Copy"),
             TransformKind::Rotate => l.text("Roteren", "Rotate"),
             TransformKind::Mirror => l.text("Spiegelen", "Mirror"),
+            TransformKind::Align => l.text("Uitlijnen", "Align"),
         }
     }
 
@@ -48,6 +53,7 @@ impl TransformKind {
             TransformKind::Copy => "object.add",
             TransformKind::Rotate => "view.orbit",
             TransformKind::Mirror => "transform.mirror",
+            TransformKind::Align => "transform.flip-vertical",
         }
     }
 
@@ -69,6 +75,8 @@ impl TransformKind {
             (TransformKind::Rotate, _) => l.text("Klik waar dat punt heen draait · Esc: opnieuw", "Click where that point turns to · Esc: start again"),
             (TransformKind::Mirror, 0) => l.text("Klik een punt van de spiegelas · Esc: stoppen", "Click a point of the mirror axis · Esc: stop"),
             (TransformKind::Mirror, _) => l.text("Klik een tweede punt van de spiegelas · Esc: opnieuw", "Click a second point of the mirror axis · Esc: start again"),
+            (TransformKind::Align, 0) => l.text("Klik de lijn om op uit te lijnen (stramien, wand, rand) · Esc: stoppen", "Click the line to align to (grid, wall, edge) · Esc: stop"),
+            (TransformKind::Align, _) => l.text("Klik het punt dat op die lijn komt · Esc: opnieuw", "Click the point that comes onto that line · Esc: start again"),
             (_, 0) => l.text("Klik het beginpunt · Esc: stoppen", "Click the start point · Esc: stop"),
             (_, _) => l.text("Klik het eindpunt · Esc: opnieuw", "Click the end point · Esc: start again"),
         }
@@ -80,6 +88,10 @@ impl TransformKind {
 pub struct Transform {
     pub kind: TransformKind,
     pub elements: Vec<ElementId>,
+    /// The picked grid line it takes instead (a move or a copy with no element selected).
+    pub grid: Option<usize>,
+    /// The line to align to: a point on it and the way it runs.
+    pub line: Option<(DVec2, DVec2)>,
     pub points: Vec<DVec3>,
     /// What is drawn on a floor plan that it takes in place of elements: the plan, and the run of
     /// its lines that is the line or shape picked.
@@ -252,7 +264,10 @@ impl App {
             .collect();
         // nothing of the model selected: the line or shape picked on the floor plan shown
         let drawn = if elements.is_empty() { self.drawn_picked() } else { None };
-        if elements.is_empty() && drawn.is_none() {
+        // no element selected: a move or a copy takes the picked grid line
+        let grid = if elements.is_empty() && drawn.is_none() && matches!(kind, TransformKind::Move | TransformKind::Copy) { self.picked_modelled_grid() } else { None };
+        // nothing selected: Align takes the element its second click is on
+        if elements.is_empty() && drawn.is_none() && grid.is_none() && kind != TransformKind::Align {
             return;
         }
         if self.modeller.tool.is_some() {
@@ -260,7 +275,7 @@ impl App {
         }
         self.modeller.edit = None;
         self.modeller.refusal = None;
-        self.modeller.transform = Some(Transform { kind, elements, points: Vec::new(), drawn });
+        self.modeller.transform = Some(Transform { kind, elements, grid, line: None, points: Vec::new(), drawn });
         // a fresh 3D cursor is the base point of a move or a copy
         self.transform_from_cursor3d();
     }
@@ -293,6 +308,9 @@ impl App {
         let (z, ..) = self.work_plane();
         let Some(p) = self.plane_point(x, y, width, height, z) else { return };
         let p = self.snapped(p, x, y, width, height);
+        if self.modeller.transform.as_ref().is_some_and(|t| t.kind == TransformKind::Align) {
+            return self.align_click(p, x, y, width, height);
+        }
         let Some(t) = self.modeller.transform.as_mut() else { return };
         t.points.push(p);
         if t.points.len() < t.kind.clicks() {
@@ -306,12 +324,77 @@ impl App {
                 let moved = self.document.map_view_lines(&view, run, done.kind.copies(), &|q| map.plan(DVec2::new(q[0], q[1])).to_array());
                 self.mark_pick = moved.map(|run| super::marks::MarkPick::Line(run.start));
             }
+            Some(Map::Shift(by)) if done.grid.is_some() => self.shift_grid(done.grid, by.truncate(), done.kind.copies()),
             Some(map) => {
                 self.transform_elements(&done.elements, &map, done.kind.copies());
             }
             // points that say nothing: clicked again
             None => self.modeller.transform = Some(Transform { points: Vec::new(), ..done }),
         }
+    }
+
+    /// A click of Align: first the line to align to (the grid line, wall line or edge under the
+    /// cursor; a click on none is not taken), then the point that comes onto it. The selected
+    /// elements move square to the line; with none selected, the element the point lies on does.
+    fn align_click(&mut self, p: DVec3, x: f32, y: f32, width: f32, height: f32) {
+        let Some(t) = self.modeller.transform.as_ref() else { return };
+        let Some((on, along)) = t.line else {
+            let line = self.line_under(p, x, y, width, height);
+            if let Some(t) = self.modeller.transform.as_mut().filter(|_| line.is_some()) {
+                t.line = line;
+                t.points.push(p);
+            }
+            return;
+        };
+        let elements = if t.elements.is_empty() { self.anchor_at(p.truncate().to_array()).map(|a| vec![ElementId(a.element)]).unwrap_or_default() } else { t.elements.clone() };
+        // a click on a line that runs as the first does (a wall's face) brings that line onto it
+        let p = match self.line_under(p, x, y, width, height) {
+            Some((q, way)) if way.perp_dot(along).abs() < 1e-6 => q.extend(p.z),
+            _ => p,
+        };
+        // a click on nothing: clicked again
+        if elements.is_empty() {
+            return;
+        }
+        self.modeller.transform = None;
+        let across = along.perp();
+        let by = across * (on - p.truncate()).dot(across);
+        self.transform_elements(&elements, &Map::Shift(by.extend(0.0)), false);
+    }
+
+    /// The lines Align knows: those a click snaps to, and both faces of every wall.
+    fn align_lines(&self) -> Vec<(DVec2, DVec2)> {
+        let grid = self.modeller.model.grid;
+        let mut lines = self.snap_lines();
+        for e in self.modeller.model.iter() {
+            if let Shape::Planar(w) = e.shape_in_project(&grid) {
+                if let PlanarForm::Wall { start, end, .. } = w.form {
+                    if let Some(along) = (end - start).try_normalize() {
+                        let off = along.perp() * (w.total_thickness() / 2.0);
+                        lines.extend([(start + off, end + off), (start - off, end - off)]);
+                    }
+                }
+            }
+        }
+        lines
+    }
+
+    /// The line under the cursor: a point on it and the way it runs. `p` is the click on the
+    /// work plane (snapped or not: the cursor itself says which line is nearest).
+    fn line_under(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> Option<(DVec2, DVec2)> {
+        let (z, ..) = self.work_plane();
+        let p = self.plane_point(x, y, width, height, z).unwrap_or(p);
+        self.align_lines()
+            .into_iter()
+            .filter_map(|(a, b)| {
+                let d = b - a;
+                let c = a + d * ((p.truncate() - a).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                let s = self.on_screen(c.extend(p.z), width, height)?;
+                Some((a, d.try_normalize()?, (s.0 - x).hypot(s.1 - y)))
+            })
+            .filter(|(_, _, off)| *off <= super::modeller::SNAP_PIXELS)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(a, along, _)| (a, along))
     }
 
     /// Puts `elements` through `map`: each takes its new place, or (`copy`) a new element is
@@ -540,6 +623,46 @@ mod tests {
         let Shape::Planar(p) = app.modeller.model.get(copy).unwrap().shape_in_project(&grid) else { panic!() };
         // the door, 0.5 from the first's start, is 0.5 from the image's end: at x = 9.5 back to 8.6
         assert!((p.openings[0].along - 2.6).abs() < 1e-9, "{:?}", p.openings);
+    }
+
+    #[test]
+    fn align_moves_the_wall_square_to_the_line_clicked_first() {
+        let (mut app, id) = a_wall();
+        // a second wall along y = 3 to align to
+        let shape = app.shape_for(ModelTool::Wall, DVec3::new(-2.0, 3.0, 0.0), DVec3::new(8.0, 3.0, 0.0));
+        let other = app.add_element("Wall", None, shape).unwrap();
+        app.show_modelled();
+        app.select_modelled(id);
+        let _ = app.update(Message::Transform(TransformKind::Align));
+        click(&mut app, 12.0, 12.0);
+        assert!(app.modeller.transform.as_ref().is_some_and(|t| t.line.is_none()), "a click on no line is not taken");
+        click(&mut app, 7.0, 3.0);
+        click(&mut app, 0.0, 0.0);
+        let (a, b) = ends(&app, id);
+        assert!(near(a, [0.0, 3.0]) && near(b, [4.0, 3.0]), "up to the line, not along it: {a} {b}");
+        assert!(app.modeller.transform.is_none());
+        // nothing selected: the wall under the second click moves, and its face clicked comes
+        // onto the face clicked of the other
+        app.sel.clear();
+        let half = match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
+            Shape::Planar(w) => w.total_thickness() / 2.0,
+            other => panic!("{other:?}"),
+        };
+        let _ = app.update(Message::Transform(TransformKind::Move));
+        assert!(app.modeller.transform.is_none());
+        app.select_modelled(id);
+        let _ = app.update(Message::Transform(TransformKind::Move));
+        click(&mut app, 0.0, 3.0);
+        click(&mut app, 0.0, 0.0);
+        app.sel.clear();
+        let _ = app.update(Message::Transform(TransformKind::Align));
+        assert!(app.modeller.transform.is_some(), "Align starts with nothing selected");
+        // the far face of the other wall, then the near face of this one
+        click(&mut app, 7.0, 3.0 + half);
+        click(&mut app, 2.0, -half);
+        let (a, b) = ends(&app, id);
+        assert!(near(a, [0.0, 3.0 + 2.0 * half]) && near(b, [4.0, 3.0 + 2.0 * half]), "face on face: {a} {b}");
+        let _ = other;
     }
 
     #[test]

@@ -90,9 +90,15 @@ fn content(d: &Drawing2d) -> String {
             Align::Center => width / 2.0,
             Align::Right => width,
         };
-        let x = (t.at[0] - lo[0]) * k - shift;
-        let y = (t.at[1] - lo[1]) * k;
-        let _ = writeln!(s, "BT /F1 {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
+        // its start: back along its own direction from the point it stands on
+        let (sin, cos) = t.angle.sin_cos();
+        let x = (t.at[0] - lo[0]) * k - shift * cos;
+        let y = (t.at[1] - lo[1]) * k - shift * sin;
+        if t.angle == 0.0 {
+            let _ = writeln!(s, "BT /F1 {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
+        } else {
+            let _ = writeln!(s, "BT /F1 {} Tf {} {} {} {} {} {} Tm {} Tj ET", num(size), num(cos), num(sin), num(-sin), num(cos), num(x), num(y), literal(&t.text));
+        }
     }
     s
 }
@@ -182,8 +188,8 @@ mod tests {
             paper: Some(A3_LANDSCAPE),
             lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
             texts: vec![
-                Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left },
-                Text2d { pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right },
+                Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
+                Text2d { pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
             ],
             dimensions: Vec::new(),
         }
@@ -200,6 +206,25 @@ mod tests {
         assert!(s.contains("/MediaBox [0 0 1190.55 841.89]"), "{s}");
         assert!(s.contains("/Count 1"), "{s}");
         assert!(s.trim_end().ends_with("%%EOF"), "{s}");
+    }
+
+    #[test]
+    fn a_turned_text_is_written_with_its_matrix() {
+        let mut d = sheet();
+        // the same text level and from the left, and read from the right of the sheet, centred
+        let level = Text2d { pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
+        d.texts = vec![level.clone(), Text2d { align: Align::Center, angle: std::f64::consts::FRAC_PI_2, ..level }];
+        let s = text(&pdf(&d));
+        let lines: Vec<&str> = s.lines().filter(|l| l.contains("(HEA 200) Tj")).collect();
+        let place = |line: &str, op: &str| -> (f64, f64) {
+            let before: Vec<&str> = line.split(op).next().unwrap().split_whitespace().collect();
+            (before[before.len() - 2].parse().unwrap(), before[before.len() - 1].parse().unwrap())
+        };
+        let (x, y) = place(lines[0], " Td");
+        // cos sin -sin cos, then its start: at the point's x, half its width under the point
+        assert!(lines[1].contains(" 0 1 -1 0 "), "{}", lines[1]);
+        let (tx, ty) = place(lines[1], " Tm");
+        assert!((tx - x).abs() < 1e-6 && ty < y - 5.0 && ty > y - 40.0, "{lines:?}");
     }
 
     #[test]

@@ -149,7 +149,8 @@ pub enum Align {
     Right,
 }
 
-/// A text, level, standing on `at`; `height` is that of its capitals.
+/// A text standing on `at`, turned `angle` radians counter-clockwise about that point; `height`
+/// is that of its capitals.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Text2d {
     pub pen: Pen,
@@ -157,6 +158,7 @@ pub struct Text2d {
     pub height: f64,
     pub text: String,
     pub align: Align,
+    pub angle: f64,
 }
 
 impl Text2d {
@@ -224,7 +226,7 @@ impl Dim2d {
         let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.offset * 0.25;
         let middle = [(self.from[0] + self.to[0]) / 2.0, (self.from[1] + self.to[1]) / 2.0];
         let centre = add(middle, n, self.offset + clear);
-        Text2d { pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center }
+        Text2d { pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
     }
 }
 
@@ -276,15 +278,15 @@ impl Drawing2d {
                         for k in 0..BUBBLE_SIDES {
                             self.line(Pen::Grids, point(k), point(k + 1));
                         }
-                        self.texts.push(Text2d { pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center });
+                        self.texts.push(Text2d { pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center, angle: 0.0 });
                     }
                 }
                 Some(z) => {
                     let label = format!("{} {z:+.3}", d.name);
                     let gap = h * 0.6;
                     let (right, left) = (add(d.b, u, gap), add(d.a, [-u[0], -u[1]], gap));
-                    self.texts.push(Text2d { pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left });
-                    self.texts.push(Text2d { pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right });
+                    self.texts.push(Text2d { pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left, angle: 0.0 });
+                    self.texts.push(Text2d { pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right, angle: 0.0 });
                 }
             }
         }
@@ -369,7 +371,11 @@ impl Drawing2d {
     }
 
     fn text(&mut self, at: [f64; 2], height: f64, text: impl Into<String>, align: Align) {
-        self.texts.push(Text2d { pen: Pen::Text, at, height, text: text.into(), align });
+        self.turned_text(at, height, text, align, 0.0);
+    }
+
+    fn turned_text(&mut self, at: [f64; 2], height: f64, text: impl Into<String>, align: Align, angle: f64) {
+        self.texts.push(Text2d { pen: Pen::Text, at, height, text: text.into(), align, angle });
     }
 
     /// The lines a view draws itself (they are cut to its crop where they are read), through `to`.
@@ -475,7 +481,7 @@ impl Drawing2d {
                 }
                 at = [at[0] + h * 0.8, at[1] + h * 0.1];
             }
-            self.text(at, rules.text * unit, n.text.clone(), align);
+            self.turned_text(at, rules.text * unit, n.text.clone(), align, n.angle);
         }
     }
 }
@@ -603,7 +609,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
         let leading = f64::from(t.size) * 1.3;
         for (k, row) in t.text.lines().enumerate() {
             let at = on_paper(t.at);
-            d.texts.push(Text2d { pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align });
+            d.texts.push(Text2d { pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align, angle: 0.0 });
         }
     }
     for v in &sheet.viewports {

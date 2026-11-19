@@ -1625,6 +1625,17 @@ impl Document {
         true
     }
 
+    /// Puts a placed view's middle at `at`, wherever that is: the middle of all a view cuts may
+    /// lie off the paper while the part its crop keeps lies on it.
+    pub fn put_placed(&mut self, sheet: &str, index: usize, at: [f64; 2]) -> bool {
+        let Some(view) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.views.get_mut(index)) else { return false };
+        if !(at[0].is_finite() && at[1].is_finite()) {
+            return false;
+        }
+        view.at = at;
+        true
+    }
+
     /// Sets the scale of a placed view (1 : `scale`).
     pub fn set_scale(&mut self, sheet: &str, index: usize, scale: f64) -> bool {
         if !(scale.is_finite() && scale > 0.0) {

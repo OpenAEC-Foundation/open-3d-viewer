@@ -3,6 +3,12 @@
 //! in the ASPRS class colours; points take their RGB colour when the file has one, else the
 //! colour of their class shaded by their intensity. Read in chunks, thinned out evenly to
 //! [`MAX_POINTS`](super::pointcloud::MAX_POINTS); survey coordinates move to a local origin.
+//!
+//! A cloud-optimised file (COPC, `.copc.laz`, as AHN6 is delivered) is read through its octree
+//! with the `las` crate's COPC reader: whole levels from the coarsest down while they fit in the
+//! point limit, and the next level thinned out to fill it. Each level of the octree is an even
+//! sample of the whole cloud, so a large file shows quickly and evenly without decompressing
+//! every point.
 
 use super::pointcloud::{Cloud, MAX_POINTS};
 use super::{Loaded, Loader, Phase, Progress, Source};
@@ -26,12 +32,24 @@ impl Loader for LasLoader {
 
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
+        let err = |e: ::las::Error| format!("{}: {e}", source.name());
         let reader = match source {
             Source::File(path) => ::las::Reader::from_path(path),
             Source::Bytes { data, .. } => ::las::Reader::new(std::io::Cursor::new(Bytes(data.clone()))),
         }
-        .map_err(|e| format!("{}: {e}", source.name()))?;
-        let (layers, info) = read(reader, &source.stem(), MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;
+        .map_err(err)?;
+        let stem = source.stem();
+        let stem = stem.strip_suffix(".copc").unwrap_or(&stem);
+        let (layers, info) = if reader.header().copc_info_vlr().is_some() {
+            drop(reader);
+            match source {
+                Source::File(path) => read_copc(::las::CopcReader::from_path(path).map_err(err)?, stem, MAX_POINTS),
+                Source::Bytes { data, .. } => read_copc(::las::CopcReader::new(std::io::Cursor::new(Bytes(data.clone()))).map_err(err)?, stem, MAX_POINTS),
+            }
+        } else {
+            read(reader, stem, MAX_POINTS)
+        }
+        .map_err(err)?;
         progress.set(Phase::Convert);
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
     }
@@ -58,26 +76,42 @@ fn read(mut reader: ::las::Reader, stem: &str, max: usize) -> Result<(Vec<Layer>
     let b = header.bounds();
     cloud.anchor([b.min.x, b.min.y, b.min.z]);
     let mut data = ::las::PointDataBuilder::new().for_header(&header).build();
-    // RGB in 16 bits as the standard says, or 8 bits as some writers store it: decided by the
-    // first colours that are not black; intensity scaled by the brightest of the first chunk
-    let mut rgb_shift: Option<u32> = None;
-    let mut intensity_scale: Option<f32> = None;
+    let mut colours = Colours::default();
     loop {
         let n = reader.fill_points(CHUNK, &mut data)?;
         if n == 0 {
             break;
         }
+        colours.add(&mut cloud, &data, Cloud::keep);
+    }
+    let info = cloud.info("LAS", total);
+    Ok(finish(cloud, info, &header, stem))
+}
+
+/// How the colours of a file are read: RGB in 16 bits as the standard says, or 8 bits as some
+/// writers store it, decided by the first colours that are not black; intensity scaled by the
+/// brightest of the first points.
+#[derive(Default)]
+struct Colours {
+    rgb_shift: Option<u32>,
+    intensity_scale: Option<f32>,
+}
+
+impl Colours {
+    /// Adds the points of `data` that `keep` keeps to `cloud`, a layer per class.
+    fn add(&mut self, cloud: &mut Cloud, data: &::las::PointData, mut keep: impl FnMut(&mut Cloud) -> bool) {
         let rgb_max = data.rgb().and_then(|c| c.map(|(r, g, b)| r.max(g).max(b)).max()).unwrap_or(0);
-        if rgb_shift.is_none() && rgb_max > 0 {
-            rgb_shift = Some(if rgb_max > 255 { 8 } else { 0 });
+        if self.rgb_shift.is_none() && rgb_max > 0 {
+            self.rgb_shift = Some(if rgb_max > 255 { 8 } else { 0 });
         }
-        let intensity_scale = *intensity_scale.get_or_insert_with(|| 1.0 / data.intensity().max().unwrap_or(0).max(1) as f32);
+        let rgb_shift = self.rgb_shift;
+        let intensity_scale = *self.intensity_scale.get_or_insert_with(|| 1.0 / data.intensity().max().unwrap_or(0).max(1) as f32);
         let mut rgb = data.rgb();
         let mut intensity = data.intensity();
         for ((x, y), (z, class)) in data.x().zip(data.y()).zip(data.z().zip(data.classification())) {
             let rgb = rgb.as_mut().and_then(Iterator::next);
             let i = intensity.next().unwrap_or(0);
-            if !cloud.keep() {
+            if !keep(cloud) {
                 continue;
             }
             let layer = cloud.layer(class as u32, || Layer { name: class_name(class), color: class_color(class), ..Layer::default() });
@@ -91,10 +125,77 @@ fn read(mut reader: ::las::Reader, stem: &str, max: usize) -> Result<(Vec<Layer>
             cloud.push_lit(layer, [x, y, z], color, ((i as f32 * intensity_scale).min(1.0) * 255.0).round() as u8);
         }
     }
+}
+
+/// Which levels of a COPC octree are read for at most `max` points, from the points per level:
+/// the number of whole levels, and the next level with the stride that thins it out to fill
+/// what is left (when that is at least a tenth of `max`).
+fn copc_levels(per_level: &[u64], max: usize) -> (usize, Option<(usize, u64)>) {
+    let (mut levels, mut sum) = (0usize, 0u64);
+    while levels < per_level.len() && sum + per_level[levels] <= max as u64 {
+        sum += per_level[levels];
+        levels += 1;
+    }
+    let left = (max as u64).saturating_sub(sum);
+    let partial = (levels < per_level.len() && left > 0 && left >= max as u64 / 10).then(|| (levels, per_level[levels].div_ceil(left).max(1)));
+    (levels, partial)
+}
+
+/// Reads a cloud-optimised file through its octree, at most `max` points (see [`copc_levels`]).
+fn read_copc<R: std::io::Read + std::io::Seek>(mut reader: ::las::CopcReader<'_, R>, stem: &str, max: usize) -> Result<(Vec<Layer>, Vec<(String, String)>), ::las::Error> {
+    let header = reader.header().clone();
+    let total = header.number_of_points();
+    let mut entries: Vec<::las::copc::Entry> = reader.hierarchy_entries().filter(|e| e.point_count > 0 && e.key.l >= 0).collect();
+    // by level, then in file order so the reads go forward
+    entries.sort_by_key(|e| (e.key.l, e.offset));
+    let depth = entries.last().map_or(0, |e| e.key.l as usize + 1);
+    let mut per_level = vec![0u64; depth];
+    for e in &entries {
+        per_level[e.key.l as usize] += e.point_count as u64;
+    }
+    let (levels, partial) = copc_levels(&per_level, max);
+    let mut cloud = Cloud::new(0, 1);
+    let b = header.bounds();
+    cloud.anchor([b.min.x, b.min.y, b.min.z]);
+    let mut colours = Colours::default();
+    // counted through the whole thinned level, so that its nodes share the points left
+    let mut seen = 0u64;
+    for entry in &entries {
+        let level = entry.key.l as usize;
+        let stride = match partial {
+            _ if level < levels => 1,
+            Some((l, stride)) if l == level => stride,
+            _ => break,
+        };
+        let data = reader.read_entry(entry)?;
+        colours.add(&mut cloud, &data, |_| {
+            seen += 1;
+            (seen - 1) % stride == 0
+        });
+    }
     let mut info = cloud.info("LAS", total);
+    let shown = cloud.kept();
+    if (shown as u64) < total {
+        info.push(("Points shown".into(), format!("{shown} (of {total})")));
+    }
+    let deepest = partial.map_or(levels, |(l, _)| l + 1);
+    let thinned = if partial.is_some() { ", the last one thinned out" } else { "" };
+    info.push(("COPC octree levels shown".into(), format!("{deepest} of {depth}{thinned}")));
+    if let Some(copc) = header.copc_info_vlr() {
+        // the spacing halves with every level
+        info.push(("COPC point spacing shown".into(), format!("{:.3}", copc.spacing / (1u64 << deepest.saturating_sub(1).min(62)) as f64)));
+    }
+    Ok(finish(cloud, info, &header, stem))
+}
+
+/// The layers of a cloud and the project information about its file.
+fn finish(cloud: Cloud, mut info: Vec<(String, String)>, header: &::las::Header, stem: &str) -> (Vec<Layer>, Vec<(String, String)>) {
+    if header.copc_info_vlr().is_some() {
+        info.push(("Cloud optimised (COPC)".into(), "yes".into()));
+    }
     info.push(("LAS version".into(), header.version().to_string()));
     info.push(("Point format".into(), header.point_format().to_string()));
-    if let Some(crs) = coordinate_system(&header) {
+    if let Some(crs) = coordinate_system(header) {
         info.push(("Coordinate system".into(), crs));
     }
     let software = header.generating_software().trim_matches(char::from(0)).trim();
@@ -108,7 +209,7 @@ fn read(mut reader: ::las::Reader, stem: &str, max: usize) -> Result<(Vec<Layer>
             layer.name = stem.to_string();
         }
     }
-    Ok((layers, info))
+    (layers, info)
 }
 
 /// The coordinate system: an EPSG code from the GeoTIFF keys, or the name in the WKT.
@@ -270,6 +371,49 @@ mod tests {
         let kept: usize = layers.iter().map(Layer::vertex_count).sum();
         assert_eq!(kept, 100, "every 5th of 500");
         assert!(info.iter().any(|(k, v)| k == "Points shown" && v == "100 (1 in 5)"));
+    }
+
+    /// A small real COPC file (the Autzen sample of the `las` crate's tests, MIT).
+    const AUTZEN: &[u8] = include_bytes!("../../test-models/autzen.copc.laz");
+
+    #[test]
+    fn reads_a_copc_file_through_its_octree() {
+        let model = load_bytes("autzen.copc.laz", AUTZEN.to_vec());
+        assert_eq!(model.format, "LAS");
+        let info = &model.project.info;
+        let get = |key: &str| info.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!(get("Cloud optimised (COPC)"), Some("yes"));
+        let total: usize = get("Points in file").unwrap().parse().unwrap();
+        // small enough to show whole: every level, every point
+        assert_eq!(model.point_count(), total);
+        assert!(get("COPC octree levels shown").is_some_and(|v| v.split(" of ").next() == v.split(" of ").nth(1)));
+        assert!(model.bounds.is_valid());
+        // the same points as the plain LAZ reader finds
+        let plain = ::las::Reader::new(std::io::Cursor::new(AUTZEN.to_vec())).unwrap();
+        let (layers, _) = read(plain, "autzen", usize::MAX).unwrap();
+        assert_eq!(layers.iter().map(Layer::vertex_count).sum::<usize>(), total);
+        assert_eq!(model.layers.len(), layers.len());
+
+        // the sample is one node of 107 points: with a limit of 50 it is thinned out
+        let reader = ::las::CopcReader::new(std::io::Cursor::new(AUTZEN.to_vec())).unwrap();
+        let (layers, info) = read_copc(reader, "autzen", 50).unwrap();
+        let kept: usize = layers.iter().map(Layer::vertex_count).sum();
+        assert_eq!(kept, total.div_ceil(total.div_ceil(50)), "every n-th of {total}");
+        assert!(info.iter().any(|(k, v)| k == "COPC octree levels shown" && v.contains("thinned")), "{info:?}");
+    }
+
+    #[test]
+    fn copc_levels_fill_the_point_limit() {
+        // 100, 800, 6400 points per level
+        let levels = [100, 800, 6_400];
+        assert_eq!(copc_levels(&levels, 10_000), (3, None));
+        assert_eq!(copc_levels(&levels, 900), (2, None));
+        // 900 whole, 1100 left of the 6400: every 6th point
+        assert_eq!(copc_levels(&levels, 2_000), (2, Some((2, 6))));
+        // less than a tenth left: no part of a level
+        assert_eq!(copc_levels(&levels, 950), (2, None));
+        // even the root is too many: thinned out
+        assert_eq!(copc_levels(&levels, 50), (0, Some((0, 2))));
     }
 
     #[test]

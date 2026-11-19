@@ -90,6 +90,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | VTK (`.vtk`, `.vtu`, `.vtp`, `.vts`, `.vtr`, `.vti`, the parallel files, `.vtm`, `.pvd`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`), which parses through the published `vtkio` crate | Done: the reader turns cells into outer faces and fields; the adapter copies them into layers and the app's fields. |
 | FEM input deck (`.inp`), FEM bulk data (`.bdf`, `.nas`, `.dat`), finite element mesh (`.msh`), structural analysis text model (`.s2k`, `.$2k`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`) | Done: the reader returns a mesh and an analysis model of its own; the adapter copies the analysis model into `bim-structural`'s. |
 | SAF (`.xlsx`) | adapter `fem.rs` | `saf-dll` (`saf-read`), into `fem-model`'s analysis model | Done. `saf-read` pins the same `fem-dll` revision as the app, so both share one model crate. |
+| COPC (`.copc.laz`) | in `las.rs` | the `las` crate's COPC reader (MIT) | Adapter: the app picks which octree levels to read for its point limit, the crate reads them. Added 2026-11-18. |
 
 ## Moved so far
 

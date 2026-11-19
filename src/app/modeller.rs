@@ -711,7 +711,7 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let mut layers = viewer_layers(&self.modeller.model, &levels, &self.library);
+        let (mut layers, parts) = viewer_layers(&self.modeller.model, &levels, &self.library);
         // the spaces its walls close in stand beside its elements, on a layer of their own
         layers.extend(spaces::space_layer(&self.spaces(), &levels));
         let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
@@ -720,6 +720,9 @@ impl App {
         built.project.types = bim_library::ifcx::nodes(&self.library);
         // a material with a hatch of its own in the hatch catalogue is cut with it
         built.project.cut_patterns = crate::hatching::library_patterns(&self.library);
+        // an element of several materials is cut a face per part, each hatched as its material
+        built.project.parts = parts;
+        built.project.part_materials = crate::hatching::part_materials(&self.library);
         // and its drawing standard: the kinds of drawing and their settings, a node each
         built.project.types.extend(bim_library::drawing::nodes(&self.standard));
         // and the names given to its spaces
@@ -959,13 +962,21 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// `levels` names the levels by path.
 /// A part of a layered element has the colour of its layer's material in `library`.
 pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
-    Model::new(PathBuf::from("model.ifcx"), "IFCX", viewer_layers(model, levels, library))
+    let (layers, parts) = viewer_layers(model, levels, library);
+    let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
+    built.project.parts = parts;
+    built.project.part_materials = crate::hatching::part_materials(library);
+    built.project.cut_patterns = crate::hatching::library_patterns(library);
+    built
 }
 
-/// The layers of the model shown: one per class, each element with its properties.
-fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Vec<Layer> {
+/// The layers of the model shown: one per class, each element with its properties; and the
+/// parts of the elements that are of several materials (see `ProjectData::parts`): the layer,
+/// the first index and the index count of each part, and its material in the library's order.
+fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> (Vec<Layer>, Vec<(usize, u32, u32, u32)>) {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
+    let mut of_parts: Vec<(usize, u32, u32, u32)> = Vec::new();
     for element in model.iter() {
         let Ok(parts) = model.evaluate(element.id) else { continue };
         if parts.is_empty() {
@@ -981,8 +992,11 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
         };
         let layer = &mut layers[k];
         let first = layer.indices.len() as u32;
+        // of several materials: each part is told from the others where it is cut
+        let several = parts.iter().filter_map(|p| p.material.as_deref()).collect::<std::collections::HashSet<_>>().len() > 1;
         for part in &parts {
             let Ok(mesh) = Mesh::of(&part.solid) else { continue };
+            let part_first = layer.indices.len() as u32;
             // tile-local f64 to the scene's f32, through the tile origin in f64
             let origin = grid.origin(part.tile);
             let base = (layer.positions.len() / 3) as u32;
@@ -995,13 +1009,17 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
                 layer.normals.extend(n.as_vec3().to_array());
             }
             layer.indices.extend(mesh.indices.iter().map(|i| i + base));
+            if let Some(material) = part.material.as_deref().filter(|_| several).and_then(|key| library.materials.iter().position(|m| m.key == key)) {
+                of_parts.push((k, part_first, layer.indices.len() as u32 - part_first, material as u32));
+            }
         }
         let count = layer.indices.len() as u32 - first;
         layer.elements.push((element.id.0, first, count));
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
         layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
-    layers
+    of_parts.sort_unstable();
+    (layers, of_parts)
 }
 
 /// An element's properties as a flat JSON object.

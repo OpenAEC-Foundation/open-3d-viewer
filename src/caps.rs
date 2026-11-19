@@ -4,7 +4,7 @@
 //! standing on the face. Headless.
 
 use crate::drawing::{faces_at, Fill, Shown};
-use crate::hatching::{pattern_of, rows};
+use crate::hatching::rows;
 use crate::model::Model;
 use crate::section::{SectionBox, SectionPlane};
 use crate::views3d::Colored;
@@ -38,7 +38,7 @@ impl CutFaces {
             if loops.is_empty() {
                 continue;
             }
-            let pattern = pattern_of(model, fill.layer, fill.element, standard);
+            let pattern = crate::hatching::fill_pattern(model, &fill, standard);
             let (behind, line) = pattern.look();
             for [a, b, c] in triangulate(&loops) {
                 self.triangles.push(([world(a, FACE_LIFT), world(b, FACE_LIFT), world(c, FACE_LIFT)], [behind[0], behind[1], behind[2], 255]));

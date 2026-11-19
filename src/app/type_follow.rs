@@ -368,6 +368,35 @@ mod tests {
     }
 
     #[test]
+    fn a_layered_wall_is_cut_layer_by_layer_each_with_its_materials_hatch() {
+        let mut app = project();
+        let a = app.add_element("Wall", None, wall(&app, 0.0, "wall.cavity-pir-360")).unwrap();
+        let shown = app.modeller.shown.and_then(|id| app.models.iter().find(|e| e.model.id == id)).expect("the model shows").model.clone();
+        // a plan at 1 m: the brick, the insulation and the sand-lime brick are each a face (the
+        // cavity is no solid), and each is hatched as its material
+        let mut cut = crate::drawing::cut_at(&shown, crate::drawing::Shown::all(), 1.0);
+        let of_wall: Vec<&crate::drawing::Fill> = cut.fills.iter().filter(|f| f.element == Some(a.0)).collect();
+        assert_eq!(of_wall.len(), 3, "a face per solid layer");
+        let material = |fill: &crate::drawing::Fill| shown.project.part_materials[fill.part.expect("a part") as usize].name.clone();
+        let mut names: Vec<String> = of_wall.iter().map(|f| material(f)).collect();
+        names.sort();
+        assert_eq!(names, ["PIR insulation", "brickwork", "sand-lime brick"]);
+        let pattern = |name: &str| crate::hatching::fill_pattern(&shown, of_wall.iter().find(|f| material(f) == name).unwrap(), bim_library::DrawingStandard::Nen47);
+        // brickwork: the pairs of lines of its sign; PIR: the crossed lines of insulation in its own colour
+        assert_eq!((pattern("brickwork").grids.len(), pattern("PIR insulation").grids.len(), pattern("PIR insulation").fill), (2, 2, Some([245, 235, 195])));
+        assert_ne!(pattern("brickwork"), pattern("sand-lime brick"));
+        // hatched, every face has lines
+        crate::hatching::hatch(&mut cut, &shown, bim_library::DrawingStandard::Nen47, 50.0);
+        assert!(cut.fills.iter().filter(|f| f.element == Some(a.0)).all(|f| !f.rows.is_empty() && f.look.is_some()));
+        // a wall of one material is one face, as before
+        let concrete = app.library.buildups.iter().find(|b| b.layers.len() == 1 && b.layers[0].material == "concrete" && b.role == bim_library::Role::Wall).unwrap().id.clone();
+        let b = app.add_element("Wall", None, wall(&app, 5.0, &concrete)).unwrap();
+        let shown = app.modeller.shown.and_then(|id| app.models.iter().find(|e| e.model.id == id)).unwrap().model.clone();
+        let cut = crate::drawing::cut_at(&shown, crate::drawing::Shown::all(), 1.0);
+        assert_eq!(cut.fills.iter().filter(|f| f.element == Some(b.0)).map(|f| f.part).collect::<Vec<_>>(), [None]);
+    }
+
+    #[test]
     fn systems_follow_their_type() {
         let mut app = project();
         let line = |y: f64| SystemDef { start: DVec2::new(0.0, y), end: DVec2::new(6.0, y), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };

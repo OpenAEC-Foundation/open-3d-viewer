@@ -18,9 +18,10 @@
 //! A material names a hatch of this catalogue as its own ([`crate::Material::sign`]), and a
 //! drawing cuts it with that hatch: the hatch's lines as rows ([`Hatch::rows`]) over its colour.
 //!
+//! An element of several layers is cut a face per layer, each with its material's hatch.
+//!
 //! Not yet: a drawing does not draw a hatch's filled areas and dots (lead, sealant, sand,
-//! gravel, water show as their colour), and an element of several layers is still cut with one
-//! hatch, by its hatch kind.
+//! gravel, water show as their colour).
 
 use crate::material::Names;
 use crate::{uuid, Lang};

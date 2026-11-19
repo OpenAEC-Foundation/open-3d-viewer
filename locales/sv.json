@@ -1218,6 +1218,10 @@
     "Steel is missing around the frame:": "Stål saknas runt karmen:",
     "all; e.g. *sandwich*": "alla; t.ex. *sandwich*",
     "no": "ingen",
-    "without steel in": "utan stål i"
+    "without steel in": "utan stål i",
+    "Move by two points": "Flytta med två punkter",
+    "Moving…": "Flyttar…",
+    "Pick model": "Välj modell",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Klicka på en punkt i modellen och sedan dit den ska (till exempel där två axlar korsas). Esc avbryter."
   }
 }

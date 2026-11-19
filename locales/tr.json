@@ -1218,6 +1218,10 @@
     "Steel is missing around the frame:": "Kasanın çevresinde çelik eksik:",
     "all; e.g. *sandwich*": "tümü; örn. *sandwich*",
     "no": "yok",
-    "without steel in": "çeliksiz, içinde"
+    "without steel in": "çeliksiz, içinde",
+    "Move by two points": "İki noktayla taşı",
+    "Moving…": "Taşınıyor…",
+    "Pick model": "Modeli seç",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Modelin bir noktasını, sonra gideceği yeri tıklayın (örneğin iki aksın kesiştiği yer). Esc durdurur."
   }
 }

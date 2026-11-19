@@ -342,9 +342,9 @@ pub fn tools() -> Vec<Value> {
                 "property": { "type": "string" }, "value": { "type": "string" },
                 "group_by": { "type": "array", "items": { "type": "string" } }
             }), &[], false),
-        tool("collab_clashes", "Clash tests: run those of the rule set (its list and its discipline matrix) on the open models and wait for them, list the clashes found, group them (by the element they share or by place), open a group, pick one (select both elements and frame them), decide on one (accepted, rejected, open), make an issue of one or of all (one per group).",
+        tool("collab_clashes", "Clash tests: run those of the rule set (its list and its discipline matrix) on the open models and wait for them, list the clashes found, group them (by the element they share or by place), open a group, pick one (select both elements and frame where they clash), cut a section box around one (section), decide on one (accepted, rejected, open), make an issue of one or of all (one per group), each with a picture of its clashes.",
             json!({
-                "action": { "type": "string", "enum": ["run", "list", "group", "open_group", "pick", "decide", "issue", "issues"] },
+                "action": { "type": "string", "enum": ["run", "list", "group", "open_group", "pick", "section", "decide", "issue", "issues"] },
                 "index": { "type": "integer" },
                 "by": { "type": "string", "enum": ["off", "element", "place"], "description": "group: how the clashes are grouped" },
                 "group": { "type": "integer", "description": "open_group: the group's number, as list gives it" },

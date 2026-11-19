@@ -2736,14 +2736,16 @@ impl Studio {
     fn right_body(&self, look: Look) -> Element<'_, Msg> {
         let (app, l) = (&self.app, self.l());
         let p = palette(look);
+        // the GIS and Geo tabs belong to GIC
+        let geo = self.product() == Product::Gis;
         if self.product() != Product::Modeller {
-            return Self::pane(app.properties_body(p, l));
+            return Self::pane(app.properties_body_for(p, l, geo));
         }
         column![
             container(w::mono_label(look, l.text("Modelverkenner", "Model explorer"))).padding([4, 8]),
             container(app.model_explorer(p, l).map(Msg::App)).padding([0, 4]).width(Length::Fill).height(Length::FillPortion(2)),
             iced::widget::rule::horizontal(1),
-            container(Self::pane(app.properties_body(p, l))).height(Length::FillPortion(3)),
+            container(Self::pane(app.properties_body_for(p, l, geo))).height(Length::FillPortion(3)),
         ]
         .into()
     }
@@ -3464,6 +3466,22 @@ mod tests {
         for label in ["MODEL EXPLORER", "Storeys", "Grid lines", "Properties"] {
             assert!(ui.find(label).is_ok(), "{label}");
         }
+    }
+
+    #[test]
+    fn the_gis_and_geo_tabs_of_the_right_pane_are_only_in_gic() {
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(Msg::App(Message::NewModel("Level 0")));
+        for (product, there) in [(Product::Validator, false), (Product::Viewer, false), (Product::Gis, true)] {
+            studio.set_product(product);
+            let mut ui = iced_test::simulator(studio.view());
+            assert_eq!(ui.find("Geo").is_ok(), there, "{product:?}");
+        }
+        // GIC opened its tab; elsewhere the pane shows the properties instead
+        assert_eq!(studio.app.side_tab, crate::app::SideTab::Gis);
+        studio.set_product(Product::Validator);
+        assert!(iced_test::simulator(studio.view()).find("Properties").is_ok());
     }
 
     #[test]

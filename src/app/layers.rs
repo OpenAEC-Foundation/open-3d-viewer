@@ -222,15 +222,28 @@ impl App {
 
     /// The right pane: its tabs, then the tab shown.
     pub fn properties_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        self.properties_body_for(p, l, true)
+    }
+
+    /// The right pane, with the GIS and Geo tabs only where `geo` (the GIC product): elsewhere
+    /// they are not there, and a GIS or Geo tab opened by something else shows the properties.
+    pub fn properties_body_for(&self, p: Palette, l: Language, geo: bool) -> Element<'_, Message> {
+        let shown = match self.side_tab {
+            SideTab::Gis | SideTab::Geo if !geo => SideTab::Properties,
+            t => t,
+        };
         let tab = |label: &'static str, t: SideTab| {
-            let active = self.side_tab == t;
+            let active = shown == t;
             button(text(label).size(12).font(if active { FONT_BOLD } else { FONT }))
                 .padding([4, 12])
                 .style(move |_, s| p.ribbon_button(active, s))
                 .on_press(Message::SideTab(t))
         };
-        let tabs = row![tab(l.text("Eigenschappen", "Properties"), SideTab::Properties), tab(l.text("Lagen", "Layers"), SideTab::Layers), tab("GIS", SideTab::Gis), tab("Geo", SideTab::Geo)].spacing(2);
-        let body = match self.side_tab {
+        let mut tabs = row![tab(l.text("Eigenschappen", "Properties"), SideTab::Properties), tab(l.text("Lagen", "Layers"), SideTab::Layers)].spacing(2);
+        if geo {
+            tabs = tabs.push(tab("GIS", SideTab::Gis)).push(tab("Geo", SideTab::Geo));
+        }
+        let body = match shown {
             SideTab::Properties => self.properties_tab(p, l),
             SideTab::Layers => self.layers_tab(p, l),
             SideTab::Gis => self.gis_tab(p, l),

@@ -1218,6 +1218,10 @@
     "Steel is missing around the frame:": "Manca acciaio attorno al telaio:",
     "all; e.g. *sandwich*": "tutti; es. *sandwich*",
     "no": "senza",
-    "without steel in": "senza acciaio in"
+    "without steel in": "senza acciaio in",
+    "Move by two points": "Sposta con due punti",
+    "Moving…": "Spostamento…",
+    "Pick model": "Scegli modello",
+    "Click a point of the model, then where it should go (such as where two grids cross). Esc stops.": "Fai clic su un punto del modello, poi dove deve andare (ad esempio dove si incrociano due assi). Esc interrompe."
   }
 }

@@ -46,6 +46,8 @@ mod managed;
 mod mcp;
 mod measure;
 pub mod model;
+#[cfg(all(feature = "planner", windows))]
+mod planner_frame;
 pub mod product;
 mod remote;
 pub mod remote_link;

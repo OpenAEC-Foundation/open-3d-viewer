@@ -5292,7 +5292,7 @@ mod tests {
     fn a_frame_test_finds_the_steel_missing_around_windows_and_doors() {
         // a sandwich wall along x with a window (posts and a lintel, no sill) and a door (nothing
         // around it); a window in a brick wall is not tested
-        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), texturing: None };
+        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), splats: None, texturing: None };
         let boxes: [(u64, &str, &str, [f32; 3], [f32; 3]); 8] = [
             (1, "IfcWall", "Sandwichpaneel 120", [0.0, 0.0, 0.0], [6.0, 0.135, 3.0]),
             (2, "IfcWindow", "Raam", [1.0, 0.03, 1.0], [1.9, 0.1, 2.8]),

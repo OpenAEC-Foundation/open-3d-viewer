@@ -43,6 +43,10 @@ pub struct Layer {
     pub line_elements: Vec<(u64, u32, u32)>,
     /// Images on the surfaces (textured materials and decals), when any vertex shows one.
     pub texturing: Option<Box<Texturing>>,
+    /// A splat scene (3D Gaussian splatting): with `points`, every vertex is the centre of a
+    /// splat and its colour the splat's base colour with its opacity in the fourth byte; drawn
+    /// as sorted, blended Gaussians rather than dots.
+    pub splats: Option<Arc<SplatData>>,
 }
 
 /// The images on a layer's surfaces: per vertex what it shows of which image, and the images.
@@ -76,10 +80,6 @@ pub struct TextureImage {
     pub height: u32,
     /// RGBA8, `width * height * 4` bytes.
     pub rgba: Vec<u8>,
-    /// A splat scene (3D Gaussian splatting): with `points`, every vertex is the centre of a
-    /// splat and its colour the splat's base colour with its opacity in the fourth byte; drawn
-    /// as sorted, blended Gaussians rather than dots.
-    pub splats: Option<Arc<SplatData>>,
 }
 
 /// What a splat layer has beyond its centres and base colours.

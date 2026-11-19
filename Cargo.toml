@@ -124,6 +124,12 @@ tiles-model = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev 
 # Smithsonian Voyager scenes (.svx.json) through the svx-dll library; pure Rust
 svx-read = { git = "https://github.com/OpenAEC-Foundation/svx-dll", rev = "abaee1cd04290029e158ca4e9bd6ced6f1df2a5c" }
 svx-model = { git = "https://github.com/OpenAEC-Foundation/svx-dll", rev = "abaee1cd04290029e158ca4e9bd6ced6f1df2a5c" }
+# Finite element meshes, simulation results (VTK, through vtkio) and analysis text models through
+# the public fem-dll library; pure Rust on bytes, so also in the browser
+fem-read = { git = "https://github.com/OpenAEC-Foundation/fem-dll", rev = "a511ec287e8f0005febdb9276ba9742ad7f58218" }
+# SAF, the open Structural Analysis Format (.xlsx), through the public saf-dll library; it shares
+# fem-model with fem-read, so both pin the same fem-dll revision
+saf-read = { git = "https://github.com/OpenAEC-Foundation/saf-dll", rev = "7578aaad7346f861656a555aa7517e39d7110286" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
 vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
 # SolidWorks parts and assemblies (.sldprt, .sldasm) through the private solidworks-dll library; pure Rust on bytes

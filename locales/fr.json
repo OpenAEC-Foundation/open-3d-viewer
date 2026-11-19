@@ -1540,6 +1540,21 @@
     "Fetching...": "Récupération...",
     "Not fetched.": "Non récupéré.",
     "added to the project:": "ajouté au projet :",
-    "Add to the project": "Ajouter au projet"
+    "Add to the project": "Ajouter au projet",
+    "Own colour": "Couleur propre",
+    "Colour by": "Colorer selon",
+    "Time step": "Pas de temps",
+    "at the points": "aux points",
+    "per cell": "par cellule",
+    "Field": "Champ",
+    "Fields": "Champs",
+    "Next field": "Champ suivant",
+    "Previous field": "Champ précédent",
+    "Next step": "Pas suivant",
+    "Previous step": "Pas précédent",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Colore le maillage selon le champ suivant du fichier, comme une température ou un déplacement.",
+    "Colours the mesh by the file's previous field.": "Colore le maillage selon le champ précédent du fichier.",
+    "Shows the values of the next time step.": "Affiche les valeurs du pas de temps suivant.",
+    "Shows the values of the previous time step.": "Affiche les valeurs du pas de temps précédent."
   }
 }

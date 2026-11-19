@@ -1540,6 +1540,21 @@
     "Fetching...": "Hämtar...",
     "Not fetched.": "Inte hämtat.",
     "added to the project:": "tillagt i projektet:",
-    "Add to the project": "Lägg till i projektet"
+    "Add to the project": "Lägg till i projektet",
+    "Own colour": "Egen färg",
+    "Colour by": "Färga efter",
+    "Time step": "Tidssteg",
+    "at the points": "i punkterna",
+    "per cell": "per cell",
+    "Field": "Fält",
+    "Fields": "Fälten",
+    "Next field": "Nästa fält",
+    "Previous field": "Föregående fält",
+    "Next step": "Nästa steg",
+    "Previous step": "Föregående steg",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Färgar nätet efter filens nästa fält, till exempel en temperatur eller en förskjutning.",
+    "Colours the mesh by the file's previous field.": "Färgar nätet efter filens föregående fält.",
+    "Shows the values of the next time step.": "Visar värdena för nästa tidssteg.",
+    "Shows the values of the previous time step.": "Visar värdena för föregående tidssteg."
   }
 }

@@ -1540,6 +1540,21 @@
     "Fetching...": "Wird abgerufen...",
     "Not fetched.": "Nicht abgerufen.",
     "added to the project:": "zum Projekt hinzugefügt:",
-    "Add to the project": "Zum Projekt hinzufügen"
+    "Add to the project": "Zum Projekt hinzufügen",
+    "Own colour": "Eigene Farbe",
+    "Colour by": "Färben nach",
+    "Time step": "Zeitschritt",
+    "at the points": "an den Punkten",
+    "per cell": "je Zelle",
+    "Field": "Feld",
+    "Fields": "Felder",
+    "Next field": "Nächstes Feld",
+    "Previous field": "Vorheriges Feld",
+    "Next step": "Nächster Schritt",
+    "Previous step": "Vorheriger Schritt",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Färbt das Netz nach dem nächsten Feld der Datei, etwa einer Temperatur oder einer Verschiebung.",
+    "Colours the mesh by the file's previous field.": "Färbt das Netz nach dem vorherigen Feld der Datei.",
+    "Shows the values of the next time step.": "Zeigt die Werte des nächsten Zeitschritts.",
+    "Shows the values of the previous time step.": "Zeigt die Werte des vorherigen Zeitschritts."
   }
 }

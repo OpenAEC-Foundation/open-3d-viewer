@@ -1540,6 +1540,21 @@
     "Fetching...": "Getiriliyor...",
     "Not fetched.": "Getirilmedi.",
     "added to the project:": "projeye eklendi:",
-    "Add to the project": "Projeye ekle"
+    "Add to the project": "Projeye ekle",
+    "Own colour": "Kendi rengi",
+    "Colour by": "Renklendirme ölçütü",
+    "Time step": "Zaman adımı",
+    "at the points": "noktalarda",
+    "per cell": "hücre başına",
+    "Field": "Alan",
+    "Fields": "Alanlar",
+    "Next field": "Sonraki alan",
+    "Previous field": "Önceki alan",
+    "Next step": "Sonraki adım",
+    "Previous step": "Önceki adım",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Ağı dosyanın sonraki alanına göre renklendirir, örneğin bir sıcaklık veya bir yer değiştirme.",
+    "Colours the mesh by the file's previous field.": "Ağı dosyanın önceki alanına göre renklendirir.",
+    "Shows the values of the next time step.": "Sonraki zaman adımının değerlerini gösterir.",
+    "Shows the values of the previous time step.": "Önceki zaman adımının değerlerini gösterir."
   }
 }

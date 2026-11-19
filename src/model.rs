@@ -282,6 +282,9 @@ pub struct ProjectData {
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,
+    /// Values a simulation file gives at the points or cells of its mesh, and where the vertices
+    /// of its layers come from (VTK).
+    pub fields: Option<std::sync::Arc<crate::fields::Fields>>,
     /// Levels: name and elevation (metres), low to high.
     pub levels: Vec<(String, f32)>,
     /// The path the file gives a level, by its name: what its elements and plans name it by. A

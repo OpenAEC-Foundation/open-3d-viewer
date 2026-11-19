@@ -1540,6 +1540,21 @@
     "Fetching...": "Pobieranie...",
     "Not fetched.": "Nie pobrano.",
     "added to the project:": "dodano do projektu:",
-    "Add to the project": "Dodaj do projektu"
+    "Add to the project": "Dodaj do projektu",
+    "Own colour": "Własny kolor",
+    "Colour by": "Koloruj według",
+    "Time step": "Krok czasowy",
+    "at the points": "w punktach",
+    "per cell": "na komórkę",
+    "Field": "Pole",
+    "Fields": "Pola",
+    "Next field": "Następne pole",
+    "Previous field": "Poprzednie pole",
+    "Next step": "Następny krok",
+    "Previous step": "Poprzedni krok",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Koloruje siatkę według następnego pola pliku, na przykład temperatury lub przemieszczenia.",
+    "Colours the mesh by the file's previous field.": "Koloruje siatkę według poprzedniego pola pliku.",
+    "Shows the values of the next time step.": "Pokazuje wartości następnego kroku czasowego.",
+    "Shows the values of the previous time step.": "Pokazuje wartości poprzedniego kroku czasowego."
   }
 }

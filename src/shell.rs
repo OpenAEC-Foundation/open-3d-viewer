@@ -1533,6 +1533,21 @@ impl Studio {
             add("analysis.larger", l.text("Groter", "Larger"), "view.zoom-in", Change::Scale(true), false, loaded, l.text("Tekent de lijnen en pijlen groter.", "Draws the diagrams and arrows larger."));
             add("analysis.smaller", l.text("Kleiner", "Smaller"), "view.zoom-out", Change::Scale(false), false, loaded, l.text("Tekent de lijnen en pijlen kleiner.", "Draws the diagrams and arrows smaller."));
         }
+        // which field of a simulation file colours its mesh, at which time step
+        {
+            use crate::app::fields::FieldChange as F;
+            let fields = app.shown_fields();
+            let (channels, steps) = fields.as_ref().map_or((0, 0), |f| (f.channels.len(), f.steps.len()));
+            let ways = [
+                ("field.next", F::NextChannel(true), l.text("Volgend veld", "Next field"), "page.next", channels > 0, l.text("Kleurt het net naar het volgende veld van het bestand, zoals een temperatuur of een verplaatsing.", "Colours the mesh by the file's next field, such as a temperature or a displacement.")),
+                ("field.previous", F::NextChannel(false), l.text("Vorig veld", "Previous field"), "page.previous", channels > 0, l.text("Kleurt het net naar het vorige veld van het bestand.", "Colours the mesh by the file's previous field.")),
+                ("field.step-next", F::NextStep(true), l.text("Volgende stap", "Next step"), "page.next", steps > 1, l.text("Toont de waarden van de volgende tijdstap.", "Shows the values of the next time step.")),
+                ("field.step-previous", F::NextStep(false), l.text("Vorige stap", "Previous step"), "page.previous", steps > 1, l.text("Toont de waarden van de vorige tijdstap.", "Shows the values of the previous time step.")),
+            ];
+            for (id, change, label, icon, enabled, detail) in ways {
+                list.push(Command::new(id, label, go(Message::Field(change))).icon(small(icon), large(icon)).enabled(enabled).detail(detail));
+            }
+        }
         // how the points of a cloud are coloured
         {
             use crate::cloud_color::CloudColor as C;
@@ -2383,6 +2398,10 @@ impl Studio {
                 if crate::host::renders() {
                     groups[0].1.push(large("file.render-blender"));
                 }
+                // a simulation file: its fields and time steps beside the file
+                if self.app.shown_fields().is_some() {
+                    groups.push((l.text("Velden", "Fields"), vec![smalls(&["field.next", "field.previous"]), smalls(&["field.step-next", "field.step-previous"])]));
+                }
                 groups.extend(view_groups());
                 groups
             }
@@ -2430,6 +2449,7 @@ impl Studio {
                 (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
+                (l.text("Velden", "Fields"), vec![smalls(&["field.next", "field.previous"]), smalls(&["field.step-next", "field.step-previous"])]),
             ],
             // the four sources of library content
             RibbonPage::Library => vec![(l.text("Bibliotheek", "Library"), vec![large("library.general"), large("library.country"), large("library.company"), large("library.project")])],

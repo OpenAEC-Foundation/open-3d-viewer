@@ -1540,6 +1540,21 @@
     "Fetching...": "A obter...",
     "Not fetched.": "Não obtido.",
     "added to the project:": "adicionado ao projeto:",
-    "Add to the project": "Adicionar ao projeto"
+    "Add to the project": "Adicionar ao projeto",
+    "Own colour": "Cor própria",
+    "Colour by": "Colorir por",
+    "Time step": "Passo de tempo",
+    "at the points": "nos pontos",
+    "per cell": "por célula",
+    "Field": "Campo",
+    "Fields": "Campos",
+    "Next field": "Campo seguinte",
+    "Previous field": "Campo anterior",
+    "Next step": "Passo seguinte",
+    "Previous step": "Passo anterior",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Colore a malha segundo o campo seguinte do ficheiro, como uma temperatura ou um deslocamento.",
+    "Colours the mesh by the file's previous field.": "Colore a malha segundo o campo anterior do ficheiro.",
+    "Shows the values of the next time step.": "Mostra os valores do passo de tempo seguinte.",
+    "Shows the values of the previous time step.": "Mostra os valores do passo de tempo anterior."
   }
 }

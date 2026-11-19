@@ -7,6 +7,7 @@ mod caps;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod cloud;
 mod export_drawing;
+pub mod fields;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
 pub mod pointcloud;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -326,6 +327,8 @@ pub struct App {
     pub analysis_scale: Option<String>,
     /// How the points of a cloud are coloured.
     pub cloud_color: crate::cloud_color::CloudColor,
+    /// Which field of a simulation file colours its mesh, at which time step.
+    pub field: fields::FieldView,
     /// A cloud is being meshed.
     pub meshing: bool,
     /// What the Pointcloud product keeps: its settings, the mesh made last, the details read.
@@ -708,6 +711,8 @@ pub enum Message {
     ToggleAmbient,
     /// Colour the points of the clouds another way.
     CloudColor(crate::cloud_color::CloudColor),
+    /// Colour the mesh of a simulation file by another field, or show another time step.
+    Field(fields::FieldChange),
     /// Shade the points of a cloud by depth, or not.
     ToggleCloudDepth,
     /// What of a structural analysis model's loads and results is drawn.
@@ -1070,6 +1075,7 @@ impl Default for App {
             analysis: crate::structural::diagrams::Shown { scale: 1.0, ..Default::default() },
             analysis_scale: None,
             cloud_color: Default::default(),
+            field: Default::default(),
             meshing: false,
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             cloud: pointcloud::State::default(),
@@ -1699,6 +1705,8 @@ impl App {
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
+        // a simulation file opens coloured by its first field, at its first step
+        self.field = fields::FieldView::of(&model);
         // the product shown stays the one it was
         self.modeller = modeller::Modeller { in_modeller: self.modeller.in_modeller, ..modeller::Modeller::default() };
         self.set_scene(model.clone());
@@ -2539,6 +2547,7 @@ impl App {
             }
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::CloudColor(color) => self.cloud_color = color,
+            Message::Field(change) => self.change_field(change),
             Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
             Message::AnalysisScale(typed) => {
                 if let Some(change) = self.type_analysis_scale(typed) {
@@ -3941,6 +3950,9 @@ impl App {
         if let Some((visibility, results)) = self.analysis_properties(p, l) {
             content = content.push(section(l.text("Zichtbaarheid", "Visibility"))).push(visibility).push(rule::horizontal(1));
             content = content.push(section(l.text("Resultaten", "Results"))).push(results).push(rule::horizontal(1));
+        }
+        if let Some(field) = self.field_properties(p, l) {
+            content = content.push(section(l.text("Veld", "Field"))).push(field).push(rule::horizontal(1));
         }
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() && drawn.is_none() {
             if let Some(view) = self.view_properties(p, l) {

@@ -49,7 +49,7 @@ const MATERIALS: [(&str, &str); 16] = [
 /// The materials of the catalogue that the starter library lacks.
 fn own_materials() -> Vec<Material> {
     use HatchKind::*;
-    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material { key: key.into(), names: Names::new(nl, en, de, fr), hatch, colour };
+    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material::new(key, Names::new(nl, en, de, fr), hatch, colour);
     vec![
         m("precast-concrete", "prefab beton", "precast concrete", "Betonfertigteil", "béton préfabriqué", Concrete, [175, 175, 175]),
         m("unreinforced-concrete", "ongewapend beton", "unreinforced concrete", "unbewehrter Beton", "béton non armé", Concrete, [195, 195, 190]),

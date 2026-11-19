@@ -220,7 +220,7 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
                     .get("bsi::ifc::presentation::diffuseColor")
                     .and_then(|c| serde_json::from_value::<[f64; 3]>(c.clone()).ok())
                     .map_or([175, 182, 195], |c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
-                library.add_material(Material { key: code.into(), names: Names::same(name), hatch: HatchKind::Generic, colour })?;
+                library.add_material(Material::new(code, Names::same(name), HatchKind::Generic, colour))?;
             }
         }
         if let Some(own) = attributes.get(nlsfb::CLASSIFICATION).and_then(|own| own.get("system").and_then(Value::as_str).is_none_or(|system| system == "NL-SfB").then_some(own)) {

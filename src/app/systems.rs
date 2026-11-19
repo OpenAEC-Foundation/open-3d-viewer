@@ -887,7 +887,7 @@ mod tests {
         let mut app = App::default();
         // a library with a type and a material the project lacks
         let mut from = Library::default();
-        from.add_material(bim_library::Material { key: "reed".into(), names: bim_library::Names::same("riet"), hatch: bim_library::HatchKind::Generic, colour: [190, 170, 110] }).unwrap();
+        from.add_material(bim_library::Material::new("reed", bim_library::Names::same("riet"), bim_library::HatchKind::Generic, [190, 170, 110])).unwrap();
         from.add_material(app.library.material("timber").unwrap().clone()).unwrap();
         let thatch = SystemType { id: "system.thatch".into(), panels: Panels::new("reed", 0.3), ..Library::starter().system_type("system.cladding-timber-boards-140").unwrap().clone() };
         from.add_system_type(thatch.clone()).unwrap();

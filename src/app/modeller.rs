@@ -718,6 +718,8 @@ impl App {
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
+        // a material with a hatch of its own in the hatch catalogue is cut with it
+        built.project.cut_patterns = crate::hatching::library_patterns(&self.library);
         // and its drawing standard: the kinds of drawing and their settings, a node each
         built.project.types.extend(bim_library::drawing::nodes(&self.standard));
         // and the names given to its spaces
@@ -1064,6 +1066,10 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Primary", c.primary.0.to_string());
             put("Secondary", c.secondary.0.to_string());
         }
+    }
+    // what it is made of, when it is of one material: the cut of it takes that material's hatch
+    if let Some(key) = parts.first().and_then(|p| p.material.as_deref()).filter(|key| parts.iter().all(|p| p.material.as_deref() == Some(key))) {
+        put("Material", library.material(key).map_or(key, |m| m.name(bim_library::Lang::En)).to_string());
     }
     let volume: f64 = parts.iter().map(|p| p.solid.volume()).sum();
     if volume > 0.0 {

@@ -170,6 +170,24 @@ pub struct Grid {
     pub dashes: Vec<f64>,
 }
 
+/// A hatch of the hatch catalogue as a drawing draws it: its lines as rows over its colour, in
+/// the model at the scale the catalogue is drawn for. Its filled areas and dots are not drawn;
+/// a hatch of those alone is its colour.
+impl From<&bim_library::Hatch> for Pattern {
+    fn from(hatch: &bim_library::Hatch) -> Self {
+        let (rows, _) = hatch.rows();
+        let line = rows.first().map_or([0, 0, 0], |row| row.colour);
+        let grids = rows.into_iter().map(|row| Grid { angle: row.angle, origin: row.origin, shift: row.shift, offset: row.offset, dashes: row.dashes }).collect();
+        Pattern { fill: hatch.fill, line, solid: false, grids, on_paper: false }
+    }
+}
+
+/// The cut patterns of the materials of `library` that have a hatch of their own in the hatch
+/// catalogue, by the English name an element's `Material` property has.
+pub fn library_patterns(library: &bim_library::Library) -> std::collections::HashMap<String, Pattern> {
+    library.materials.iter().filter_map(|m| Some((m.name(bim_library::Lang::En).to_string(), Pattern::from(m.catalogue_hatch()?)))).collect()
+}
+
 impl From<HatchPattern> for Pattern {
     fn from(p: HatchPattern) -> Self {
         let grid = |degrees: f64, offset: f64| Grid { angle: degrees.to_radians(), offset, ..Grid::default() };

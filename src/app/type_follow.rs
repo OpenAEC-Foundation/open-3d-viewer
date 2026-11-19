@@ -346,6 +346,28 @@ mod tests {
     }
 
     #[test]
+    fn a_wall_of_one_material_is_cut_with_that_materials_own_hatch() {
+        let mut app = project();
+        let timber = app.library.buildups.iter().find(|b| b.layers.len() == 1 && b.layers[0].material == "timber" && b.role == bim_library::Role::Wall).expect("a timber wall").id.clone();
+        let a = app.add_element("Wall", None, wall(&app, 0.0, &timber)).unwrap();
+        let pattern = |app: &App| {
+            let shown = app.modeller.shown.and_then(|id| app.models.iter().find(|e| e.model.id == id)).expect("the model shows").model.clone();
+            let layer = shown.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == a.0)).expect("the wall's layer");
+            crate::hatching::pattern_of(&shown, layer, Some(a.0), bim_library::DrawingStandard::Nen47)
+        };
+        // timber starts with the softwood sign: lines at 45°, 1.5 mm of the tile apart at 0.75
+        let softwood = pattern(&app);
+        assert_eq!((softwood.grids.len(), softwood.fill), (1, Some([230, 190, 155])));
+        assert!((softwood.grids[0].offset - 1.5 * 0.75 * 0.05).abs() < 1e-12);
+        // given the hardwood sign it is crossed; without a hatch of its own, its hatch kind
+        let _ = app.update(Message::Material(MaterialMessage::Pick("timber".into())));
+        let _ = app.update(Message::Material(MaterialMessage::Sign(Some("openaec-13".into()))));
+        assert_eq!(pattern(&app).grids.len(), 2);
+        let _ = app.update(Message::Material(MaterialMessage::Sign(None)));
+        assert_eq!(pattern(&app), bim_library::HatchKind::Timber.pattern(bim_library::DrawingStandard::Nen47).into());
+    }
+
+    #[test]
     fn systems_follow_their_type() {
         let mut app = project();
         let line = |y: f64| SystemDef { start: DVec2::new(0.0, y), end: DVec2::new(6.0, y), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };

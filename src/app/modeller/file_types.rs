@@ -84,7 +84,7 @@ fn material_of(library: &mut Library, layer: &SourceLayer) -> Option<String> {
     if name.is_empty() {
         if library.material(UNKNOWN).is_none() {
             let names = bim_library::Names::new("onbekend", "unknown", "unbekannt", "inconnu");
-            library.add_material(Material { key: UNKNOWN.into(), names, hatch: HatchKind::Generic, colour: NO_COLOUR }).ok()?;
+            library.add_material(Material::new(UNKNOWN, names, HatchKind::Generic, NO_COLOUR)).ok()?;
         }
         return Some(UNKNOWN.into());
     }
@@ -94,7 +94,7 @@ fn material_of(library: &mut Library, layer: &SourceLayer) -> Option<String> {
     }
     let base = Some(slug(name)).filter(|s| !s.is_empty()).unwrap_or_else(|| "material".into());
     let key = free(&base, |k| library.material(k).is_some());
-    let material = Material { key: key.clone(), names: bim_library::Names::same(name), hatch: hatch_of(name), colour: layer.colour.unwrap_or(NO_COLOUR) };
+    let material = Material::new(&key, bim_library::Names::same(name), hatch_of(name), layer.colour.unwrap_or(NO_COLOUR));
     library.add_material(material).ok()?;
     Some(key)
 }

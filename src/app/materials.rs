@@ -17,7 +17,7 @@ use super::{App, Message, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::{DrawingStandard, HatchKind, Lang, Library, LibraryError, Material, Names};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, row, slider, text, text_input, Column, Space};
+use iced::widget::{button, column, container, pick_list, row, slider, text, text_input, Column, Space};
 use iced::{Center, Color, Element, Fill, Length, Task};
 use openaec_ui::design::a11y::{self, Role as Aria};
 use openaec_ui::Language;
@@ -39,6 +39,8 @@ pub enum MaterialMessage {
     /// A slider is let go: the model takes the colour.
     Shown,
     Hatch(HatchKind),
+    /// Its own hatch of the hatch catalogue, by its key; none: drawn by its hatch kind.
+    Sign(Option<String>),
     /// Edit a material of another library: a copy of it in the project, under its key.
     Copy(Shelf, String),
 }
@@ -117,7 +119,7 @@ fn fresh_key(library: &Library) -> String {
 /// A material more, grey and with the general hatch, to be named; its key.
 pub fn add(library: &mut Library) -> Result<String, LibraryError> {
     let key = fresh_key(library);
-    library.add_material(Material { key: key.clone(), names: Names::new("nieuw materiaal", "new material", "neues Material", "nouveau matériau"), hatch: HatchKind::Generic, colour: [175, 182, 195] })?;
+    library.add_material(Material::new(&key, Names::new("nieuw materiaal", "new material", "neues Material", "nouveau matériau"), HatchKind::Generic, [175, 182, 195]))?;
     Ok(key)
 }
 
@@ -167,6 +169,19 @@ pub fn remove(library: &mut Library, key: &str) -> Result<(), usize> {
 /// A field of the right pane: its label, and beside it what sets it.
 fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, MaterialMessage>) -> Element<'a, MaterialMessage> {
     row![text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)), container(control).width(Length::FillPortion(3))].spacing(8).align_y(Center).into()
+}
+
+/// A hatch of the catalogue to pick for a material, or none.
+#[derive(Debug, Clone, PartialEq)]
+struct SignChoice {
+    key: Option<String>,
+    label: String,
+}
+
+impl std::fmt::Display for SignChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
 }
 
 impl App {
@@ -227,6 +242,11 @@ impl App {
                 show = false;
             }
             MaterialMessage::Shown => changed = picked.is_some(),
+            MaterialMessage::Sign(sign) => {
+                if let Some(key) = &picked {
+                    changed = change(&mut self.library, key, |m| m.sign = sign.filter(|key| bim_library::hatch::hatch(key).is_some()));
+                }
+            }
             MaterialMessage::Hatch(hatch) => {
                 if let Some(key) = &picked {
                     changed = change(&mut self.library, key, |m| m.hatch = hatch);
@@ -312,6 +332,18 @@ impl App {
         .spacing(2)
         .wrap();
         fields = fields.push(caption(l.text("Arcering", "Hatch"))).push(hatches);
+        // its own hatch of the catalogue: the sign of its kind of material, in its colour
+        let own_hatch = l.text("Eigen arcering", "Hatch of its own");
+        let by_kind = SignChoice { key: None, label: l.text("volgens soort", "by its kind").to_string() };
+        let signs: Vec<SignChoice> = std::iter::once(by_kind)
+            .chain(bim_library::hatch::of(bim_library::HatchSet::OpenAec).map(|h| SignChoice { key: Some(h.key.clone()), label: format!("{} · {}", h.sign, h.name(lang)) }))
+            .collect();
+        let now = signs.iter().find(|c| c.key == m.sign).cloned();
+        let pick = pick_list(signs, now, |c: SignChoice| MaterialMessage::Sign(c.key)).text_size(12).padding([2, 6]).width(Fill);
+        fields = fields.push(labelled(p, own_hatch, a11y::named(pick, Aria::ComboBox, own_hatch)));
+        if let Some(hatch) = m.catalogue_hatch() {
+            fields = fields.push(super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE));
+        }
         // what is made of it
         let [buildups, linear, systems] = users(library, &m.key);
         let made: Vec<String> = [(l.text("Opbouwen", "Build-ups"), buildups), (l.text("Staaftypen", "Linear types"), linear), (l.text("Systemen", "Systems"), systems)]
@@ -342,6 +374,38 @@ impl App {
 mod tests {
     use super::super::libraries::{LibrariesMessage, Source};
     use super::*;
+
+    #[test]
+    fn a_material_takes_a_hatch_of_its_own_from_the_catalogue() {
+        let mut app = App::default();
+        let _ = app.material_update(MaterialMessage::Pick("timber".into()));
+        assert_eq!(app.library.material("timber").unwrap().sign.as_deref(), Some("openaec-12"), "timber starts with the softwood sign");
+        let _ = app.material_update(MaterialMessage::Sign(Some("openaec-12-oak".into())));
+        assert_eq!(app.library.material("timber").unwrap().catalogue_hatch().map(|h| h.name(Lang::En)), Some("oak"));
+        // what the catalogue lacks is not taken; none: drawn by its hatch kind again
+        let _ = app.material_update(MaterialMessage::Sign(Some("openaec-99".into())));
+        assert_eq!(app.library.material("timber").unwrap().sign, None);
+        let _ = app.material_update(MaterialMessage::Sign(Some("openaec-12-oak".into())));
+        let _ = app.material_update(MaterialMessage::Sign(None));
+        assert_eq!(app.library.material("timber").unwrap().sign, None);
+        // the pane offers the hatches of the catalogue
+        let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 1100.0), app.material_pane(app.theme.palette(), Language::English));
+        assert!(pane.find("Hatch of its own").is_ok());
+    }
+
+    #[test]
+    fn the_dutch_library_has_the_materials_of_ocondat() {
+        let mut app = App::default();
+        let _ = app.libraries_update(LibrariesMessage::Country(super::super::libraries::Country::Netherlands));
+        let dutch = app.shelf(Shelf::Netherlands).clone();
+        for key in ["spruce", "bluestone", "steel-s355", "concrete-c20-25", "stone-wool", "reed"] {
+            assert!(dutch.material(key).is_some(), "{key}");
+        }
+        assert!(dutch.materials.len() > 100);
+        // one of them is edited as a copy in the project, with its hatch
+        let _ = app.material_update(MaterialMessage::Copy(Shelf::Netherlands, "bluestone".into()));
+        assert_eq!(app.library.material("bluestone").and_then(|m| m.sign.as_deref()), Some("openaec-9-bluestone"));
+    }
 
     #[test]
     fn a_colour_is_typed_as_six_hexadecimal_digits() {
@@ -413,7 +477,7 @@ mod tests {
     fn a_material_of_another_library_is_edited_as_a_copy_under_its_key() {
         let mut app = App::default();
         // one the project has not got: it comes under the key it had
-        let other = Material { key: "rammed-earth".into(), names: Names::same("stampleem"), hatch: HatchKind::Generic, colour: [150, 110, 80] };
+        let other = Material::new("rammed-earth", Names::same("stampleem"), HatchKind::Generic, [150, 110, 80]);
         let mut from = Library::default();
         from.add_material(other.clone()).unwrap();
         assert_eq!(copy(&mut app.library, &from, "rammed-earth").as_deref(), Ok("rammed-earth"));

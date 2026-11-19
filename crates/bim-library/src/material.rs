@@ -154,11 +154,26 @@ pub struct Material {
     pub hatch: HatchKind,
     /// Its colour in the 3D view, red, green and blue.
     pub colour: [u8; 3],
+    /// The key of its own hatch in the hatch catalogue ("openaec-12-spruce"), where it has one:
+    /// the sign of its kind of material, in its colour. Without one it is drawn by its hatch
+    /// kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign: Option<String>,
 }
 
 impl Material {
     pub fn name(&self, lang: Lang) -> &str {
         self.names.get(lang)
+    }
+
+    /// A material drawn by its hatch kind.
+    pub fn new(key: &str, names: Names, hatch: HatchKind, colour: [u8; 3]) -> Self {
+        Self { key: key.into(), names, hatch, colour, sign: None }
+    }
+
+    /// Its own hatch of the hatch catalogue, when it names one the catalogue has.
+    pub fn catalogue_hatch(&self) -> Option<&'static crate::hatch::Hatch> {
+        self.sign.as_deref().and_then(crate::hatch::hatch)
     }
 
     /// Its colour as fractions of one, for IFCX and the renderer.
@@ -167,10 +182,29 @@ impl Material {
     }
 }
 
+/// The hatch of the catalogue a starter material is drawn with: the suite's sign for its kind
+/// of material. Concrete cast in situ and steel are solid fills, which the catalogue does not
+/// hold; they and the materials NEN 47 has no sign for are drawn by their hatch kind.
+fn starter_sign(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "hollow-core-concrete" => "openaec-6",
+        "brick" => "openaec-1",
+        "sand-lime" => "openaec-3",
+        "insulation" | "mineral-wool" => "openaec-17",
+        "insulation-pir" => "openaec-17-pir",
+        "timber" | "timber-cladding" => "openaec-12",
+        "osb" => "openaec-16-osb",
+        "plywood" => "openaec-16-plywood",
+        "glass" => "openaec-29",
+        "screed" => "openaec-10",
+        _ => return None,
+    })
+}
+
 /// The materials a library starts with: Open BIM Studio's.
 pub fn starter() -> Vec<Material> {
     use HatchKind::*;
-    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material { key: key.into(), names: Names::new(nl, en, de, fr), hatch, colour };
+    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material { sign: starter_sign(key).map(str::to_string), ..Material::new(key, Names::new(nl, en, de, fr), hatch, colour) };
     const CONCRETE: [u8; 3] = [185, 185, 185];
     const INSULATION: [u8; 3] = [240, 225, 150];
     const TIMBER: [u8; 3] = [205, 165, 115];

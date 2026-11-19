@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(lib.add_buildup(copy.clone()), Err(LibraryError::Duplicate(copy.id)));
         let concrete = lib.materials[0].clone();
         assert_eq!(lib.add_material(concrete), Err(LibraryError::Duplicate("concrete".into())));
-        let nameless = Material { key: "".into(), names: Names::same("x"), hatch: HatchKind::Generic, colour: [0, 0, 0] };
+        let nameless = Material::new("", Names::same("x"), HatchKind::Generic, [0, 0, 0]);
         assert_eq!(lib.add_material(nameless), Err(LibraryError::NoKey));
     }
 
@@ -367,7 +367,7 @@ mod tests {
         let before = project.clone();
         let mut other = Library::starter();
         // a material and a build-up the project lacks, and one it has under another id
-        other.materials.push(Material { key: "cork".into(), names: Names::new("kurk", "cork", "Kork", "liège"), hatch: HatchKind::Insulation, colour: [160, 120, 80] });
+        other.materials.push(Material::new("cork", Names::new("kurk", "cork", "Kork", "liège"), HatchKind::Insulation, [160, 120, 80]));
         other.materials[0].colour = [1, 2, 3];
         other.buildups.push(BuildUp::new("wall.cork-200", Role::Wall, vec![Layer::new("cork", 0.2)]));
         other.buildups.push(BuildUp::new("wall.concrete-250-copy", Role::Wall, vec![Layer::new("concrete", 0.250001)]));

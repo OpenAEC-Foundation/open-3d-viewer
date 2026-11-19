@@ -426,7 +426,10 @@ fn small<'a>(s: String, p: Palette) -> Element<'a, Message> {
 
 /// A material's hatch (NEN 47) on a square, and its key.
 pub(super) fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
-    column![material_hatch(p, m), small(m.key.clone(), p)].spacing(4).into()
+    match m.catalogue_hatch() {
+        Some(hatch) => column![super::libraries::tile_hatch_look(hatch, p, 60.0, super::libraries::HATCH_LOOK_SCALE), small(format!("{} · {}", m.key, hatch.key), p)].spacing(4).into(),
+        None => column![material_hatch(p, m), small(m.key.clone(), p)].spacing(4).into(),
+    }
 }
 
 /// A material's hatch (NEN 47) on a band, as a section through it shows it.
@@ -538,6 +541,10 @@ pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &Syst
 pub(super) fn material_look<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
     let c = rgb(m.colour);
     let colour = container(text("")).width(Fill).height(10).style(move |_| Palette::swatch(c));
+    // its own hatch of the catalogue, where it has one
+    if let Some(hatch) = m.catalogue_hatch() {
+        return column![super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE), colour].spacing(4).into();
+    }
     column![canvas_widget(Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text }).width(Fill).height(56), colour].spacing(4).into()
 }
 

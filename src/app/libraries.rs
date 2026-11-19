@@ -364,11 +364,23 @@ fn general() -> &'static Library {
     GENERAL.get_or_init(Library::starter)
 }
 
-/// The Dutch types of the INB template.
+/// The Dutch library: the types of the INB template, and with its materials those of Project
+/// Ocondat.
 fn inb() -> &'static Library {
     static INB: OnceLock<Library> = OnceLock::new();
-    INB.get_or_init(bim_library::inb::library)
+    INB.get_or_init(|| {
+        let mut library = bim_library::inb::library();
+        for material in bim_library::ocondat::materials() {
+            if library.material(&material.key).is_none() {
+                let _ = library.add_material(material.clone());
+            }
+        }
+        library
+    })
 }
+
+/// How large the tile of a catalogue hatch shows on a look.
+pub(super) const HATCH_LOOK_SCALE: f32 = HatchLook::SCALE;
 
 /// How wide a tile of the page is, and how high the look at its thing.
 pub(super) const TILE: f32 = 184.0;

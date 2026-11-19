@@ -143,7 +143,7 @@ threemf-read = { git = "https://github.com/OpenAEC-Foundation/3mf-dll", rev = "d
 # 3D Gaussian splat scenes: splat PLY, SPZ and glTF with KHR_gaussian_splatting (LGPL-3.0-or-later, public)
 splat-read = { git = "https://github.com/OpenAEC-Foundation/splat-dll", rev = "34dbe7c7fc0f842dd729cc3421075a56085f9123" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
-vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
+vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "f99bada6cd4b2e2e6076a8f9f3937a5a8b370e0b" }
 # SolidWorks parts and assemblies (.sldprt, .sldasm) through the private solidworks-dll library; pure Rust on bytes
 sldw-read = { git = "https://github.com/OpenAEC-Foundation/solidworks-dll", rev = "a001b0141fcf54f63de1107e2d75e7fdc9e177f1" }
 # Solid Edge (.par, .psm, .asm) through the private solidedge-dll library; pure Rust on bytes, so also in the browser

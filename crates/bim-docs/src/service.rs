@@ -16,6 +16,10 @@ pub enum Service {
     OneDrive,
     /// Synology Drive.
     Synology,
+    /// A Git checkout that comes from GitHub.
+    GitHub,
+    /// A Git checkout from elsewhere, or one that was never cloned.
+    Git,
     /// A folder on a network drive.
     Network,
     /// A folder on this computer that nothing is known to sync.
@@ -31,6 +35,8 @@ impl Service {
             Service::SharePoint => Some("SharePoint"),
             Service::OneDrive => Some("OneDrive"),
             Service::Synology => Some("Synology Drive"),
+            Service::GitHub => Some("GitHub"),
+            Service::Git => Some("Git"),
             Service::Network | Service::Local => None,
         }
     }
@@ -38,6 +44,11 @@ impl Service {
     /// Whether the folder reaches other people's machines.
     pub fn shared(self) -> bool {
         self != Service::Local
+    }
+
+    /// Whether Git keeps the versions of the folder's files.
+    pub fn git(self) -> bool {
+        matches!(self, Service::GitHub | Service::Git)
     }
 }
 
@@ -48,7 +59,8 @@ pub struct Sync {
     /// The folder the tool syncs, which the project folder is or is in (the project folder itself
     /// for a network or local folder).
     pub root: PathBuf,
-    /// The web address of the SharePoint library or OneDrive, where Windows gives it.
+    /// The web address of the SharePoint library or OneDrive, where Windows gives it; of the
+    /// repository a Git checkout comes from.
     pub site: Option<String>,
 }
 
@@ -77,6 +89,10 @@ pub fn of(folder: &Path, known: &Known) -> Sync {
         }
         if root.join(".SynologyWorkingDirectory").exists() {
             return Sync { service: Service::Synology, root: root.to_path_buf(), site: None };
+        }
+        if let Some(checkout) = crate::git::at(root) {
+            let service = if checkout.github() { Service::GitHub } else { Service::Git };
+            return Sync { service, root: checkout.root, site: checkout.web };
         }
         if let Some(mount) = known.mounts.iter().find(|m| same(&m.folder, root)) {
             let service = if mount.team { Service::SharePoint } else { Service::OneDrive };
@@ -214,6 +230,22 @@ mod tests {
         assert_eq!(of(&other.join("OneDrive - Firm 2/x"), &known).service, Service::Local);
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[test]
+    fn a_folder_in_a_git_checkout_is_known_by_its_git_folder_and_where_it_comes_from() {
+        let root = folder("git", &["kade-12/.git/hooks", "kade-12/model/structure", "own/.git/hooks", "own/model"]);
+        std::fs::write(root.join("kade-12/.git/config"), "[remote \"origin\"]
+	url = git@github.com:firm/kade-12.git
+").unwrap();
+        let sync = of(&root.join("kade-12/model/structure"), &Known::default());
+        assert_eq!((sync.service, sync.root.as_path(), sync.site.as_deref()), (Service::GitHub, root.join("kade-12").as_path(), Some("https://github.com/firm/kade-12")));
+        assert!(sync.service.git() && sync.service.shared());
+        // a checkout that comes from nowhere, or from another server, is Git
+        let own = of(&root.join("own/model"), &Known::default());
+        assert_eq!((own.service, own.site), (Service::Git, None));
+        assert!(!Service::Dropbox.git());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

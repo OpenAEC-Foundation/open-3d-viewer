@@ -80,6 +80,8 @@ impl TransformKind {
 pub struct Transform {
     pub kind: TransformKind,
     pub elements: Vec<ElementId>,
+    /// The picked grid line it takes instead (a move or a copy with no element selected).
+    pub grid: Option<usize>,
     pub points: Vec<DVec3>,
 }
 
@@ -223,7 +225,9 @@ impl App {
             .into_iter()
             .filter(|id| self.modeller.model.get(*id).is_some_and(|e| !matches!(e.shape_in_project(&grid), Shape::Connection(_))))
             .collect();
-        if elements.is_empty() {
+        // no element selected: a move or a copy takes the picked grid line
+        let grid = if elements.is_empty() && matches!(kind, TransformKind::Move | TransformKind::Copy) { self.picked_modelled_grid() } else { None };
+        if elements.is_empty() && grid.is_none() {
             return;
         }
         if self.modeller.tool.is_some() {
@@ -231,7 +235,7 @@ impl App {
         }
         self.modeller.edit = None;
         self.modeller.refusal = None;
-        self.modeller.transform = Some(Transform { kind, elements, points: Vec::new() });
+        self.modeller.transform = Some(Transform { kind, elements, grid, points: Vec::new() });
         // a fresh 3D cursor is the base point of a move or a copy
         self.transform_from_cursor3d();
     }
@@ -260,6 +264,7 @@ impl App {
         }
         let Some(done) = self.modeller.transform.take() else { return };
         match Map::of(done.kind, &done.points) {
+            Some(Map::Shift(by)) if done.grid.is_some() => self.shift_grid(done.grid, by.truncate(), done.kind.copies()),
             Some(map) => {
                 self.transform_elements(&done.elements, &map, done.kind.copies());
             }

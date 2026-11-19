@@ -52,6 +52,7 @@ pub use gis::Message as GisMessage;
 pub use map::{Message as MapMessage, Source as MapSource};
 pub use terrain::Message as TerrainMessage;
 mod origin;
+pub mod project_file;
 mod origin_map;
 pub mod modeller;
 mod paper;
@@ -157,6 +158,8 @@ pub struct App {
     /// The files still to add after the one loading, when several are added at once: each is
     /// read, and the scene is built once, after the last.
     add_queue: Vec<loaders::Source>,
+    /// The project whose files are loading: its set-up is put back when the last is in.
+    project_opening: Option<project_file::Opening>,
     /// Models read from the queue that the scene does not show yet.
     scene_stale: bool,
     /// What laying the added models on the first by their grids did, for the status bar.
@@ -486,6 +489,9 @@ pub enum Message {
     /// File > Export IFC 4x3: ask where, then save the model as a `.ifc` in that schema.
     SaveIfcDialog(export::IfcSchema),
     SavePicked(Option<PathBuf>),
+    /// Save the set-up of the session as a project file: asks where.
+    SaveProjectDialog,
+    SaveProjectPicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
     /// Lets Blender in the environment render the file opened from Docs (the web app); and its
@@ -912,6 +918,7 @@ impl Default for App {
             models: Vec::new(),
             adding_model: false,
             add_queue: Vec::new(),
+            project_opening: None,
             scene_stale: false,
             aligned: Vec::new(),
             layer_stack: (Vec::new(), None),
@@ -1782,6 +1789,14 @@ impl App {
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
         }
+        // a project file: the files it names, each put back where the project had it
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (loaders::Source::File(path), false) = (&source, add) {
+            if let Some(project) = project_file::Project::peek(path) {
+                let path = path.clone();
+                return self.open_project(&path, project);
+            }
+        }
         // a scan project file or a folder of scans: the scans it lists or holds, one after another
         // (a folder that is a model of its own, such as a Tekla model folder, opens as that model)
         #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1952,6 +1967,7 @@ impl App {
                     let next = self.add_queue.remove(0);
                     return Task::batch([drawings, self.open(next, true)]);
                 }
+                self.settle_project();
                 self.remote_loaded();
                 // the register of the project folder, so the elements say which documents are about them
                 let register = self.docs_register();
@@ -1968,6 +1984,8 @@ impl App {
                 if std::mem::take(&mut self.scene_stale) {
                     self.rebuild_scene();
                 }
+                // the last file of a project did not read: the others are set up as it had them
+                self.settle_project();
                 self.adding_model = false;
                 self.loading_stack = (Vec::new(), false);
                 self.status = Status::Error(e);
@@ -2028,6 +2046,13 @@ impl App {
             Message::SavePicked(None) => self.save_schema = export::IfcSchema::Ifc4,
             // the dialog asked before replacing a file
             Message::SavePicked(Some(path)) => return self.start_save(path, true),
+            Message::SaveProjectDialog => {
+                if !self.models.is_empty() || self.model.is_some() {
+                    return project_file::save_dialog_task(self);
+                }
+            }
+            Message::SaveProjectPicked(None) => {}
+            Message::SaveProjectPicked(Some(path)) => self.save_project(path),
             Message::Saved(result) => {
                 self.remote_saved(&result);
                 self.status = match result {

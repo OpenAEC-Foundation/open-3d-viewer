@@ -490,7 +490,12 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let viewport = studio.viewport_in(w, h);
     let app = &mut studio.app;
     app.viewport_size = viewport;
-    if let Some(file) = &args.file {
+    // a project file: its files, each put back where the project had it
+    let project = args.file.as_ref().and_then(|file| Some((file, crate::app::project_file::Project::peek(file)?)));
+    if let Some((file, project)) = project {
+        app.initial_view = args.view;
+        app.open_project_now(file, project)?;
+    } else if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(
             "loaded {}: {} layers, {} triangles, {} points in {:.2} s",

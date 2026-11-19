@@ -7,6 +7,7 @@ mod caps;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod cloud;
 mod export_drawing;
+pub mod fields;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
 pub mod pointcloud;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -29,7 +30,10 @@ mod layers;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
 mod docs;
+mod drawing_kinds;
+mod solid_view;
 mod drafts;
+pub mod drawn_edit;
 pub mod drawn_props;
 mod edit;
 mod element_props;
@@ -41,7 +45,20 @@ mod join_marks;
 mod later;
 mod precut;
 mod levels;
+pub mod buildups;
+pub mod codes;
+pub mod drawing_sets;
+pub mod view_templates;
+pub mod house;
+pub mod objects;
+pub mod online;
+pub mod libraries;
 pub mod library;
+pub mod materials;
+pub mod profiles;
+pub mod standards;
+pub mod systems;
+pub mod type_follow;
 mod marks;
 mod gis;
 mod geo;
@@ -52,6 +69,7 @@ pub use gis::Message as GisMessage;
 pub use map::{Message as MapMessage, Source as MapSource};
 pub use terrain::Message as TerrainMessage;
 mod origin;
+pub mod project_file;
 mod origin_map;
 pub mod modeller;
 mod paper;
@@ -69,6 +87,7 @@ mod underlays;
 mod views_in_3d;
 
 pub use docs::{DocsMessage, DocsTab};
+pub use libraries::LibrariesMessage;
 pub use ifc::{IfcTab, IfcView};
 pub use marks::DrawKind;
 #[cfg(test)]
@@ -157,6 +176,8 @@ pub struct App {
     /// The files still to add after the one loading, when several are added at once: each is
     /// read, and the scene is built once, after the last.
     add_queue: Vec<loaders::Source>,
+    /// The project whose files are loading: its set-up is put back when the last is in.
+    project_opening: Option<project_file::Opening>,
     /// Models read from the queue that the scene does not show yet.
     scene_stale: bool,
     /// What laying the added models on the first by their grids did, for the status bar.
@@ -307,6 +328,8 @@ pub struct App {
     pub analysis_scale: Option<String>,
     /// How the points of a cloud are coloured.
     pub cloud_color: crate::cloud_color::CloudColor,
+    /// Which field of a simulation file colours its mesh, at which time step.
+    pub field: fields::FieldView,
     /// A cloud is being meshed.
     pub meshing: bool,
     /// What the Pointcloud product keeps: its settings, the mesh made last, the details read.
@@ -368,6 +391,35 @@ pub struct App {
     pub ifc: IfcTab,
     /// Docs: the documents of the project folder.
     pub docs: DocsTab,
+    /// Library, the product: the source and the country its page shows.
+    pub libraries: libraries::LibrariesView,
+    /// The project's drawing standard: its kinds of drawing and their settings. The Dutch one
+    /// until it is changed or a project's file brings its own.
+    pub standard: bim_library::drawing::Standard,
+    /// What is picked of the standard on the Library page.
+    pub standard_view: standards::StandardView,
+    /// The build-up edited on the Library page, and the role whose build-ups show.
+    pub buildup_view: buildups::BuildUpView,
+    /// The material edited on the Library page, and what is being typed of it.
+    pub material_view: materials::MaterialView,
+    pub code_view: codes::CodeView,
+    pub object_view: objects::ObjectView,
+    /// The online libraries: the place, its index once fetched, and what was added from it.
+    pub online: online::OnlineView,
+    pub drawing_set_view: drawing_sets::DrawingSetView,
+    pub view_template_view: view_templates::ViewTemplateView,
+    /// The house style the project follows: how its sheets and documents look.
+    pub house: bim_library::house::HouseStyle,
+    pub house_view: house::HouseView,
+    /// The linear type edited on the Library page, the role whose types show and what of the
+    /// steel table shows.
+    pub profile_view: profiles::ProfileView,
+    /// The system type edited on the Library page, the group whose types show and the part of it
+    /// whose fields show.
+    pub system_view: systems::SystemView,
+    /// The elements the kernel refused to make as their type is now, when a type was last
+    /// changed on the Library page, each with why (see `type_follow`).
+    pub follow_refused: Vec<(bim_core::ElementId, bim_core::Refusal)>,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -415,6 +467,11 @@ pub struct App {
     /// elements', false: the view's), and the same for the steps taken back.
     undo_trail: Vec<bool>,
     redo_trail: Vec<bool>,
+    /// The field of a Library editor the message being handled types into, if it does; and the
+    /// one the last step of the history was typed into: typing on in it is the same step (see
+    /// `undo`).
+    step_typing: Option<undo::Typing>,
+    last_typing: Option<undo::Typing>,
     /// The selection box while it is dragged: from, to (viewport pixels).
     pub box_select: Option<(Vec2, Vec2)>,
     /// The right-click menu, open at this viewport point (logical pixels).
@@ -486,6 +543,18 @@ pub enum Message {
     /// File > Export IFC 4x3: ask where, then save the model as a `.ifc` in that schema.
     SaveIfcDialog(export::IfcSchema),
     SavePicked(Option<PathBuf>),
+    /// Save the set-up of the session as a project file: asks where.
+    SaveProjectDialog,
+    SaveProjectPicked(Option<PathBuf>),
+    /// The film of how the model is built: asking where to write it, where that is, and what
+    /// came of it (what was written, or why not).
+    BuildFilmDialog,
+    BuildFilmPicked(Option<PathBuf>),
+    BuildFilmDone(Result<(PathBuf, String), String>),
+    /// A still of the model as the view shows it, rendered by Blender: asking where to write it
+    /// and where that is (its outcome comes as that of the film does).
+    RenderDialog,
+    RenderPicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
     /// Lets Blender in the environment render the file opened from Docs (the web app); and its
@@ -517,6 +586,13 @@ pub enum Message {
     ViewField(ViewField, String),
     /// Enter in a field of the View section: it shows the value in use again.
     ViewFieldDone,
+    /// The kind of drawing picked for the view the right pane shows: a key of the drawing
+    /// standard.
+    ViewKind(String),
+    /// The scale picked for that view in its own tab (1 : this).
+    ViewScale(u32),
+    /// Open the fields of that view's kind of drawing under its own, or close them.
+    ViewKindEdit(bool),
     Navigate(Navigate),
     Cube(CubeEvent),
     /// Show a view saved in the file.
@@ -530,6 +606,24 @@ pub enum Message {
     Library(library::LibraryMessage),
     /// Docs: the documents of the project folder.
     Docs(docs::DocsMessage),
+    /// Library, the product: the source or the country to show.
+    Libraries(libraries::LibrariesMessage),
+    /// The drawing standard on the Library page: picking and setting its kinds and settings.
+    Standard(standards::StandardMessage),
+    /// The build-ups of the project on the Library page: picking and editing one.
+    BuildUp(buildups::BuildUpMessage),
+    /// The materials of the project on the Library page: picking and editing one.
+    Material(materials::MaterialMessage),
+    Code(codes::CodeMessage),
+    Object(objects::ObjectMessage),
+    Online(online::OnlineMessage),
+    DrawingSet(drawing_sets::DrawingSetMessage),
+    ViewTemplate(view_templates::ViewTemplateMessage),
+    House(house::HouseMessage),
+    /// The linear types of the project on the Library page: picking one and editing its profile.
+    Profile(profiles::ProfileMessage),
+    /// The system types of the project on the Library page: picking one and editing its parts.
+    SystemType(systems::SystemMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -600,10 +694,20 @@ pub enum Message {
     DrawTool(Option<marks::DrawKind>),
     /// Lines drawn on a view (its own points).
     AddLines(Arc<str>, Vec<[[f64; 2]; 2]>),
+    /// What a drawing tool drew on a view: its lines, one shape together.
+    AddShape(Arc<str>, marks::DrawKind, Vec<[[f64; 2]; 2]>),
     /// Pick a dimension or text on the view shown in its tab (`None`: nothing).
     PickMark(Option<marks::MarkPick>),
     /// Remove what is picked on the view shown in its tab.
     RemoveMark,
+    /// The shape picked on the floor plan shown becomes loose lines.
+    ExplodeDrawn,
+    /// Offset on or off, and the distance typed for it.
+    OffsetTool,
+    OffsetText(String),
+    /// Trim, Extend, Fillet or Chamfer on or off, and the size typed for it.
+    PairEdit(drawn_edit::PairKind),
+    PairSize(String),
     /// Put the picked dimension on the other side of what it measures.
     FlipDimension,
     /// The picked dimension looks otherwise: another style, or its style changed.
@@ -627,6 +731,8 @@ pub enum Message {
     ToggleAmbient,
     /// Colour the points of the clouds another way.
     CloudColor(crate::cloud_color::CloudColor),
+    /// Colour the mesh of a simulation file by another field, or show another time step.
+    Field(fields::FieldChange),
     /// Shade the points of a cloud by depth, or not.
     ToggleCloudDepth,
     /// What of a structural analysis model's loads and results is drawn.
@@ -912,6 +1018,7 @@ impl Default for App {
             models: Vec::new(),
             adding_model: false,
             add_queue: Vec::new(),
+            project_opening: None,
             scene_stale: false,
             aligned: Vec::new(),
             layer_stack: (Vec::new(), None),
@@ -988,6 +1095,7 @@ impl Default for App {
             analysis: crate::structural::diagrams::Shown { scale: 1.0, ..Default::default() },
             analysis_scale: None,
             cloud_color: Default::default(),
+            field: Default::default(),
             meshing: false,
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             cloud: pointcloud::State::default(),
@@ -1021,6 +1129,21 @@ impl Default for App {
             schedule_scroll: (0.0, 0.0),
             ifc: IfcTab::default(),
             docs: DocsTab::default(),
+            libraries: libraries::LibrariesView::default(),
+            standard: bim_library::drawing::Standard::netherlands(),
+            standard_view: standards::StandardView::default(),
+            buildup_view: buildups::BuildUpView::default(),
+            material_view: materials::MaterialView::default(),
+            code_view: codes::CodeView::default(),
+            object_view: objects::ObjectView::default(),
+            online: online::OnlineView::default(),
+            drawing_set_view: drawing_sets::DrawingSetView::default(),
+            view_template_view: view_templates::ViewTemplateView::default(),
+            house: bim_library::house::HouseStyle::starter(),
+            house_view: house::HouseView::default(),
+            profile_view: profiles::ProfileView::default(),
+            system_view: systems::SystemView::default(),
+            follow_refused: Vec::new(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -1043,6 +1166,8 @@ impl Default for App {
             history: History::new(),
             undo_trail: Vec::new(),
             redo_trail: Vec::new(),
+            step_typing: None,
+            last_typing: None,
             box_select: None,
             context_menu: None,
             explode_bounds: None,
@@ -1177,6 +1302,79 @@ fn pick_folder_task() -> Task<Message> {
 fn save_name(model: &Model) -> String {
     let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
     format!("{stem}.{}", export::registry()[0].extensions()[0])
+}
+
+/// Asks where to write the film of how the model is built: a video, or its USD stage alone.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_film_dialog_task(model: &Model) -> Task<Message> {
+    let name = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Build film").set_file_name(format!("{name}.mp4")).add_filter("Video (MP4)", &["mp4"]).add_filter("USD", &["usda"]);
+    if let Some(dir) = crate::managed::dialog_folder(model.path.parent().map(PathBuf::from), crate::managed::work_folder()) {
+        dialog = dialog.set_directory(dir);
+    }
+    Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::BuildFilmPicked)
+}
+
+/// Asks where to write the still.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_dialog_task(model: &Model) -> Task<Message> {
+    let name = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Render").set_file_name(format!("{name}.png")).add_filter("PNG", &["png"]);
+    if let Some(dir) = crate::managed::dialog_folder(model.path.parent().map(PathBuf::from), crate::managed::work_folder()) {
+        dialog = dialog.set_directory(dir);
+    }
+    Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::RenderPicked)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_dialog_task(_model: &Model) -> Task<Message> {
+    Task::done(Message::BuildFilmDone(Err("Rendering needs the desktop app".into())))
+}
+
+/// Renders the still on a worker thread.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_task(model: Arc<Model>, path: PathBuf, shot: crate::build_film::Shot) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::build_film::still(&model, &path, Some(shot)).map(|said| (path, said)));
+            });
+            rx.await.unwrap_or_else(|_| Err("render thread stopped".to_string()))
+        },
+        Message::BuildFilmDone,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn render_task(_model: Arc<Model>, _path: PathBuf, _shot: crate::build_film::Shot) -> Task<Message> {
+    Task::none()
+}
+
+/// A browser cannot start the program that renders the film.
+#[cfg(target_arch = "wasm32")]
+fn build_film_dialog_task(_model: &Model) -> Task<Message> {
+    Task::done(Message::BuildFilmDone(Err("The build film needs the desktop app".into())))
+}
+
+/// Writes the film on a worker thread: rendering takes minutes.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_film_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::build_film::render(&model, &path, crate::build_film::SECONDS).map(|said| (path, said)));
+            });
+            rx.await.unwrap_or_else(|_| Err("film thread stopped".to_string()))
+        },
+        Message::BuildFilmDone,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_film_task(_model: Arc<Model>, _path: PathBuf) -> Task<Message> {
+    Task::none()
 }
 
 /// Asks where to save the model, one filter per writer.
@@ -1600,6 +1798,8 @@ impl App {
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
+        // a simulation file opens coloured by its first field, at its first step
+        self.field = fields::FieldView::of(&model);
         // the product shown stays the one it was
         self.modeller = modeller::Modeller { in_modeller: self.modeller.in_modeller, ..modeller::Modeller::default() };
         self.set_scene(model.clone());
@@ -1782,6 +1982,14 @@ impl App {
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
         }
+        // a project file: the files it names, each put back where the project had it
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (loaders::Source::File(path), false) = (&source, add) {
+            if let Some(project) = project_file::Project::peek(path) {
+                let path = path.clone();
+                return self.open_project(&path, project);
+            }
+        }
         // a scan project file or a folder of scans: the scans it lists or holds, one after another
         // (a folder that is a model of its own, such as a Tekla model folder, opens as that model)
         #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1831,6 +2039,9 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let before = changes_visibility(&message).then(|| self.view_state());
         let shown = before.is_some() || matches!(message, Message::Undo | Message::Redo);
+        // typing in one field of a Library editor is one step to take back
+        self.step_typing = self.typing_of(&message);
+        self.look_at_setup();
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);
@@ -1952,6 +2163,7 @@ impl App {
                     let next = self.add_queue.remove(0);
                     return Task::batch([drawings, self.open(next, true)]);
                 }
+                self.settle_project();
                 self.remote_loaded();
                 // the register of the project folder, so the elements say which documents are about them
                 let register = self.docs_register();
@@ -1968,6 +2180,8 @@ impl App {
                 if std::mem::take(&mut self.scene_stale) {
                     self.rebuild_scene();
                 }
+                // the last file of a project did not read: the others are set up as it had them
+                self.settle_project();
                 self.adding_model = false;
                 self.loading_stack = (Vec::new(), false);
                 self.status = Status::Error(e);
@@ -2026,10 +2240,63 @@ impl App {
                 return ifc_dialog_task(model, schema);
             }
             Message::SavePicked(None) => self.save_schema = export::IfcSchema::Ifc4,
+            Message::BuildFilmDialog => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                return build_film_dialog_task(model);
+            }
+            Message::BuildFilmPicked(None) | Message::RenderPicked(None) => {}
+            Message::RenderDialog => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                return render_dialog_task(model);
+            }
+            Message::RenderPicked(Some(mut path)) => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if path.extension().is_none() {
+                    path.set_extension("png");
+                }
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Saving { file, since: Instant::now() };
+                // from where the view looks now
+                let shot = crate::build_film::Shot { eye: self.camera.eye().to_array(), target: self.camera.target.to_array(), fov: self.camera.fov_y.to_degrees() };
+                return render_task(model, path, shot);
+            }
+            Message::BuildFilmPicked(Some(mut path)) => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if path.extension().is_none() {
+                    path.set_extension("mp4");
+                }
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Saving { file, since: Instant::now() };
+                return build_film_task(model, path);
+            }
+            Message::BuildFilmDone(result) => {
+                self.status = match result {
+                    Ok((path, said)) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        Status::Loaded(format!("{file}: {said}"))
+                    }
+                    Err(e) => Status::Error(e),
+                };
+            }
             // the dialog asked before replacing a file
             Message::SavePicked(Some(path)) => return self.start_save(path, true),
+            Message::SaveProjectDialog => {
+                if !self.models.is_empty() || self.model.is_some() {
+                    return project_file::save_dialog_task(self);
+                }
+            }
+            Message::SaveProjectPicked(None) => {}
+            Message::SaveProjectPicked(Some(path)) => self.save_project(path),
             Message::Saved(result) => {
                 self.remote_saved(&result);
+                // a file saved into the project folder shows in Docs
+                let docs = result.as_ref().map_or_else(|_| Task::none(), |(path, _)| self.docs_saved(path));
                 self.status = match result {
                     Ok((path, secs)) => {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -2037,6 +2304,7 @@ impl App {
                     }
                     Err(e) => Status::Error(e),
                 };
+                return docs;
             }
             Message::BlenderRender => {
                 #[cfg(target_arch = "wasm32")]
@@ -2171,6 +2439,9 @@ impl App {
             Message::LayersQuery(q) => self.layers_query = q,
             Message::ViewField(field, typed) => self.type_view_field(field, typed),
             Message::ViewFieldDone => self.view_typing = None,
+            Message::ViewKind(key) => self.set_view_kind(&key),
+            Message::ViewScale(scale) => self.set_view_scale(scale),
+            Message::ViewKindEdit(open) => self.edit_view_kind(open),
             Message::Navigate(n) => {
                 if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
                     self.context_menu = None;
@@ -2273,6 +2544,18 @@ impl App {
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
             Message::Docs(message) => return self.docs_update(message),
+            Message::Libraries(message) => return self.libraries_update(message),
+            Message::Standard(message) => return self.standard_update(message),
+            Message::BuildUp(message) => return self.buildup_update(message),
+            Message::Material(message) => return self.material_update(message),
+            Message::Code(message) => return self.code_update(message),
+            Message::Object(message) => self.object_update(message),
+            Message::Online(message) => return self.online_update(message),
+            Message::DrawingSet(message) => self.drawing_set_update(message),
+            Message::ViewTemplate(message) => self.view_template_update(message),
+            Message::House(message) => return self.house_update(message),
+            Message::Profile(message) => return self.profile_update(message),
+            Message::SystemType(message) => return self.system_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -2375,6 +2658,12 @@ impl App {
             Message::AddLines(view, lines) => {
                 self.document.add_view_lines(&view, &lines);
             }
+            Message::AddShape(view, kind, lines) => {
+                match kind.shape() {
+                    Some(shape) => self.document.add_view_shape(&view, shape, &lines),
+                    None => self.document.add_view_lines(&view, &lines),
+                };
+            }
             Message::AddNote(view, at, wording) => {
                 self.document.add_note(&view, at, &wording);
             }
@@ -2383,6 +2672,21 @@ impl App {
             }
             Message::PickMark(pick) => self.pick_mark(pick),
             Message::RemoveMark => self.remove_mark(),
+            Message::ExplodeDrawn => {
+                self.explode_drawn();
+            }
+            Message::OffsetTool => self.toggle_offset(),
+            Message::PairEdit(kind) => self.toggle_pair_edit(kind),
+            Message::PairSize(typed) => {
+                if let Some(e) = self.modeller.pair_edit.as_mut() {
+                    e.size = typed;
+                }
+            }
+            Message::OffsetText(typed) => {
+                if let Some(text) = self.modeller.offset.as_mut() {
+                    *text = typed;
+                }
+            }
             Message::FlipDimension => self.flip_dimension(),
             Message::DimensionLook(edit) => self.edit_dimension_look(edit),
             Message::StandardDimensions(view) => {
@@ -2404,6 +2708,7 @@ impl App {
             }
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::CloudColor(color) => self.cloud_color = color,
+            Message::Field(change) => self.change_field(change),
             Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
             Message::AnalysisScale(typed) => {
                 if let Some(change) = self.type_analysis_scale(typed) {
@@ -2452,6 +2757,8 @@ impl App {
                     Err(e) => Status::Error(e),
                 };
             }
+            // in Docs Backspace goes to the folder above, as in a file manager
+            Message::DeletePicked if self.docs.shown => return self.docs_update(DocsMessage::Up),
             Message::DeletePicked => {
                 if self.tool_backspace() {
                     // a length typed for what a tool draws: its last character goes
@@ -2708,6 +3015,8 @@ impl App {
             }
             // Enter while a distance is typed in a move puts the move down
             Message::MeasureFinish if self.tool_enter() => {}
+            // in Docs Enter opens the picked file
+            Message::MeasureFinish if self.docs.shown => return self.docs_update(DocsMessage::Enter),
             Message::MeasureFinish if self.put_grab_down() => {}
             Message::MeasureFinish if self.edit_enter() => {}
             // Enter while Rotate waits for its centre: about the 3D cursor
@@ -2787,6 +3096,10 @@ impl App {
             Message::Escape if self.modeller.transform.is_some() => {
                 self.escape_transform();
             }
+            Message::Escape if self.modeller.offset.is_some() => self.modeller.offset = None,
+            Message::Escape if self.modeller.pair_edit.is_some() => {
+                self.escape_pair_edit();
+            }
             // Esc drops a length being typed first; the tool goes on drawing
             Message::Escape if !self.modeller.length_typed.is_empty() => self.modeller.length_typed.clear(),
             Message::Escape if self.modeller.grid_tool => self.escape_grid_tool(),
@@ -2838,6 +3151,9 @@ impl App {
                     Key::Named(Named::Enter) => Some(Message::MeasureFinish),
                     // what is picked on a sheet or a view; not while a text field takes the key
                     Key::Named(Named::Delete | Named::Backspace) => Some(Message::DeletePicked),
+                    // through the list of files of Docs, as in a file manager
+                    Key::Named(Named::ArrowUp) => Some(Message::Docs(DocsMessage::Step(-1))),
+                    Key::Named(Named::ArrowDown) => Some(Message::Docs(DocsMessage::Step(1))),
                     _ => None,
                 }
             }
@@ -2944,6 +3260,12 @@ impl App {
         }
         if self.modeller.transform.is_some() {
             return self.transform_click(x, y, width, height);
+        }
+        if self.modeller.offset.is_some() {
+            return self.offset_click(x, y, width, height);
+        }
+        if self.modeller.pair_edit.is_some() {
+            return self.pair_click(x, y, width, height);
         }
         if self.modeller.grid_tool {
             return self.grid_click(x, y, width, height);
@@ -3312,9 +3634,13 @@ impl App {
     /// The ray through viewport point (x, y) (model space) and the nearest visible triangle it
     /// hits: (layer, triangle, how far the exploded view moved it (model space)).
     fn cast(&mut self, model: &Model, x: f32, y: f32, width: f32, height: f32) -> (Vec3, Vec3, Option<(usize, usize, Vec3)>) {
-        let mm = self.model_matrix();
-        let inv = (self.camera.view_proj(width / height) * mm).inverse();
         let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        self.cast_from_view(model, self.camera.view_proj(width / height), nx, ny)
+    }
+
+    fn cast_from_view(&mut self, model: &Model, view_proj: glam::Mat4, nx: f32, ny: f32) -> (Vec3, Vec3, Option<(usize, usize, Vec3)>) {
+        let mm = self.model_matrix();
+        let inv = (view_proj * mm).inverse();
         let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
         let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
         let shown = self.shown();
@@ -3802,6 +4128,9 @@ impl App {
         if let Some((visibility, results)) = self.analysis_properties(p, l) {
             content = content.push(section(l.text("Zichtbaarheid", "Visibility"))).push(visibility).push(rule::horizontal(1));
             content = content.push(section(l.text("Resultaten", "Results"))).push(results).push(rule::horizontal(1));
+        }
+        if let Some(field) = self.field_properties(p, l) {
+            content = content.push(section(l.text("Veld", "Field"))).push(field).push(rule::horizontal(1));
         }
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() && drawn.is_none() {
             if let Some(view) = self.view_properties(p, l) {
@@ -4298,6 +4627,8 @@ impl App {
                 Some(refusal) => format!("{}: {} · {}", t.kind.label(l), l.translate(refusal.reason()), hint),
                 None => format!("{}: {}", t.kind.label(l), hint),
             })
+        } else if let Some(hint) = self.offset_hint(l).or_else(|| self.pair_hint(l)) {
+            Some(hint)
         } else if let Some(hint) = self.grid_hint(l) {
             Some(hint)
         } else if let Some((tool, _)) = self.modeller.tool {
@@ -5067,10 +5398,16 @@ impl Palette {
 /// window and `--screenshot`.
 #[cfg(test)]
 pub(crate) fn test_ui(app: &App, size: iced::Size) -> iced_test::Simulator<'_, Message> {
+    test_ui_of(size, app.view())
+}
+
+/// A part of the interface at `size` in a test, drawn on the CPU as [`test_ui`] is.
+#[cfg(test)]
+pub(crate) fn test_ui_of<'a>(size: iced::Size, part: Element<'a, Message>) -> iced_test::Simulator<'a, Message> {
     static CPU: std::sync::Once = std::sync::Once::new();
     // iced_test reads the variable for each simulator; all of them are made here
     CPU.call_once(|| std::env::set_var("ICED_TEST_BACKEND", "tiny-skia"));
-    iced_test::Simulator::with_size(iced::Settings::default(), size, app.view())
+    iced_test::Simulator::with_size(iced::Settings::default(), size, part)
 }
 
 #[cfg(test)]

@@ -131,7 +131,9 @@ impl App {
     /// Opens the IFC tab, or shows it: the file is read again, so it follows the model and its
     /// document.
     pub(super) fn open_ifc(&mut self) -> Task<Message> {
-        let s = match self.ifcx_source().and_then(|(name, bytes, links)| Ok((Structure::read(&name, &bytes)?, links))) {
+        // an IFC file in STEP form is taken apart as it is; anything else as its IFCX
+        let read = |name: &str, bytes: &[u8]| if bytes.trim_ascii_start().starts_with(b"ISO-10303-21") { Structure::read_step(name, bytes) } else { Structure::read(name, bytes) };
+        let s = match self.ifcx_source().and_then(|(name, bytes, links)| Ok((read(&name, &bytes)?, links))) {
             Ok(s) => s,
             Err(e) => {
                 self.status = super::Status::Error(e);
@@ -198,6 +200,15 @@ impl App {
                         Some((v.get("Id")?.as_str()?.to_string(), Pickable::Element(id)))
                     })
                     .collect();
+                return Ok((model.file_name(), bytes, links));
+            }
+        }
+        // an IFC file (IFC2x3, IFC4, IFC4x3) shows as itself: its elements are numbered as its
+        // records are
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.models.len() <= 1 && model.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ifc")) {
+            if let Ok(bytes) = std::fs::read(&model.path) {
+                let links = model.props.keys().map(|&id| (format!("#{id}"), Pickable::Element(id))).collect();
                 return Ok((model.file_name(), bytes, links));
             }
         }

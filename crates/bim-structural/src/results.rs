@@ -88,6 +88,42 @@ pub struct NodeTable {
     pub comps: [Vec<f64>; 6],
 }
 
+/// The mesh the surfaces were computed on, with what was computed at its nodes.
+///
+/// A node of the mesh is not a node of the model: it has a place, a displacement and a value of
+/// every field. An element is a triangle or a quadrilateral of mesh nodes, of one surface member.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SurfaceTable {
+    /// Where the mesh nodes are (world metres) and how far they moved (metres).
+    pub points: Vec<glam::DVec3>,
+    pub displacements: Vec<glam::DVec3>,
+    /// The mesh nodes of every element, in order around it; a triangle repeats its third.
+    pub elements: Vec<[u32; 4]>,
+    /// Per element: the surface member it is of, and its thickness (metres).
+    pub surface: Vec<Id>,
+    pub thickness: Vec<f64>,
+    /// What else was computed at the nodes: a bending moment, a stress, a pressure.
+    pub fields: Vec<SurfaceField>,
+}
+
+/// One quantity over the mesh: a value per mesh node, in SI units.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SurfaceField {
+    /// As the source names it: `mx`, `my`, `mxy`, `sigma_vm`...
+    pub name: String,
+    /// The SI unit of the values: `N·m/m`, `Pa`, `m`.
+    pub unit: String,
+    pub values: Vec<f64>,
+}
+
+impl SurfaceTable {
+    /// The corners of element `k`: three for a triangle, else four.
+    pub fn corners(&self, k: usize) -> &[u32] {
+        let e = &self.elements[k];
+        if e[3] == e[2] { &e[..3] } else { &e[..] }
+    }
+}
+
 /// Member force envelope, only as the source gives it.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct EnvelopeTable {
@@ -108,6 +144,8 @@ pub struct ResultPayload {
     pub node_displacements: Option<NodeTable>,
     pub reactions: Option<NodeTable>,
     pub envelope: Option<EnvelopeTable>,
+    /// The surfaces' mesh and its results. Not a block: it travels as plain JSON.
+    pub surface_mesh: Option<SurfaceTable>,
 }
 
 impl ResultPayload {

@@ -1,7 +1,9 @@
 //! A 2D drawing as a CAD drawing in the shared OpenCAD drawing model (`opencaddocument`, MPL-2.0),
 //! which writes it as DWG and DXF through its acadrust codec and as IFCCAD, the open 2D drawing
 //! profile on IFCX, through ifccad. Millimetres: a view 1:1, a sheet at paper size. One layer per
-//! pen, with the pen's line weight.
+//! pen, with the pen's line weight; lines of another width (what is cut and what is seen beyond it,
+//! as a view's kind of drawing draws them) go on a layer of their own, named after the pen and the
+//! width.
 
 use crate::drawing2d::{Align, Drawing2d, Pen, Space};
 use opencaddocument::entities::{Dimension, DimensionAligned, Line, Text, TextHorizontalAlignment};
@@ -20,15 +22,32 @@ fn mm(q: [f64; 2]) -> Vector3 {
     Vector3::new(q[0] * MM, q[1] * MM, 0.0)
 }
 
+/// The layer of the lines of `pen` that are `width` millimetres wide: the pen's own for its own
+/// width, else one named after the pen and the width in hundredths of a millimetre ("O3V-Cut-070").
+fn layer_of(pen: Pen, width: f64) -> String {
+    if (width - pen.weight_mm()).abs() < 1e-9 {
+        pen.name().to_string()
+    } else {
+        format!("{}-{:03}", pen.name(), (width * 100.0).round() as i64)
+    }
+}
+
 /// The drawing in the shared CAD model.
 pub fn cad_document(d: &Drawing2d) -> Document {
     let mut doc = Document::new();
     doc.header.insertion_units = MILLIMETRES;
     for pen in Pen::ALL {
-        let mut layer = Layer::new(pen.name());
-        layer.handle = doc.allocate_handle();
-        layer.line_weight = LineWeight::Value((pen.weight_mm() * 100.0).round() as i16);
-        let _ = doc.layers.add(layer);
+        let mut widths = d.widths(pen);
+        if !widths.iter().any(|width| (*width - pen.weight_mm()).abs() < 1e-9) {
+            widths.push(pen.weight_mm());
+        }
+        for width in widths {
+            let name = layer_of(pen, width);
+            let mut layer = Layer::new(name.as_str());
+            layer.handle = doc.allocate_handle();
+            layer.line_weight = LineWeight::Value((width * 100.0).round() as i16);
+            let _ = doc.layers.add(layer);
+        }
     }
     // 2.5 mm text and ticks on paper, in the drawing's millimetres
     let unit = MM / d.paper_per_unit();
@@ -48,7 +67,7 @@ pub fn cad_document(d: &Drawing2d) -> Document {
 
     for l in &d.lines {
         let mut line = Line::from_points(mm(l.a), mm(l.b));
-        line.common.layer = l.pen.name().into();
+        line.common.layer = layer_of(l.pen, l.width);
         let _ = doc.add_entity(EntityType::Line(line));
     }
     for t in &d.texts {
@@ -121,9 +140,9 @@ mod tests {
             space: Space::Model { scale: 100.0 },
             paper: None,
             lines: vec![
-                Line2d { pen: Pen::Cut, a: [0.0, 0.0], b: [8.0, 0.0] },
-                Line2d { pen: Pen::Cut, a: [8.0, 0.0], b: [8.0, 5.0] },
-                Line2d { pen: Pen::Beyond, a: [1.0, 1.0], b: [7.0, 1.0] },
+                Line2d::new(Pen::Cut, [0.0, 0.0], [8.0, 0.0]),
+                Line2d::new(Pen::Cut, [8.0, 0.0], [8.0, 5.0]),
+                Line2d::new(Pen::Beyond, [1.0, 1.0], [7.0, 1.0]),
             ],
             texts: vec![Text2d { pen: Pen::Text, at: [1.0, 2.0], height: 0.25, text: "Kamer ë".into(), align: Align::Left }],
             dimensions: vec![Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25 }],

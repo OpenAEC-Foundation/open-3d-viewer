@@ -7,6 +7,9 @@
 //! [`add`] before the app starts.
 
 mod gltf;
+mod placed;
+mod svx;
+mod tiles;
 mod obj;
 mod stl;
 #[cfg(not(target_arch = "wasm32"))]
@@ -41,6 +44,7 @@ pub(crate) mod cad;
 mod allplan;
 mod dgn;
 mod archicad;
+mod inventor;
 #[cfg(not(target_arch = "wasm32"))]
 mod vertex;
 mod threemf;
@@ -57,6 +61,7 @@ mod e57;
 mod xyz;
 mod ptx;
 mod pcd;
+mod splat;
 mod ascgrid;
 mod shapefile;
 mod vrml;
@@ -67,10 +72,14 @@ mod e2k;
 mod ifcfem;
 mod ifcfem_project;
 mod sam;
+mod fem;
 mod rhino;
 mod blend;
 mod fcstd;
 mod dicom;
+mod xodr;
+mod urdf;
+mod vox;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -232,6 +241,11 @@ pub trait Loader: Send + Sync {
     fn source_y_up(&self) -> bool {
         false
     }
+    /// True when this loader opens a file by its whole lower-case name, whatever loader its
+    /// extension names (`tileset.json` of 3D Tiles before the CityJSON `.json`).
+    fn claims(&self, _name: &str) -> bool {
+        false
+    }
     /// Lower-case extensions of folders this loader opens as a whole (e.g. an Allplan `.prj`
     /// project folder dropped on the window); not part of the file dialog filter.
     fn folder_extensions(&self) -> &'static [&'static str] {
@@ -284,13 +298,12 @@ pub fn add(loaders: Vec<&'static dyn Loader>) {
 /// All available loaders.
 pub fn registry() -> Vec<&'static dyn Loader> {
     let builtin: Vec<&'static dyn Loader> = vec![
-        &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
+        &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &tiles::TilesLoader, &svx::SvxLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
         &cityjson::CityJsonLoader, &landxml::LandXmlLoader, &threemf::ThreeMfLoader, &collada::ColladaLoader,
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
-        &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
+        &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader, &splat::SpzLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader,
-        &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &fem::INP, &fem::BDF, &fem::MSH, &fem::S2K, &fem::SAF, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader, &xodr::XodrLoader, &urdf::UrdfLoader, &vox::VoxLoader, &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader, &inventor::InventorLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
         #[cfg(not(target_arch = "wasm32"))]
@@ -391,6 +404,10 @@ fn loader_for(source: &Source) -> Result<&'static dyn Loader, String> {
     let dir = source.path().filter(|p| p.is_dir());
     let folder = dir.is_some();
     let loaders = registry();
+    let name = source.name().to_lowercase();
+    if let Some(l) = loaders.iter().copied().find(|l| dir.is_none() && l.claims(&name)) {
+        return Ok(l);
+    }
     loaders
         .iter()
         .copied()
@@ -516,7 +533,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP"), ("3dm", "Rhino"), ("vwx", "Vectorworks"), ("sta", "Vectorworks"), ("sldprt", "SolidWorks"), ("sldasm", "SolidWorks"), ("par", "Solid Edge"), ("psm", "Solid Edge"), ("asm", "Solid Edge")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("ipt", "Inventor"), ("iam", "Inventor"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP"), ("3dm", "Rhino"), ("vwx", "Vectorworks"), ("sta", "Vectorworks"), ("sldprt", "SolidWorks"), ("sldasm", "SolidWorks"), ("par", "Solid Edge"), ("psm", "Solid Edge"), ("asm", "Solid Edge")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }
@@ -591,6 +608,67 @@ mod tests {
         // the library alone says what it is
         let error = load(&repo_file("test-models/dicom-obj/material.dcm")).unwrap_err();
         assert!(error.contains("material library"), "{error}");
+    }
+
+    #[test]
+    fn loads_3mf_through_its_reader() {
+        let model = load(&repo_file("test-models/test-sphere.3mf")).expect("3MF sphere");
+        assert_eq!(model.format, "3MF");
+        assert!(model.triangle_count() > 1000, "{}", model.triangle_count());
+        // a 10 mm radius sphere, in metres
+        assert!(model.bounds.size().iter().all(|&s| (s - 0.02).abs() < 0.001), "{:?}", model.bounds.size());
+        assert!(model.props.values().any(|p| p.contains("\"Object id\"")));
+    }
+
+    #[test]
+    fn loads_an_opendrive_network_at_its_place() {
+        let model = load(&repo_file("test-models/opendrive-street.xodr")).expect("OpenDRIVE file");
+        assert_eq!(model.format, "OpenDRIVE");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["biking", "border", "driving", "parking", "shoulder", "sidewalk", "reference lines"]);
+        // the lanes are pickable, with their road and lane
+        assert!(model.props.values().any(|p| p.contains("\"Road name\":\"Hoofdstraat\"") && p.contains("\"Lane\":\"-3\"")));
+        // the reference lines are lines, the lanes triangles
+        let lines = model.layers.last().unwrap();
+        assert!(lines.indices.is_empty() && !lines.lines.is_empty());
+        // placed by the header offset in the Dutch grid, which the file properties name
+        assert!(model.project.info.iter().any(|(k, v)| k == "Coordinate reference system" && v.contains("+proj=sterea")));
+        assert!(model.project.info.iter().any(|(k, v)| k == "OpenDRIVE world origin" && v == "155000, 463000, 0"));
+    }
+
+    #[test]
+    fn loads_a_urdf_robot_with_its_mesh_file() {
+        let model = load(&repo_file("test-models/urdf-arm/arm_description/urdf/arm.urdf")).expect("URDF file");
+        assert_eq!(model.format, "URDF");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["base_link", "shoulder_link", "upper_arm_link", "upper_arm_link", "forearm_link", "tool_link"]);
+        // the gripper (an STL in millimetres) is read from the package, scaled and placed at the
+        // wrist, 0.9 m up and 0.5 m out, its fingers pointing on along X in the robot's orange
+        let gripper = model.layers.last().unwrap();
+        assert_eq!(gripper.color, [0.95, 0.45, 0.1]);
+        let xs = gripper.positions.chunks_exact(3).map(|p| p[0]);
+        let (lo, hi) = xs.fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        assert!((lo - 0.49).abs() < 1e-4 && (hi - 0.56).abs() < 1e-4, "{lo} {hi}");
+        assert!(gripper.positions.chunks_exact(3).all(|p| (p[2] - 0.9).abs() < 0.013));
+        assert!(model.props.values().any(|p| p.contains("\"Joints\":\"base_turn › shoulder › elbow › wrist\"")));
+        // in the browser there is no package to find the mesh in: the rest still opens
+        let data = std::fs::read(repo_file("test-models/urdf-arm/arm_description/urdf/arm.urdf")).unwrap();
+        let source = Source::Bytes { name: "arm.urdf".into(), data: Arc::new(data) };
+        let bytes = load_with(&source, &Progress::default()).expect("URDF bytes");
+        assert_eq!(bytes.layers.len(), 5);
+        assert!(bytes.project.info.iter().any(|(k, v)| k == "Mesh files not read" && v.contains("gripper.stl")));
+    }
+
+    #[test]
+    fn loads_a_magicavoxel_scene() {
+        let model = load(&repo_file("test-models/voxel-house.vox")).expect("MagicaVoxel file");
+        assert_eq!(model.format, "MagicaVoxel");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Huis", "Boom links", "Boom rechts"]);
+        assert!(model.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
+        // the two trees are one model placed twice
+        assert_eq!(model.layers[1].triangle_count(), model.layers[2].triangle_count());
+        assert!(model.props.values().any(|p| p.contains("\"Model\":\"1\"")));
     }
 
     #[test]

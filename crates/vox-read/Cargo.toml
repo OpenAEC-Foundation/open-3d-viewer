@@ -1,0 +1,14 @@
+[package]
+name = "vox-read"
+version = "0.1.0"
+description = "Reads MagicaVoxel .vox files into coloured triangle meshes: the voxels of each model merged into faces, placed by the scene's transforms"
+authors = ["Open BIM Suite Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
+publish = false
+
+[dependencies]
+# The .vox chunks: models, palette, scene graph and layers (MIT)
+dot_vox = { version = "5.2", default-features = false }

@@ -22,6 +22,11 @@ impl Loader for PlyLoader {
         progress.set(Phase::Read);
         let data = source.read()?;
         progress.set(Phase::Convert);
+        // a splat scene (3D Gaussian splatting) goes to the splat reader
+        if splat_read::ply::is_splat(&data) {
+            let splats = splat_read::ply::read(&data).map_err(|e| format!("{}: {e}", source.name()))?;
+            return Ok(super::splat::loaded(splats, &source.stem()));
+        }
         let header = header(&data)?;
         if !header.elements.iter().any(|e| e.name == "face" && e.count > 0) {
             let (layers, info) = points(&data, &header, &source.stem(), MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;

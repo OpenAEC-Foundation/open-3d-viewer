@@ -1,6 +1,6 @@
 # Docs: the documents of a project, in a folder the team already shares
 
-**Status:** design of 2026-11-17; the first slice is built with it.
+**Status:** design of 2026-11-17; the first slice is built with it, the second and third of 2026-11-18 too.
 
 ## Intent
 
@@ -27,7 +27,8 @@ point at elements of a model.
 ## Non-goals (for now)
 
 - Storing copies of old revisions. The sync tools keep a history of their own; Docs records which
-  revision was which (date, size, by whom, a note).
+  revision was which (date, size, by whom, a note). (Changed in the third slice: recording a
+  revision keeps a copy, see below.)
 - Rights and approvals per person. Who can reach the folder takes part.
 - The browser build. A synced folder is on the desktop only.
 - Web links to a file at the sync service.
@@ -114,6 +115,87 @@ from the file's size and time against the revision's. Nothing is written for it.
 - `src/app/docs.rs`: the page, its right-pane sections, the folder dialog, opening files. Desktop
   only.
 - The folder chosen is kept in the settings folder (`docs-folder.txt`), per person.
+
+## Second slice (2026-11-18): files as in a file manager, saving, Git
+
+Docs should feel like working with files: go into a folder, open a model or a point cloud straight
+in the suite, save it back, and see its versions. And a project can be shared through GitHub as
+well as through a sync tool.
+
+### As a file manager
+
+- The folders of the folder that shows stand above its files, with a way up (`..`). A click goes in.
+- A second click on a file soon after the first opens it: what the suite reads (a model, a point
+  cloud) in the suite, anything else in the program the computer opens it with.
+
+### Saving
+
+- "Save model in project folder" (the ribbon, and the project folder's section of the right pane).
+- A model that was opened from the project folder, in a format the suite writes (IFCX, IFC), is
+  saved where it is. Any other model is saved as a new IFCX file in the folder that shows, and
+  never over a file that is there.
+- After the save Docs reads the folder again and picks the file, ready to record a revision.
+- This is a person's act, so the rule that Docs never writes on its own holds.
+
+### Git and GitHub
+
+- A project folder that is (in) a Git checkout is known by its `.git`; where it comes from is
+  read from the checkout's own config (`origin`), without any name, password or token in the
+  address. From `github.com` it is called GitHub, otherwise Git.
+- For the picked file Docs asks the `git` program for the versions it keeps (who, when, the first
+  line of why) and how the file stands against the last one: the same, changed, or not in Git yet.
+  Only for the picked file, on a thread of its own.
+- "Open" on a version writes that version to a file of its own in the temporary folder
+  (`<name> @ <hash>.<extension>`) and opens it: beside the open model, so the two can be compared.
+- Docs never commits, fetches, pulls or pushes. Sharing the work stays with the person's own Git
+  tool, as it stays with the sync tool for the other services.
+
+### Not in this slice
+
+- Committing and pushing from Docs; signing in to GitHub; a repository that is not cloned yet.
+- The version history that Dropbox, SharePoint and Synology Drive keep at their own side.
+- New folder, rename, move and delete: Docs still changes no project file but the one it saves.
+
+## Third slice (2026-11-18): an explorer, and a document management system
+
+Docs should feel like a file manager and work like a document management system, on a folder
+that is local, on a network drive, or kept by GitHub, SharePoint, Teams or Dropbox. The suite's own
+cloud service is not part of it: everything works from the folder.
+
+### As an explorer
+
+- A path above the list, a name per folder to click (the line of text above the list becomes the
+  path; it holds no buttons for tools).
+- An icon per kind of file and for folders; a column with the kind.
+- A click on a column heading sorts by it; again turns the order round.
+- A search through the whole project folder, by file name and document title, at the top of the
+  folders pane. The files found show the folder they are in.
+- The keys of a file manager: up and down step through the files, Enter opens the picked one,
+  Backspace goes to the folder above (or ends the search).
+
+### As a document management system
+
+- **Versions.** Recording a revision keeps a copy of the file in
+  `_openaec/versions/<document id>/<code> <name>`, beside the register, so whoever shares the folder
+  has it. A revision with a copy opens beside the present file, or is put back in its place. In a
+  Git checkout no copy is kept: Git keeps the versions, and a version of Git is put back the same
+  way.
+- **Putting back** asks a second press. The file as it was is first kept aside in the temporary
+  folder, and the right pane says where. This is the one way Docs writes over a project file, and
+  only when a person asks.
+- **Check-out.** A person checks a document out while working on it; the list and the right pane
+  say by whom and since when. It is a mark for the others, not a lock: the folder stays writable.
+- **Sharing.** Through the service that keeps the folder: the file's page on GitHub (and its
+  history there), SharePoint or Teams, or Dropbox, where sharing with others and the service's own
+  version history live; its link on the clipboard; its path on the clipboard; a new mail with the
+  link or the path. A local folder says that its path only works on this computer.
+- A file up to 16 MB is copied at once; a larger one on a thread of its own.
+
+### Not in this slice
+
+- Asking a service anything (signing in, shared links with rights, comments); Docs only opens the
+  service's page.
+- A right-click menu on the list: the picked file's actions stay in the right pane.
 
 ## Left to the builder
 

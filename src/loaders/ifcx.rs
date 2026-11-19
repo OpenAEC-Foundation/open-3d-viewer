@@ -91,9 +91,10 @@ fn modelled(definition: &Value) -> bool {
 /// An IFCX file as `ifcx-core` reads it: its header, imports and nodes (`data`).
 type File = ifcx_core::IfcxDocument;
 
-/// What a header gives, where it gives it (`ifcx-core` reads what a file leaves out as empty).
-fn given(text: &str) -> Option<String> {
-    let text = text.trim();
+/// Display metadata only where a source supplies non-empty text. The shared core keeps
+/// absent headers/fields distinct from explicit empty strings when saving a document.
+fn given(text: Option<&str>) -> Option<String> {
+    let text = text?.trim();
     (!text.is_empty()).then(|| text.to_string())
 }
 
@@ -642,16 +643,16 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         }
     }
     layers.extend(scene.clouds.into_values());
-    let header = files.last().map(|r| &r.file.header);
+    let header = files.last().and_then(|r| r.file.header.as_ref());
     let mut info = vec![
-        ("IFCX version".to_string(), header.and_then(|h| given(&h.ifcx_version)).unwrap_or_default()),
+        ("IFCX version".to_string(), header.and_then(|h| given(h.ifcx_version.as_deref())).unwrap_or_default()),
         ("IFCX files".to_string(), files.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", ")),
         ("IFCX elements".to_string(), scene.elements.to_string()),
     ];
-    if let Some(id) = files.first().and_then(|r| given(&r.file.header.id)) {
+    if let Some(id) = files.first().and_then(|r| r.file.header.as_ref()).and_then(|h| given(h.id.as_deref())) {
         info.push(("IFCX id".into(), id));
     }
-    if let Some(author) = header.and_then(|h| given(&h.author)) {
+    if let Some(author) = header.and_then(|h| given(h.author.as_deref())) {
         info.push(("IFCX author".into(), author));
     }
     let remote: usize = files.iter().flat_map(|r| &r.file.imports).filter(|i| i.uri.contains("://")).count();
@@ -687,6 +688,14 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
             if library != bim_library::Library::default() {
                 definitions.insert(0, serde_json::json!({ crate::export::ifcx::LIBRARY: library }));
             }
+        }
+        // and its drawing standard, as the nodes it is kept in
+        if let Some(standards) = bim_library::drawing::held(&nodes) {
+            definitions.push(serde_json::json!({ crate::export::ifcx::STANDARDS: standards }));
+        }
+        // and the house style it follows
+        if let Some(style) = bim_library::house::read(&serde_json::json!({ "data": nodes })).ok().and_then(|styles| styles.into_iter().next()) {
+            definitions.push(serde_json::json!({ crate::export::ifcx::HOUSE: style }));
         }
     }
     // and the names given to its spaces
@@ -747,6 +756,36 @@ mod tests {
 
     fn bytes(name: &str, text: &str) -> Source {
         Source::Bytes { name: name.into(), data: Arc::new(text.as_bytes().to_vec()) }
+    }
+
+    #[test]
+    fn source_header_presence_survives_a_shared_core_save() {
+        for header in [None, Some(serde_json::json!({})), Some(serde_json::json!({"author": ""})),
+            Some(serde_json::json!({"ifcxVersion": "ifcx_alpha", "foreignHeader": {"revision": 7}})),
+            Some(serde_json::json!({"id": "urn:test", "author": "Ada", "ifcxVersion": "ifcx_alpha", "dataVersion": "1", "timestamp": ""}))] {
+            let mut input: Value = serde_json::from_str(BASE).unwrap();
+            match header {
+                Some(header) => { input["header"] = header; }
+                None => { input.as_object_mut().unwrap().remove("header"); }
+            }
+            let parsed = parse(&bytes("source.ifcx", &input.to_string())).unwrap();
+            let opened = crate::loaders::load_with(&bytes("source.ifcx", &input.to_string()), &Progress::default()).unwrap();
+            for (key, field) in [("IFCX id", "id"), ("IFCX author", "author")] {
+                let expected = input["header"][field].as_str().map(str::trim).filter(|s| !s.is_empty());
+                assert_eq!(opened.project.info.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()), expected);
+            }
+            let version = input["header"]["ifcxVersion"].as_str().unwrap_or("");
+            assert_eq!(opened.project.info.iter().find(|(k, _)| k == "IFCX version").map(|(_, v)| v.as_str()), Some(version));
+            let saved = ifcx_core::parser::to_string(&parsed).unwrap();
+            let output: Value = serde_json::from_str(&saved).unwrap();
+            assert_eq!(output.get("header"), input.get("header"));
+            assert_eq!(output["data"], input["data"]);
+            let reopened = parse(&bytes("saved.ifcx", &saved)).unwrap();
+            let saved_again: Value = serde_json::from_str(&ifcx_core::parser::to_string(&reopened).unwrap()).unwrap();
+            assert_eq!(saved_again, output);
+            let back = crate::loaders::load_with(&bytes("saved.ifcx", &saved), &Progress::default()).unwrap();
+            assert_eq!(back.triangle_count(), opened.triangle_count());
+        }
     }
 
     fn layer<'a>(model: &'a crate::model::Model, name: &str) -> &'a Layer {

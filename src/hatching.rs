@@ -23,7 +23,7 @@ pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64
 pub fn hatch_with(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64, looks: Option<&std::collections::HashMap<u64, Look>>) {
     let mut patterns = Vec::with_capacity(cut.fills.len());
     for fill in &mut cut.fills {
-        let pattern = pattern_of(model, fill.layer, fill.element, standard);
+        let pattern = fill_pattern(model, fill, standard);
         let pattern = match fill.element.and_then(|e| looks?.get(&e)) {
             Some(look) => look.apply(pattern),
             None => pattern,
@@ -170,6 +170,49 @@ pub struct Grid {
     pub dashes: Vec<f64>,
 }
 
+/// What a part of an element is made of (a layer of a modelled wall): its material's name, its
+/// hatch kind, and its own hatch where it has one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartMaterial {
+    pub name: String,
+    pub kind: HatchKind,
+    pub pattern: Option<Pattern>,
+}
+
+/// The materials of `library` as the parts of a model name them: in the library's order, each
+/// with its hatch kind and its own hatch of the hatch catalogue where it has one.
+pub fn part_materials(library: &bim_library::Library) -> Vec<PartMaterial> {
+    library.materials.iter().map(|m| PartMaterial { name: m.name(bim_library::Lang::En).to_string(), kind: m.hatch, pattern: m.catalogue_hatch().map(Pattern::from) }).collect()
+}
+
+/// The hatch of a cut face: of its part's material where the face is of a part of an element
+/// (the material's own hatch, else the hatch `standard` gives its kind), else [`pattern_of`] its
+/// element.
+pub fn fill_pattern(model: &Model, fill: &Fill, standard: DrawingStandard) -> Pattern {
+    match fill.part.and_then(|part| model.project.part_materials.get(part as usize)) {
+        Some(material) => material.pattern.clone().unwrap_or_else(|| material.kind.pattern(standard).into()),
+        None => pattern_of(model, fill.layer, fill.element, standard),
+    }
+}
+
+/// A hatch of the hatch catalogue as a drawing draws it: its lines as rows over its colour, in
+/// the model at the scale the catalogue is drawn for. Its filled areas and dots are not drawn;
+/// a hatch of those alone is its colour.
+impl From<&bim_library::Hatch> for Pattern {
+    fn from(hatch: &bim_library::Hatch) -> Self {
+        let (rows, _) = hatch.rows();
+        let line = rows.first().map_or([0, 0, 0], |row| row.colour);
+        let grids = rows.into_iter().map(|row| Grid { angle: row.angle, origin: row.origin, shift: row.shift, offset: row.offset, dashes: row.dashes }).collect();
+        Pattern { fill: hatch.fill, line, solid: false, grids, on_paper: false }
+    }
+}
+
+/// The cut patterns of the materials of `library` that have a hatch of their own in the hatch
+/// catalogue, by the English name an element's `Material` property has.
+pub fn library_patterns(library: &bim_library::Library) -> std::collections::HashMap<String, Pattern> {
+    library.materials.iter().filter_map(|m| Some((m.name(bim_library::Lang::En).to_string(), Pattern::from(m.catalogue_hatch()?)))).collect()
+}
+
 impl From<HatchPattern> for Pattern {
     fn from(p: HatchPattern) -> Self {
         let grid = |degrees: f64, offset: f64| Grid { angle: degrees.to_radians(), offset, ..Grid::default() };
@@ -179,6 +222,10 @@ impl From<HatchPattern> for Pattern {
             Vec::new()
         } else if p.crossed {
             vec![grid(p.angle, p.spacing), grid(p.angle + 90.0, p.spacing)]
+        } else if p.pair > 0.0 {
+            // pairs of lines: the same rows once more, their gap across
+            let (sin, cos) = p.angle.to_radians().sin_cos();
+            vec![grid(p.angle, p.spacing), Grid { origin: [-sin * p.pair, cos * p.pair], ..grid(p.angle, p.spacing) }]
         } else {
             vec![grid(p.angle, p.spacing)]
         };
@@ -455,7 +502,7 @@ mod tests {
     fn box_layer(name: &str) -> Layer {
         let positions = vec![0., 0., 0., 4., 0., 0., 4., 2., 0., 0., 2., 0., 0., 0., 3., 4., 0., 3., 4., 2., 3., 0., 2., 3.];
         let indices = vec![0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7];
-        Layer { name: name.into(), color: [0.5; 3], normals: vec![0.0; positions.len()], positions, colors: None, indices, elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), texturing: None }
+        Layer { name: name.into(), color: [0.5; 3], normals: vec![0.0; positions.len()], positions, colors: None, indices, elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), splats: None, texturing: None }
     }
 
     fn model(layers: Vec<Layer>) -> Model {
@@ -524,16 +571,17 @@ mod tests {
         hatch(&mut cut, &model, DrawingStandard::Nen47, 100.0);
         let fill = &cut.fills[0];
         assert_eq!(fill.look, Some(([212, 144, 143], [0, 0, 0])), "brick under NEN 47");
-        // 45° lines 0.08 apart across 4 × 2: the box is (4 + 2) / √2 wide across them
+        // pairs of 45° lines, a pair every 0.1125, across 4 × 2: the box is (4 + 2) / √2 wide
+        // across them
         let across = 6.0 / 2f32.sqrt();
-        assert!((fill.rows.len() as f32 - across / 0.08).abs() <= 1.0, "{} rows", fill.rows.len());
+        assert!((fill.rows.len() as f32 - 2.0 * across / 0.1125).abs() <= 2.0, "{} rows", fill.rows.len());
         for (_, [a, b]) in &fill.rows {
             for p in [a, b] {
                 assert!(p[0] > -1e-3 && p[0] < 4.001 && p[1] > -1e-3 && p[1] < 2.001, "{p:?} is in the box");
             }
             assert!(((b[1] - a[1]) - (b[0] - a[0])).abs() < 1e-3, "at 45°");
         }
-        assert!((fill.spacing() - 0.08).abs() < 1e-3, "{}", fill.spacing());
+        assert!((fill.spacing() - 0.1125).abs() < 1e-3, "{}", fill.spacing());
         assert_eq!(fill.lines(1.0, 3.0).count(), fill.rows.iter().filter(|(r, _)| r.rem_euclid(3) == 0).count(), "every third row when they stand too close");
         assert_eq!(fill.lines(5.0, 3.0).count(), fill.rows.len());
     }

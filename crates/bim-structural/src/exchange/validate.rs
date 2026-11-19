@@ -918,6 +918,31 @@ fn validate_model(m: &w::Model, base: &str, r: &mut Report) {
                 }
             }
         }
+        if let Some(mesh) = &rs.surface_mesh {
+            let mpath = format!("{path}/surface_mesh");
+            let (nodes, elements) = (mesh.points.len(), mesh.elements.len());
+            if mesh.displacements.len() != nodes {
+                r.error(Rule::ResultBlock, format!("{mpath}/displacements"), format!("{} displacements for {nodes} points", mesh.displacements.len()));
+            }
+            if mesh.surface.len() != elements || mesh.thickness.len() != elements {
+                r.error(Rule::ResultBlock, mpath.clone(), format!("{elements} elements, {} surfaces and {} thicknesses", mesh.surface.len(), mesh.thickness.len()));
+            }
+            for (k, e) in mesh.elements.iter().enumerate() {
+                if !(3..=4).contains(&e.len()) || e.iter().any(|n| *n as usize >= nodes) {
+                    r.error(Rule::ResultBlock, format!("{mpath}/elements/{k}"), "an element has three or four nodes of the mesh".to_string());
+                }
+            }
+            for (k, id) in mesh.surface.iter().enumerate() {
+                if !ix.surfaces.contains(id) {
+                    r.error(Rule::ResultRef, format!("{mpath}/surface/{k}"), format!("surface {id} does not exist"));
+                }
+            }
+            for (k, f) in mesh.fields.iter().enumerate() {
+                if f.values.len() != nodes {
+                    r.error(Rule::ResultBlock, format!("{mpath}/fields/{k}"), format!("{} values for {nodes} points", f.values.len()));
+                }
+            }
+        }
     }
 
     // links

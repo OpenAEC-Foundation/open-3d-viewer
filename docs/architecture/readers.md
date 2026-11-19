@@ -65,7 +65,7 @@ Lines of Rust in `src/loaders/` per format, tests included.
 | FreeCAD (`.FCStd`) | 1,088 in 2 files | none | | New repository. |
 | FBX (`.fbx`) | 949 | none | | New repository. |
 | Blender (`.blend`) | 749 | none | | New repository. |
-| Analysis text format (`.e2k`) | 645 | none | | New repository. |
+| Analysis text format (`.e2k`) | 645 | none | | Move into `fem-dll` beside `.s2k`, read into `fem-model`; the adapter `fem.rs` then opens it. |
 | Tekla Structures (`.db1`) | 520 | `tekla-dll` | yes | Slim the adapter. |
 | Vectorworks (`.vwx`) | 493 | `vectorworks-dll` | yes | Slim the adapter. |
 | Vertex BD and BTL (`.vxz`, `.vxm`, `.btl`) | 339 | `vertex.dll` | one crate, loaded at run time | Lay the repository out as the model and name it `vertex-dll`. |
@@ -81,9 +81,21 @@ Together this is some 30,000 lines of format knowledge in the app.
 |---|---:|---|---|
 | VRML and X3D (`.wrl`, `.x3d`) | 1,024 | in the app | New repository. |
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
-| PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
+| Gaussian splats (splat `.ply`, `.spz`, glTF with `KHR_gaussian_splatting`) | 85 (`splat.rs`, tests besides) | `splat-dll` (one crate, `splat-read`, public) | Apart from the start (2026-11-18): the PLY and glTF loaders hand a splat file to it, the adapter only copies its splats into a point layer with `SplatData`. |
+| PCD, PTX, XYZ, ASC grid, OFF, AMF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
+| 3D Tiles (`tileset.json`, `.b3dm`, `.i3dm`, `.pnts`, `.cmpt`) and quantized-mesh terrain (`.terrain`) | 72 (`tiles.rs`) | `3d-tiles-dll`: `tiles-core`, `tiles-model`, `tiles-read` | Laid out as the model from the start (2026-11-18). |
+| Compressed glTF (Draco, meshopt, mesh quantization, KTX2/Basis) | glue in `gltf.rs` | `3d-tiles-dll`: `tiles-gltf` | Decodes into plain glTF before the published glTF crate reads it; 3D Tiles content uses it too. |
+| Smithsonian Voyager scene (`.svx.json`) | 114 (`svx.rs`) | `svx-dll`: `svx-model`, `svx-read` | Laid out as the model from the start (2026-11-18). Both adapters place the glTF the readers hand over through `placed.rs` and the glTF adapter. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
 | DICOM with an embedded model (`.dcm`) | 73 | `crates/dcm-read`, on the published `dicom-object` (MIT OR Apache-2.0): it takes the STL, OBJ or MTL document out of the file and says what other files hold | A crate in the suite for now, as the other new readers of 2026-11-18; it uses nothing of the app and moves one to one into a repository of its own (`dicom-dll`) later. The adapter reads the document with the app's STL and OBJ readers. |
+| VTK (`.vtk`, `.vtu`, `.vtp`, `.vts`, `.vtr`, `.vti`, the parallel files, `.vtm`, `.pvd`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`), which parses through the published `vtkio` crate | Done: the reader turns cells into outer faces and fields; the adapter copies them into layers and the app's fields. |
+| FEM input deck (`.inp`), FEM bulk data (`.bdf`, `.nas`, `.dat`), finite element mesh (`.msh`), structural analysis text model (`.s2k`, `.$2k`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`) | Done: the reader returns a mesh and an analysis model of its own; the adapter copies the analysis model into `bim-structural`'s. |
+| SAF (`.xlsx`) | adapter `fem.rs` | `saf-dll` (`saf-read`), into `fem-model`'s analysis model | Done. `saf-read` pins the same `fem-dll` revision as the app, so both share one model crate. |
+| COPC (`.copc.laz`) | in `las.rs` | the `las` crate's COPC reader (MIT) | Adapter: the app picks which octree levels to read for its point limit, the crate reads them. Added 2026-11-18. |
+| 3MF (`.3mf`) | 30 | `3mf-dll` (`threemf-model`, `threemf-read`) | Moved; the adapter only maps. |
+| ASAM OpenDRIVE (`.xodr`) | 48 | `crates/xodr-read`, on the published `opendrive` (MIT): it follows the reference lines and lays the lanes beside them | A crate in the suite for now, by the owner's choice: it uses nothing of the app and returns its own plain `Surface`, so it moves one to one into a repository of its own (`opendrive-dll`) later. |
+| URDF (`.urdf`) | 112 | `crates/urdf-read`, on the published `urdf-rs` (Apache-2.0): it places the links by their joints, meshes the solids and finds the mesh files | A crate in the suite for now, by the owner's choice: it uses nothing of the app, so it moves one to one into a repository of its own (`urdf-dll`) later. The adapter reads the mesh files with the app's own readers. |
+| MagicaVoxel (`.vox`) | 17 | `crates/vox-read`, on the published `dot_vox` (MIT): it merges the voxels into faces and places the scene | A crate in the suite for now, by the owner's choice: it uses nothing of the app and returns its own plain `Mesh`, so it moves one to one into a repository of its own (`vox-dll`) later. |
 
 ## Moved so far
 
@@ -99,6 +111,10 @@ Together this is some 30,000 lines of format knowledge in the app.
 - 2026-11-18, Revit: how the browser orders the views (`rvt_export::browser`) and the typefaces
   of the texts (`rvt_read::fonts`; 429 lines and three tests left the app, which copies the
   reader's `Organization` and `FontFace` into its `ViewOrder` and `Face`).
+
+- 2026-11-18, 3MF: the whole reader (`src/loaders/threemf.rs`, 347 lines and three tests) moved
+  unchanged into `3mf-dll`, which then gained the materials, beam lattice and slice extensions and
+  the project files of slicers.
 
 ## Order
 

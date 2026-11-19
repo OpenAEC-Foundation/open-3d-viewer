@@ -81,6 +81,9 @@ pub struct Transform {
     pub kind: TransformKind,
     pub elements: Vec<ElementId>,
     pub points: Vec<DVec3>,
+    /// What is drawn on a floor plan that it takes in place of elements: the plan, and the run of
+    /// its lines that is the line or shape picked.
+    pub drawn: Option<(std::sync::Arc<str>, std::ops::Range<usize>)>,
 }
 
 /// How points go from where they are to where they come: in plan, heights as they are but for a
@@ -223,7 +226,9 @@ impl App {
             .into_iter()
             .filter(|id| self.modeller.model.get(*id).is_some_and(|e| !matches!(e.shape_in_project(&grid), Shape::Connection(_))))
             .collect();
-        if elements.is_empty() {
+        // nothing of the model selected: the line or shape picked on the floor plan shown
+        let drawn = if elements.is_empty() { self.drawn_picked() } else { None };
+        if elements.is_empty() && drawn.is_none() {
             return;
         }
         if self.modeller.tool.is_some() {
@@ -231,9 +236,20 @@ impl App {
         }
         self.modeller.edit = None;
         self.modeller.refusal = None;
-        self.modeller.transform = Some(Transform { kind, elements, points: Vec::new() });
+        self.modeller.transform = Some(Transform { kind, elements, points: Vec::new(), drawn });
         // a fresh 3D cursor is the base point of a move or a copy
         self.transform_from_cursor3d();
+    }
+
+    /// The line or shape picked on the floor plan shown, to move, copy, turn or mirror: the plan
+    /// and the run of its lines. A section's drawing stands upright, where these clicks on the
+    /// work plane say nothing.
+    pub(crate) fn drawn_picked(&self) -> Option<(std::sync::Arc<str>, std::ops::Range<usize>)> {
+        let view = self.shown_view().filter(|v| self.document.plan(v).is_some())?;
+        match self.mark_pick? {
+            super::marks::MarkPick::Line(k) if k < self.document.view_lines(view).len() => Some((std::sync::Arc::from(view), self.document.shape_of(view, k).0)),
+            _ => None,
+        }
     }
 
     /// Esc: the points clicked go, else the transform itself. False when none was under way.
@@ -260,6 +276,12 @@ impl App {
         }
         let Some(done) = self.modeller.transform.take() else { return };
         match Map::of(done.kind, &done.points) {
+            // a floor plan's drawing has the model's x and y: its lines go through the same map
+            Some(map) if done.drawn.is_some() => {
+                let Some((view, run)) = done.drawn else { return };
+                let moved = self.document.map_view_lines(&view, run, done.kind.copies(), &|q| map.plan(DVec2::new(q[0], q[1])).to_array());
+                self.mark_pick = moved.map(|run| super::marks::MarkPick::Line(run.start));
+            }
             Some(map) => {
                 self.transform_elements(&done.elements, &map, done.kind.copies());
             }
@@ -362,6 +384,64 @@ mod tests {
 
     fn near(a: DVec2, b: [f64; 2]) -> bool {
         a.distance(DVec2::from(b)) < 1e-6
+    }
+
+    #[test]
+    fn a_shape_picked_on_a_floor_plan_is_moved_copied_turned_and_mirrored() {
+        use crate::app::marks::{DrawKind, MarkPick};
+        use crate::document::ShapeKind;
+        let (mut app, _) = a_wall();
+        app.click(None, false);
+        let level = std::sync::Arc::<str>::from(app.document.levels()[0].path.as_str());
+        let _ = app.update(Message::NewPlan(level));
+        app.anim = None;
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Top);
+        app.camera.ortho = true;
+        app.camera.target = Vec3::ZERO;
+        app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
+        let plan = std::sync::Arc::<str>::from(app.shown_view().expect("the plan shows"));
+        let _ = app.update(Message::AddShape(plan.clone(), DrawKind::Line, vec![[[20.0, 20.0], [21.0, 20.0]]]));
+        let _ = app.update(Message::AddShape(plan.clone(), DrawKind::Rectangle, DrawKind::Rectangle.shape_lines(&[[10.0, 10.0], [12.0, 11.0]])));
+        let corners = |app: &App, run: std::ops::Range<usize>| app.document.view_lines(&plan)[run].iter().map(|l| l[0]).collect::<Vec<_>>();
+        let close = |a: &[[f64; 2]], b: &[[f64; 2]]| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (p[0] - q[0]).hypot(p[1] - q[1]) < 1e-6);
+        // nothing picked: nothing to move
+        assert!(app.drawn_picked().is_none());
+        let _ = app.update(Message::Transform(TransformKind::Move));
+        assert!(app.modeller.transform.is_none());
+        // a side of the rectangle picked: Move takes all of it from one click to the next
+        let _ = app.update(Message::PickMark(Some(MarkPick::Line(2))));
+        assert_eq!(app.drawn_picked(), Some((plan.clone(), 1..5)));
+        let _ = app.update(Message::Transform(TransformKind::Move));
+        click(&mut app, -10.0, -5.0);
+        click(&mut app, -9.0, -3.0);
+        assert!(app.modeller.transform.is_none());
+        assert!(close(&corners(&app, 1..5), &[[11.0, 12.0], [13.0, 12.0], [13.0, 13.0], [11.0, 13.0]]), "{:?}", corners(&app, 1..5));
+        assert_eq!(app.mark_pick, Some(MarkPick::Line(1)), "it stays picked");
+        // Copy leaves it and makes another rectangle after the other lines, picked
+        let _ = app.update(Message::Transform(TransformKind::Copy));
+        click(&mut app, -10.0, -5.0);
+        click(&mut app, -15.0, -5.0);
+        assert_eq!(app.document.view_lines(&plan).len(), 9);
+        assert_eq!(app.document.view_shapes(&plan).iter().map(|s| (s.kind, s.run())).collect::<Vec<_>>(), [(ShapeKind::Rectangle, 1..5), (ShapeKind::Rectangle, 5..9)]);
+        assert!(close(&corners(&app, 5..9), &[[6.0, 12.0], [8.0, 12.0], [8.0, 13.0], [6.0, 13.0]]));
+        assert_eq!(app.mark_pick, Some(MarkPick::Line(5)));
+        // Rotate turns the copy a quarter about a point: from east of it to north of it
+        let _ = app.update(Message::Transform(TransformKind::Rotate));
+        click(&mut app, -10.0, -10.0);
+        click(&mut app, -5.0, -10.0);
+        click(&mut app, -10.0, -5.0);
+        assert!(close(&corners(&app, 5..9), &[[-32.0, 6.0], [-32.0, 8.0], [-33.0, 8.0], [-33.0, 6.0]]), "{:?}", corners(&app, 5..9));
+        // Mirror leaves a mirrored copy of the line alone, which is no shape
+        let _ = app.update(Message::PickMark(Some(MarkPick::Line(0))));
+        let _ = app.update(Message::Transform(TransformKind::Mirror));
+        click(&mut app, -10.0, -10.0);
+        click(&mut app, -10.0, -5.0);
+        assert_eq!(app.document.view_lines(&plan).len(), 10);
+        assert_eq!(app.document.view_shapes(&plan).len(), 2);
+        let l = app.document.view_lines(&plan)[9];
+        assert!(close(&l, &[[-40.0, 20.0], [-41.0, 20.0]]), "{l:?}");
+        // the wall did not move with any of it
+        assert!(near(ends(&app, ElementId(1)).0, [0.0, 0.0]));
     }
 
     #[test]

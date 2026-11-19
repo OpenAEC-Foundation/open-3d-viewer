@@ -516,6 +516,7 @@ mod tests {
             lines: Vec::new(),
             line_elements: Vec::new(),
             texturing: None,
+            splats: None,
         }
     }
 

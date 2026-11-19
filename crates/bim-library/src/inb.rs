@@ -4,8 +4,10 @@
 //! The catalogue (`data/inb-catalogue.json`) was extracted from the INB template of the OpenAEC
 //! Foundation (`INB-Template 0.6.ifc`, see the file's `source`); it is compiled in, so nothing is
 //! read at run time. It holds every wall and slab type of the template with a material layer
-//! set, each a single layer, and the column and beam types of a solid rectangular or round
-//! profile that is not steel (steel follows the profile catalogue).
+//! set, each a single layer, the column and beam types of a solid rectangular or round
+//! profile that is not steel (steel follows the profile catalogue), and its two foundation
+//! piles: driven square piles of 220 mm that differ in length only, which a type does not keep.
+//! The template gives the piles no material; they are of precast concrete here.
 //!
 //! - A type keeps the name the template gives it (`kzst_100`, `kpv_200`, `BK 300x300`).
 //! - Its id is `inb.<role>.<name>`, so the types of the catalogue are told from a project's own.
@@ -47,7 +49,7 @@ const MATERIALS: [(&str, &str); 16] = [
 /// The materials of the catalogue that the starter library lacks.
 fn own_materials() -> Vec<Material> {
     use HatchKind::*;
-    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material { key: key.into(), names: Names::new(nl, en, de, fr), hatch, colour };
+    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material::new(key, Names::new(nl, en, de, fr), hatch, colour);
     vec![
         m("precast-concrete", "prefab beton", "precast concrete", "Betonfertigteil", "béton préfabriqué", Concrete, [175, 175, 175]),
         m("unreinforced-concrete", "ongewapend beton", "unreinforced concrete", "unbewehrter Beton", "béton non armé", Concrete, [195, 195, 190]),
@@ -75,7 +77,7 @@ fn slug(name: &str) -> String {
 /// The library of the INB template: its materials (the starter's and its own) and its types. A
 /// type of the catalogue whose material is unknown, or that does not check, is left out.
 pub fn library() -> Library {
-    let mut library = Library { materials: material::starter(), ..Library::default() };
+    let mut library = Library { materials: material::starter(), codes: crate::nlsfb::starter(), ..Library::default() };
     for m in own_materials() {
         let _ = library.add_material(m);
     }
@@ -96,8 +98,12 @@ pub fn library() -> Library {
                     let _ = library.add_buildup(BuildUp { name: Some(name.to_string()), ..BuildUp::new(&id, role, layers) });
                 }
             }
-            "column" | "beam" => {
-                let role = if role == "column" { LinearRole::Column } else { LinearRole::Beam };
+            "column" | "beam" | "pile" => {
+                let role = match role {
+                    "column" => LinearRole::Column,
+                    "beam" => LinearRole::Beam,
+                    _ => LinearRole::Pile,
+                };
                 let p = &t["profile"];
                 let (Some(material), Some(width), Some(depth)) = (key(p.get("material")), p["width_m"].as_f64(), p["depth_m"].as_f64()) else { continue };
                 let profile = if p["round"].as_bool() == Some(true) { ProfileShape::Circle { diameter: width } } else { ProfileShape::Rectangle { width, depth } };
@@ -121,6 +127,13 @@ mod tests {
         // 39 walls with layers (the movable wall has none), 31 floors, 2 roofs, 7 columns, 7 beams
         assert_eq!((count(Role::Wall), count(Role::Floor), count(Role::Roof)), (39, 31, 2));
         assert_eq!((inb.linear_types_of(LinearRole::Column).count(), inb.linear_types_of(LinearRole::Beam).count()), (7, 7));
+        // its two foundation piles: square, 220 mm, an IfcPileType each
+        let piles: Vec<&LinearType> = inb.linear_types_of(LinearRole::Pile).collect();
+        assert_eq!(piles.iter().map(|t| (t.id.as_str(), t.profile.clone(), t.material.as_str(), t.role.ifc().1)).collect::<Vec<_>>(), [
+            ("inb.pile.fp_220_type_1", ProfileShape::Rectangle { width: 0.22, depth: 0.22 }, "precast-concrete", "IfcPileType"),
+            ("inb.pile.fp_220_type_2", ProfileShape::Rectangle { width: 0.22, depth: 0.22 }, "precast-concrete", "IfcPileType"),
+        ]);
+        assert_eq!(inb.linear_name("inb.pile.fp_220_type_1", Lang::Nl).as_deref(), Some("FP_220_Type_1"));
         assert!(inb.buildups.iter().all(|b| b.id.starts_with(PREFIX)) && inb.linear_types.iter().all(|t| t.id.starts_with(PREFIX)));
         let wall = inb.buildup("inb.wall.kzst_100").expect("a sand-lime wall of 100");
         assert_eq!((wall.layers.len(), wall.layers[0].material.as_str(), wall.layers[0].thickness), (1, "sand-lime", 0.1));
@@ -137,9 +150,10 @@ mod tests {
         let mut project = Library::starter();
         let before = (project.materials.len(), project.buildups.len(), project.linear_types.len());
         let added = project.merge(&library());
-        // seven materials, 72 planar types and 14 linear types, whatever the starter has like them
-        assert_eq!(added, 7 + 72 + 14);
-        assert_eq!((project.materials.len(), project.buildups.len(), project.linear_types.len()), (before.0 + 7, before.1 + 72, before.2 + 14));
+        // seven materials, 72 planar types and 16 linear types (the two piles among them),
+        // whatever the starter has like them
+        assert_eq!(added, 7 + 72 + 16);
+        assert_eq!((project.materials.len(), project.buildups.len(), project.linear_types.len()), (before.0 + 7, before.1 + 72, before.2 + 16));
         assert_eq!(project.name("inb.floor.kpv_200", Lang::En).as_deref(), Some("kpv_200"));
         // a second time adds nothing
         assert_eq!(project.merge(&library()), 0);

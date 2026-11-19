@@ -1,0 +1,1 @@
+Tileset "BatchedColors" from the test data of CesiumJS (Specs/Data/Cesium3DTiles/Batched), licence Apache-2.0, Copyright Cesium GS, Inc. and contributors.

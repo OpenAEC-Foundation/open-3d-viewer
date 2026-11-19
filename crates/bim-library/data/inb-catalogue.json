@@ -1155,6 +1155,36 @@
         "template_material": "naaldhoutvuren",
         "material": "timber"
       }
+    },
+    {
+      "name": "FP_220_Type_1",
+      "ifc_class": "IfcPileType",
+      "predefined_type": "DRIVEN",
+      "role": "pile",
+      "length_m": 22.33,
+      "note": "a square pile of 220 mm, a mesh in the template; the template gives it no material: precast concrete, as a driven square pile is",
+      "profile": {
+        "round": false,
+        "width_m": 0.22,
+        "depth_m": 0.22,
+        "template_material": null,
+        "material": "precast concrete"
+      }
+    },
+    {
+      "name": "FP_220_Type_2",
+      "ifc_class": "IfcPileType",
+      "predefined_type": "DRIVEN",
+      "role": "pile",
+      "length_m": 20.33,
+      "note": "a square pile of 220 mm, a mesh in the template; the template gives it no material: precast concrete, as a driven square pile is",
+      "profile": {
+        "round": false,
+        "width_m": 0.22,
+        "depth_m": 0.22,
+        "template_material": null,
+        "material": "precast concrete"
+      }
     }
   ],
   "excluded": [

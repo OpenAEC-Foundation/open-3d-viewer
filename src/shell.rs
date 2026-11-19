@@ -1188,6 +1188,16 @@ impl Studio {
                 .icon(small("file.save-as"), large("file.save-as"))
                 .enabled(loaded)
                 .dialog(),
+            Command::new("file.render", l.text("Renderen…", "Render…"), go(Message::RenderDialog))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(loaded && cfg!(not(target_arch = "wasm32")))
+                .detail(l.text("Schrijft een afbeelding van het model zoals het beeld het toont (Blender rendert hem)", "Writes an image of the model as the view shows it (Blender renders it)"))
+                .dialog(),
+            Command::new("file.build-film", l.text("Bouwfilm…", "Build film…"), go(Message::BuildFilmDialog))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(loaded && cfg!(not(target_arch = "wasm32")))
+                .detail(l.text("Schrijft een film waarin het model wordt opgebouwd (Blender rendert hem)", "Writes a film in which the model is built up (Blender renders it)"))
+                .dialog(),
             Command::new("file.export-ifc4x3", l.text("Exporteren als IFC 4x3…", "Export IFC 4x3…"), go(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))
                 .icon(small("file.save-as"), large("file.save-as"))
                 .enabled(loaded)
@@ -2429,6 +2439,7 @@ impl Studio {
                     groups.push((l.text("Velden", "Fields"), vec![smalls(&["field.next", "field.previous"]), smalls(&["field.step-next", "field.step-previous"])]));
                 }
                 groups.extend(view_groups());
+                groups.push((l.text("Visualisatie", "Visualisation"), vec![smalls(&["file.render", "file.build-film"])]));
                 groups
             }
             RibbonPage::View => view_groups(),

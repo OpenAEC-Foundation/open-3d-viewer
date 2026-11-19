@@ -203,6 +203,16 @@ The **GIS** tab of the right pane says where the project lies and brings in what
 
 For now this covers the Netherlands (RD New and WGS 84; data of the Dutch land registry through the open services of PDOK) and the desktop builds. The grid conversion stays within half a metre of the official one: enough to place a building on a map, not for setting out. What comes next (feature layers of any service, more coordinate systems, layers laid between borings, tiles for areas without an end) is in [`docs/superpowers/specs/2026-11-17-gis-design.md`](docs/superpowers/specs/2026-11-17-gis-design.md). The terrain is the first step of civil and site design (alignments, profiles, corridors, pipes): [`docs/superpowers/specs/2026-11-18-civil-design.md`](docs/superpowers/specs/2026-11-18-civil-design.md).
 
+## Visualisation: renderings and a film of how it is built (a first step)
+
+`open-3d-viewer FILE --build-film OUT.mp4` writes a film in which the model is built up: its elements appear in order while a camera turns round it. In the window it is **Build film** in the Visualisation group of the Home tab: it asks where to write the film and says in the status bar when it is done.
+
+- **The order**: by the phases of the file where it has them (Revit), and within a phase from the ground up in bands of a metre. What a later phase demolishes goes out when that phase starts. A planning per element is not read yet.
+- **The stage**: the model is written as a USD file (`.usda`), one mesh per element with its visibility over time. `--build-film OUT.usda` writes that file alone, for any program that reads USD.
+- **The film**: [Blender](https://www.blender.org) renders it, started without a window; it has to be installed (`O3V_BLENDER` names its executable where it is not found). Blender is a separate program under the GPL: it is started, never built in. `--film-seconds` sets the length (20 by default); the film is 1920 by 1080 at 24 frames a second.
+- **A still**: **Render** in the same group, or `open-3d-viewer FILE --render OUT.png`, writes one image of the whole model, 1920 by 1080, path traced by Blender with a sky, a sun and ground under the model. From the window it is taken from where the view looks; from the command line Blender places the camera.
+- Desktop only: a browser cannot start Blender.
+
 ## Modelling (beta)
 
 The **Modeller** is a BIM modeller in the same app. Every element is built from five base elements: **planar** (wall, slab), **linear** (column, beam), **system** (curtain wall), **point** (object) and **connection** (butt or mitre between two selected beams or columns, or a cut: the first selected element cuts its body out of the second, such as a beam through a wall). A join is an element of its own: a steel **end plate** stops the beam a plate's thickness short of the column, bolts a plate to the column's face and drills the column; its kind (mitre, butt, end plate) and its plate and bolt sizes are set in its properties. Joins come by themselves where a member's end meets another member, a mitre between two of one profile at a corner, else a butt in which the other (or larger) runs through, and go when the members part; a diamond marks each join, and a click on it selects the join.

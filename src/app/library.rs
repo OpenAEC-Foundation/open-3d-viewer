@@ -385,6 +385,11 @@ impl App {
                 let title = match series {
                     Series::LEqual => format!("L {}", l.text("gelijkzijdig", "equal")),
                     Series::LUnequal => format!("L {}", l.text("ongelijkzijdig", "unequal")),
+                    Series::CfShs => format!("SHS {}", l.text("koudgevormd", "cold-formed")),
+                    Series::CfRhs => format!("RHS {}", l.text("koudgevormd", "cold-formed")),
+                    Series::Flat => l.text("Strippen", "Flat bars").to_string(),
+                    Series::Round => l.text("Rondstaal", "Round bars").to_string(),
+                    Series::Differdinger => l.text("Differdinger (oud)", "Differdinger (old)").to_string(),
                     s => s.name().to_string(),
                 };
                 body = body.push(container(header(title, of.len(), group)).padding(Padding { left: 12.0, ..Padding::ZERO }));
@@ -396,7 +401,7 @@ impl App {
                     let pick = Pick::Steel(s.designation.clone());
                     body = body.push(container(item(name(s.designation.clone()).into(), pick.clone())).padding(Padding { left: 12.0, ..Padding::ZERO }));
                     if view.picked.as_ref() == Some(&pick) {
-                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(s.series.standard())))));
+                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(&s.source())))));
                     }
                 }
             }
@@ -421,7 +426,10 @@ fn small<'a>(s: String, p: Palette) -> Element<'a, Message> {
 
 /// A material's hatch (NEN 47) on a square, and its key.
 pub(super) fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
-    column![material_hatch(p, m), small(m.key.clone(), p)].spacing(4).into()
+    match m.catalogue_hatch() {
+        Some(hatch) => column![super::libraries::tile_hatch_look(hatch, p, 60.0, super::libraries::HATCH_LOOK_SCALE), small(format!("{} · {}", m.key, hatch.key), p)].spacing(4).into(),
+        None => column![material_hatch(p, m), small(m.key.clone(), p)].spacing(4).into(),
+    }
 }
 
 /// A material's hatch (NEN 47) on a band, as a section through it shows it.
@@ -533,6 +541,10 @@ pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &Syst
 pub(super) fn material_look<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
     let c = rgb(m.colour);
     let colour = container(text("")).width(Fill).height(10).style(move |_| Palette::swatch(c));
+    // its own hatch of the catalogue, where it has one
+    if let Some(hatch) = m.catalogue_hatch() {
+        return column![super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE), colour].spacing(4).into();
+    }
     column![canvas_widget(Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text }).width(Fill).height(56), colour].spacing(4).into()
 }
 
@@ -633,7 +645,7 @@ fn system_section(t: &SystemType, lib: &Library, line: Color) -> Section {
 }
 
 /// A profile drawn as its outline, with its sizes, area and second moments.
-pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&'static str>) -> Element<'a, Message> {
+pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&str>) -> Element<'a, Message> {
     let mut lines = vec![match *shape {
         ProfileShape::Rectangle { width, depth } => format!("b {} · h {} mm", mm_en(width), mm_en(depth)),
         ProfileShape::Circle { diameter } => format!("d {} mm", mm_en(diameter)),

@@ -13,10 +13,17 @@
 //!   ground).
 //!
 //! Sizes are millimetres on paper. Nothing is added to what the template draws, and where it
-//! draws the same hatch twice the catalogue has it once.
+//! draws the same hatch twice the catalogue has it once. The signs of NEN 47 that are a solid
+//! fill (reinforced concrete cast in situ, steel, the other metals, bitumen) are no pattern of
+//! the template; they stand in both sets as a tile with its fill alone.
 //!
-//! Not yet: a material is still drawn by its hatch kind ([`crate::HatchKind`]); it cannot pick a
-//! hatch of this catalogue, and the drawings do not draw one.
+//! A material names a hatch of this catalogue as its own ([`crate::Material::sign`]), and a
+//! drawing cuts it with that hatch: the hatch's lines as rows ([`Hatch::rows`]) over its colour.
+//!
+//! An element of several layers is cut a face per layer, each with its material's hatch.
+//!
+//! Not yet: a drawing does not draw a hatch's filled areas and dots (lead, sealant, sand,
+//! gravel, water show as their colour).
 
 use crate::material::Names;
 use crate::{uuid, Lang};
@@ -127,10 +134,32 @@ struct File {
     hatches: Vec<Hatch>,
 }
 
+/// The signs of NEN 47 that are a solid fill, which the template's patterns do not hold: their
+/// number, their names and their tone, as Project Ocondat's workbook names them for its
+/// materials (`BlenderBIM/Library.xlsx`, sheet materials; LGPL-3.0). A solid sign is a tile with
+/// its fill and no marks, the same in both sets.
+const SOLID: [(u32, [&str; 4], [u8; 3]); 4] = [
+    (5, ["gewapend beton, in het werk gestort", "reinforced concrete, cast in situ", "Stahlbeton, Ortbeton", "béton armé coulé en place"], [192, 192, 192]),
+    (18, ["staal", "steel", "Stahl", "acier"], [0, 0, 0]),
+    (19, ["aluminium, brons, koper", "aluminium, bronze, copper", "Aluminium, Bronze, Kupfer", "aluminium, bronze, cuivre"], [192, 192, 192]),
+    (24, ["bitumen", "bitumen", "Bitumen", "bitume"], [16, 16, 16]),
+];
+
 /// Every hatch of the catalogue: NEN 47's own, then the suite's, each by its sign.
 pub fn catalogue() -> &'static [Hatch] {
     static HATCHES: OnceLock<Vec<Hatch>> = OnceLock::new();
-    HATCHES.get_or_init(|| serde_json::from_str::<File>(CATALOGUE).expect("the hatch catalogue is compiled in").hatches)
+    HATCHES.get_or_init(|| {
+        let mut hatches = serde_json::from_str::<File>(CATALOGUE).expect("the hatch catalogue is compiled in").hatches;
+        for set in HatchSet::ALL {
+            for (sign, [nl, en, de, fr], fill) in SOLID {
+                let solid = Hatch { key: format!("{}-{sign}", set.prefix()), set, sign, names: Names::new(nl, en, de, fr), tile: [1.0, 1.0], angle: 0.0, scale: [1.0, 1.0], fill: Some(fill), marks: Vec::new() };
+                // among its set, before the first sign after it
+                let at = hatches.iter().position(|h| h.set == set && h.sign > sign).or_else(|| hatches.iter().rposition(|h| h.set == set).map(|last| last + 1)).unwrap_or(hatches.len());
+                hatches.insert(at, solid);
+            }
+        }
+        hatches
+    })
 }
 
 /// The hatches of `set`.
@@ -313,14 +342,15 @@ mod tests {
 
     #[test]
     fn the_catalogue_has_the_signs_of_nen_47_and_the_suites_coloured_ones() {
-        assert_eq!((of(HatchSet::Nen47).count(), of(HatchSet::OpenAec).count()), (23, 72));
+        assert_eq!((of(HatchSet::Nen47).count(), of(HatchSet::OpenAec).count()), (27, 76));
         let keys: BTreeSet<&str> = catalogue().iter().map(|h| h.key.as_str()).collect();
         assert_eq!(keys.len(), catalogue().len(), "a key twice");
         // NEN 47's own are black on the paper, by their number; each has the suite's coloured one
         let signs: Vec<u32> = of(HatchSet::Nen47).map(|h| h.sign).collect();
-        assert_eq!(signs, [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 20, 22, 23, 25, 26, 27, 28, 29]);
+        assert_eq!(signs, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29]);
         for own in of(HatchSet::Nen47) {
-            assert!(own.general() && own.fill.is_none(), "{}", own.key);
+            // (a solid sign is its fill, and has no marks)
+            assert!(own.general() && own.fill.is_none() != own.marks.is_empty(), "{}", own.key);
             assert_eq!(hatch(&own.key), Some(own));
             let coloured = sign(HatchSet::OpenAec, own.sign).unwrap_or_else(|| panic!("sign {} in colour", own.sign));
             assert_eq!((&coloured.names, coloured.tile == own.tile || own.sign == 6), (&own.names, true), "{}", coloured.key);
@@ -412,7 +442,162 @@ mod tests {
         // read back, it is the hatch
         let back: Hatch = serde_json::from_value(node["attributes"][HATCH].clone()).expect("a hatch");
         assert_eq!(&back, pir);
-        assert_eq!((nodes(HatchSet::Nen47).len(), nodes(HatchSet::OpenAec).len()), (23, 72));
+        assert_eq!((nodes(HatchSet::Nen47).len(), nodes(HatchSet::OpenAec).len()), (27, 76));
         assert_ne!(hatch_path("nen47-1"), hatch_path("openaec-1"));
+    }
+}
+
+/// Parallel rows of lines, as a drawing hatches a cut with them: lines at `angle` (radians,
+/// anticlockwise from x, y up), the first through `origin`, each next one `offset` across (to
+/// its left) and `shift` along; `dashes` are the lengths drawn and left open in turn from the
+/// row's start (none: a full line). Metres on the model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rows {
+    pub angle: f64,
+    pub origin: [f64; 2],
+    pub shift: f64,
+    pub offset: f64,
+    pub dashes: Vec<f64>,
+    pub colour: [u8; 3],
+}
+
+/// The scale the catalogue's tiles are drawn for: a millimetre of a tile is this many metres of
+/// the model (1:50).
+pub const DRAWN_FOR: f64 = 50.0 / 1000.0;
+
+impl Hatch {
+    /// Its lines as rows a drawing hatches with, in metres on the model at the scale the
+    /// catalogue is drawn for. A straight piece of a line that runs along the tiles (across,
+    /// down, or from a corner of a tile to a corner some tiles on) repeats as a row: a full
+    /// line when it spans its tiles, else dashes. Filled areas, dots and pieces that run at
+    /// another slope are no rows: `whole` says whether every mark became rows.
+    pub fn rows(&self) -> (Vec<Rows>, bool) {
+        const EPS: f64 = 1e-9;
+        let unit = DRAWN_FOR;
+        let (w, h) = (self.tile[0] * self.scale[0] * unit, self.tile[1] * self.scale[1] * unit);
+        // a point of the tile, y up and before the turn
+        let on_model = |p: [f64; 2]| [p[0] * self.scale[0] * unit, -p[1] * self.scale[1] * unit];
+        // (clockwise on a drawing whose y runs down is clockwise with y up too)
+        let turn = -self.angle.to_radians();
+        let (sin, cos) = turn.sin_cos();
+        let turned = |p: [f64; 2]| [p[0] * cos - p[1] * sin, p[0] * sin + p[1] * cos];
+        let mut rows = Vec::new();
+        let mut whole = true;
+        if w <= EPS || h <= EPS {
+            return (rows, self.marks.is_empty());
+        }
+        for mark in &self.marks {
+            let Mark::Line { points, colour, .. } = mark else {
+                whole = false;
+                continue;
+            };
+            for pair in points.windows(2) {
+                let (a, b) = (on_model(pair[0]), on_model(pair[1]));
+                let d = [b[0] - a[0], b[1] - a[1]];
+                let length = d[0].hypot(d[1]);
+                if length <= EPS {
+                    continue;
+                }
+                // the tiles it runs along: m across and n down, coprime
+                let along = (-6i32..=6).flat_map(|m| (-6i32..=6).map(move |n| (m, n))).filter(|&(m, n)| (m, n) != (0, 0) && gcd(m, n) == 1).find(|&(m, n)| {
+                    let t = [f64::from(m) * w, -f64::from(n) * h];
+                    (d[0] * t[1] - d[1] * t[0]).abs() <= 1e-6 * length * t[0].hypot(t[1]) && d[0] * t[0] + d[1] * t[1] > 0.0
+                });
+                let Some((m, n)) = along else {
+                    whole = false;
+                    continue;
+                };
+                let t = [f64::from(m) * w, -f64::from(n) * h];
+                let period = t[0].hypot(t[1]);
+                let unit_t = [t[0] / period, t[1] / period];
+                let left = [-unit_t[1], unit_t[0]];
+                // a second vector of the tiles that makes a cell with the first, to its left
+                let Some(s) = (-6i32..=6).flat_map(|p| (-6i32..=6).map(move |q| (p, q))).filter(|&(p, q)| (m * q - n * p).abs() == 1).map(|(p, q)| [f64::from(p) * w, -f64::from(q) * h]).find(|s| s[0] * left[0] + s[1] * left[1] > 0.0) else {
+                    whole = false;
+                    continue;
+                };
+                let offset = s[0] * left[0] + s[1] * left[1];
+                let shift = (s[0] * unit_t[0] + s[1] * unit_t[1]).rem_euclid(period);
+                let dashes = if length >= period - 1e-9 { Vec::new() } else { vec![length, period - length] };
+                rows.push(Rows { angle: unit_t[1].atan2(unit_t[0]) + turn, origin: turned(a), shift: if dashes.is_empty() { 0.0 } else { shift }, offset, dashes, colour: *colour });
+            }
+        }
+        (rows, whole)
+    }
+}
+
+fn gcd(a: i32, b: i32) -> i32 {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+#[cfg(test)]
+mod rows_tests {
+    use super::*;
+
+    fn of(key: &str) -> (Vec<Rows>, bool) {
+        hatch(key).unwrap_or_else(|| panic!("{key}")).rows()
+    }
+
+    #[test]
+    fn brickwork_is_pairs_of_lines_at_45_degrees() {
+        // NEN 47, sign 1: a tile of 3 mm with two lines down it, 0.5 mm apart, at 0.75 and 45°
+        let (rows, whole) = of("nen47-1");
+        assert!(whole);
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            // a line down the tile, turned 45° clockwise: at 225° (the same line as 45°)
+            let slope = row.angle.rem_euclid(std::f64::consts::PI);
+            assert!((slope - 45f64.to_radians()).abs() < 1e-9, "{}", row.angle.to_degrees());
+            assert!((row.offset - 0.1125).abs() < 1e-12 && row.dashes.is_empty(), "{row:?}");
+        }
+        // the two lines of a pair lie 0.5 mm of the tile apart: 0.01875 m at 1:50
+        let (a, b) = (&rows[0], &rows[1]);
+        let left = [-a.angle.sin(), a.angle.cos()];
+        let apart = (b.origin[0] - a.origin[0]) * left[0] + (b.origin[1] - a.origin[1]) * left[1];
+        assert!((apart.abs() - 0.01875).abs() < 1e-12, "{apart}");
+    }
+
+    #[test]
+    fn crossed_and_dashed_lines_and_zigzags_are_rows() {
+        // hardwood: lines down and across the tile, so crossed
+        let (rows, whole) = of("nen47-13");
+        assert!(whole && rows.len() == 2);
+        let between = (rows[0].angle - rows[1].angle).rem_euclid(std::f64::consts::PI);
+        assert!((between - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        // natural stone: a full line and a half one, which is dashes of half the tile
+        let (rows, whole) = of("nen47-9");
+        assert!(whole);
+        let dashed = rows.iter().find(|r| !r.dashes.is_empty()).expect("a dashed row");
+        let tile = 1.5 * 0.75 * DRAWN_FOR;
+        assert!((dashed.dashes[0] - tile / 2.0).abs() < 1e-12 && (dashed.dashes[1] - tile / 2.0).abs() < 1e-12, "{dashed:?}");
+        assert!(rows.iter().any(|r| r.dashes.is_empty()));
+        // a finish: a zigzag over a tile of 6 by 3, each leg from a corner to the middle of the far side
+        let (rows, whole) = of("nen47-10");
+        assert!(whole && rows.len() == 2 && rows.iter().all(|r| r.dashes.len() == 2), "{rows:?}");
+        // insulation: the two diagonals of a square tile, full lines
+        let (rows, whole) = of("nen47-17");
+        assert!(whole && rows.len() == 2 && rows.iter().all(|r| r.dashes.is_empty()));
+    }
+
+    #[test]
+    fn areas_and_dots_are_no_rows() {
+        for key in ["nen47-20", "nen47-26", "nen47-27"] {
+            let (rows, whole) = of(key);
+            assert!(rows.is_empty() && !whole, "{key}");
+        }
+        // a solid sign has no rows and lacks none: it is its fill
+        let steel = hatch("openaec-18").expect("steel");
+        assert_eq!((steel.rows(), steel.fill, steel.name(Lang::En)), ((Vec::new(), true), Some([0, 0, 0]), "steel"));
+        assert_eq!(hatch("nen47-5").map(|h| (h.fill, h.marks.len(), h.name(Lang::Nl))), Some((Some([192, 192, 192]), 0, "gewapend beton, in het werk gestort")));
+        // every hatch of the catalogue gives rows that are sound
+        for h in catalogue() {
+            for row in h.rows().0 {
+                assert!(row.offset > 0.0 && row.angle.is_finite() && row.dashes.iter().all(|d| *d > 0.0), "{}: {row:?}", h.key);
+            }
+        }
     }
 }

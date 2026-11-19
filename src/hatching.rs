@@ -23,7 +23,7 @@ pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64
 pub fn hatch_with(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64, looks: Option<&std::collections::HashMap<u64, Look>>) {
     let mut patterns = Vec::with_capacity(cut.fills.len());
     for fill in &mut cut.fills {
-        let pattern = pattern_of(model, fill.layer, fill.element, standard);
+        let pattern = fill_pattern(model, fill, standard);
         let pattern = match fill.element.and_then(|e| looks?.get(&e)) {
             Some(look) => look.apply(pattern),
             None => pattern,
@@ -168,6 +168,49 @@ pub struct Grid {
     pub shift: f64,
     pub offset: f64,
     pub dashes: Vec<f64>,
+}
+
+/// What a part of an element is made of (a layer of a modelled wall): its material's name, its
+/// hatch kind, and its own hatch where it has one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartMaterial {
+    pub name: String,
+    pub kind: HatchKind,
+    pub pattern: Option<Pattern>,
+}
+
+/// The materials of `library` as the parts of a model name them: in the library's order, each
+/// with its hatch kind and its own hatch of the hatch catalogue where it has one.
+pub fn part_materials(library: &bim_library::Library) -> Vec<PartMaterial> {
+    library.materials.iter().map(|m| PartMaterial { name: m.name(bim_library::Lang::En).to_string(), kind: m.hatch, pattern: m.catalogue_hatch().map(Pattern::from) }).collect()
+}
+
+/// The hatch of a cut face: of its part's material where the face is of a part of an element
+/// (the material's own hatch, else the hatch `standard` gives its kind), else [`pattern_of`] its
+/// element.
+pub fn fill_pattern(model: &Model, fill: &Fill, standard: DrawingStandard) -> Pattern {
+    match fill.part.and_then(|part| model.project.part_materials.get(part as usize)) {
+        Some(material) => material.pattern.clone().unwrap_or_else(|| material.kind.pattern(standard).into()),
+        None => pattern_of(model, fill.layer, fill.element, standard),
+    }
+}
+
+/// A hatch of the hatch catalogue as a drawing draws it: its lines as rows over its colour, in
+/// the model at the scale the catalogue is drawn for. Its filled areas and dots are not drawn;
+/// a hatch of those alone is its colour.
+impl From<&bim_library::Hatch> for Pattern {
+    fn from(hatch: &bim_library::Hatch) -> Self {
+        let (rows, _) = hatch.rows();
+        let line = rows.first().map_or([0, 0, 0], |row| row.colour);
+        let grids = rows.into_iter().map(|row| Grid { angle: row.angle, origin: row.origin, shift: row.shift, offset: row.offset, dashes: row.dashes }).collect();
+        Pattern { fill: hatch.fill, line, solid: false, grids, on_paper: false }
+    }
+}
+
+/// The cut patterns of the materials of `library` that have a hatch of their own in the hatch
+/// catalogue, by the English name an element's `Material` property has.
+pub fn library_patterns(library: &bim_library::Library) -> std::collections::HashMap<String, Pattern> {
+    library.materials.iter().filter_map(|m| Some((m.name(bim_library::Lang::En).to_string(), Pattern::from(m.catalogue_hatch()?)))).collect()
 }
 
 impl From<HatchPattern> for Pattern {

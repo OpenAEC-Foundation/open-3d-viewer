@@ -38,7 +38,7 @@ use bim_library::{DrawingStandard, HatchKind, HatchPattern, HatchSet, Library, L
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, canvas as canvas_widget, column, container, row, scrollable, text, text_input, Column, Space};
+use iced::widget::{button, canvas as canvas_widget, column, container, row, scrollable, text, text_input, Column};
 use iced::{Center, Color, Element, Fill, Point, Rectangle, Size, Task};
 use openaec_ui::Language;
 use std::sync::OnceLock;
@@ -181,9 +181,23 @@ pub enum Category {
     HatchSet(HatchSet),
     /// What each kind of material is drawn with under the drawing standard a source follows.
     Hatches,
+    /// The NL-SfB codes of a library, each with the types that have it.
+    Codes,
+    /// The drawing sets of a library: the rules by which a drawing of a kind is annotated.
+    DrawingSets,
+    /// The view templates of a library: what a drawing of a kind shows in a phase.
+    ViewTemplates,
+    /// The objects of a library, by their group: doors, luminaires, air terminals and the rest.
+    Objects(bim_library::object::ObjectGroup),
+    /// Every type of a library at one level of development.
+    Lod(bim_library::lod::Lod),
+    /// The libraries of the online place, to add to the project.
+    Online,
     /// A company's house style.
     Colours,
     Fonts,
+    /// The sheet formats of the house style, each with its margins and its title block.
+    Sheets,
 }
 
 /// What a category stands under in the tree.
@@ -195,6 +209,11 @@ pub enum Heading {
     Systems,
     Standard,
     Hatches,
+    Objects,
+    Lod,
+    Codes,
+    Sets,
+    Online,
     House,
 }
 
@@ -207,6 +226,11 @@ impl Heading {
             Heading::Systems => l.text("Systemen", "Systems"),
             Heading::Standard => l.text("Tekenstandaard", "Drawing standard"),
             Heading::Hatches => l.text("Arceringen", "Hatches"),
+            Heading::Codes => l.text("Coderingen", "Classification"),
+            Heading::Sets => l.text("Annotatie", "Annotation"),
+            Heading::Objects => l.text("Objecten", "Objects"),
+            Heading::Lod => l.text("Uitwerkingsniveau", "Level of development"),
+            Heading::Online => l.text("Online", "Online"),
             Heading::House => l.text("Huisstijl", "House style"),
         }
     }
@@ -237,8 +261,15 @@ impl Category {
             Category::TextStyles => l.text("Tekststijlen", "Text styles"),
             Category::HatchSet(set) => set.name(),
             Category::Hatches => l.text("Per materiaalsoort", "By kind of material"),
+            Category::Codes => "NL-SfB",
+            Category::DrawingSets => l.text("Tekeningsets", "Drawing sets"),
+            Category::ViewTemplates => l.text("Weergavesjablonen", "View templates"),
+            Category::Objects(group) => group.name(super::library::lang(l)),
+            Category::Lod(lod) => lod.name(),
+            Category::Online => l.text("Open BIM Library", "Open BIM Library"),
             Category::Colours => l.text("Kleuren", "Colours"),
             Category::Fonts => l.text("Lettertypen", "Fonts"),
+            Category::Sheets => l.text("Bladformaten", "Sheet formats"),
         }
     }
 
@@ -318,6 +349,7 @@ pub(super) enum Editor {
     BuildUp,
     Profile,
     System,
+    Code,
 }
 
 /// A library something was found in.
@@ -358,11 +390,16 @@ fn general() -> &'static Library {
     GENERAL.get_or_init(Library::starter)
 }
 
-/// The Dutch types of the INB template.
+/// The Dutch library: the types of the INB template, with them the materials and the types of
+/// one material of Project Ocondat that the template lacks, and the usual Dutch layered
+/// build-ups.
 fn inb() -> &'static Library {
     static INB: OnceLock<Library> = OnceLock::new();
-    INB.get_or_init(bim_library::inb::library)
+    INB.get_or_init(bim_library::dutch::library)
 }
+
+/// How large the tile of a catalogue hatch shows on a look.
+pub(super) const HATCH_LOOK_SCALE: f32 = HatchLook::SCALE;
 
 /// How wide a tile of the page is, and how high the look at its thing.
 pub(super) const TILE: f32 = 184.0;
@@ -467,6 +504,9 @@ impl App {
         if editor != Editor::System {
             self.system_view.picked = None;
         }
+        if editor != Editor::Code {
+            self.code_view.picked = None;
+        }
     }
 
     /// Nothing is picked to edit or to set: another source or another category shows.
@@ -475,6 +515,7 @@ impl App {
         self.buildup_view.picked = None;
         self.profile_view.picked = None;
         self.system_view.picked = None;
+        self.code_view.picked = None;
         self.standard_view.picked = None;
         self.follow_refused.clear();
     }
@@ -516,6 +557,9 @@ impl App {
         let system = &mut self.system_view;
         (system.draft, system.refused) = (None, None);
         system.picked = system.picked.take().filter(|id| library.system_type(id).is_some());
+        let code = &mut self.code_view;
+        (code.draft, code.refused, code.in_use) = (None, None, None);
+        code.picked = code.picked.take().filter(|of| library.code(of).is_some());
         // (a layer that is gone shows no fields: the face does)
         let layers = system.picked.as_deref().and_then(|id| library.system_type(id)).map_or(0, |t| t.layers.len());
         if matches!(system.part, super::systems::Part::Layer(k) if k >= layers) {
@@ -573,8 +617,15 @@ impl App {
             Category::TextStyles => self.standard.text_styles.len(),
             Category::HatchSet(set) => hatch::of(set).count(),
             Category::Hatches => HatchKind::ALL.len(),
-            Category::Colours => HOUSE_COLOURS,
-            Category::Fonts => 1,
+            Category::Codes => of(&|lib| lib.codes.len()),
+            Category::DrawingSets => of(&|lib| lib.drawing_sets.len()),
+            Category::ViewTemplates => of(&|lib| lib.view_templates.len()),
+            Category::Objects(group) => of(&|lib| lib.object_types_of(group).count()),
+            Category::Lod(lod) => of(&|lib| bim_library::remote::levels(lib)[bim_library::lod::Lod::ALL.iter().position(|l| *l == lod).unwrap_or(0)]),
+            Category::Online => self.online.index.as_ref().map_or(0, |index| index.libraries.len()),
+            Category::Colours => self.house.colours.len(),
+            Category::Fonts => 2,
+            Category::Sheets => self.house.sheets.len(),
         }
     }
 
@@ -598,6 +649,10 @@ impl App {
                 (Heading::Planar, has(counted(Role::ALL.map(Category::Planar).to_vec()))),
                 (Heading::Linear, has(counted(LinearRole::ALL.map(Category::Linear).to_vec()))),
                 (Heading::Systems, has(counted(SystemGroup::ALL.map(Category::Systems).to_vec()))),
+                (Heading::Objects, has(counted(bim_library::object::ObjectGroup::ALL.map(Category::Objects).to_vec()))),
+                (Heading::Lod, has(counted(bim_library::lod::Lod::ALL.map(Category::Lod).to_vec()))),
+                (Heading::Codes, has(counted(vec![Category::Codes]))),
+                (Heading::Sets, has(counted(vec![Category::ViewTemplates, Category::DrawingSets]))),
             ]
         };
         let steel = |tree: &mut Vec<(Heading, Vec<(Category, usize)>)>| {
@@ -625,12 +680,13 @@ impl App {
                 }
                 tree
             }
-            Source::Company => vec![(Heading::House, counted(vec![Category::Colours, Category::Fonts]))],
+            Source::Company => vec![(Heading::House, counted(vec![Category::Colours, Category::Fonts, Category::Sheets]))],
             Source::Project => {
                 let mut tree = types(true);
                 steel(&mut tree);
                 tree.push((Heading::Standard, counted(standard())));
                 tree.push(hatches(&HatchSet::ALL));
+                tree.push((Heading::Online, counted(vec![Category::Online])));
                 tree
             }
         };
@@ -778,12 +834,34 @@ impl App {
         if self.category().of_standard() && view.query.trim().chars().count() < 2 {
             return self.standard_pane(p, l);
         }
+        if self.category() == Category::Online && view.query.trim().chars().count() < 2 {
+            return self.online_pane(p, l);
+        }
+        if matches!(self.category(), Category::Objects(_)) && view.query.trim().chars().count() < 2 {
+            if let Some(shelf) = self.shown_shelf() {
+                return self.object_pane(p, l, self.shelf(shelf), shelf);
+            }
+        }
+        if self.category() == Category::ViewTemplates && view.query.trim().chars().count() < 2 {
+            if let Some(library) = self.shown_shelf().map(|shelf| self.shelf(shelf)) {
+                return self.view_template_pane(p, l, library);
+            }
+        }
+        if self.category() == Category::DrawingSets && view.query.trim().chars().count() < 2 {
+            if let Some(library) = self.shown_shelf().map(|shelf| self.shelf(shelf)) {
+                return self.drawing_set_pane(p, l, library);
+            }
+        }
+        if view.source == Source::Company && view.query.trim().chars().count() < 2 {
+            return self.house_pane(p, l);
+        }
         if view.source == Source::Project {
             return match () {
                 _ if self.material_view.picked.is_some() => self.material_pane(p, l),
                 _ if self.profile_view.picked.is_some() => self.profile_pane(p, l),
                 _ if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
                 _ if self.system_view.picked.is_some() => self.system_pane(p, l),
+                _ if self.code_view.picked.is_some() => self.code_pane(p, l),
                 _ => hint(l.text("Klik een tegel om hem te bewerken. De laatste tegel maakt een nieuwe.", "Click a tile to edit it. The last tile makes a new one.")),
             };
         }
@@ -815,7 +893,7 @@ impl App {
             }
             Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| {
                 let make = l.text("Maak er een balktype van in het project", "Make a beam type of it in the project");
-                (s.designation.clone(), profile_detail(p, &s.shape, general().material("steel"), Some(s.series.standard())), Some((make, Message::Profile(ProfileMessage::FromSteel(designation.clone())))))
+                (s.designation.clone(), profile_detail(p, &s.shape, general().material("steel"), Some(&s.source())), Some((make, Message::Profile(ProfileMessage::FromSteel(designation.clone())))))
             }),
             Item::Setting(_) => None,
             // (a hatch is the catalogue's: there is no copy of it to edit yet)
@@ -909,6 +987,27 @@ impl App {
                 }
                 tiles
             }
+            (Category::DrawingSets, Some(_), Some(library)) => self.drawing_set_tiles(p, l, library),
+            (Category::Objects(group), Some(_), Some(library)) => self.object_tiles(p, l, library, group),
+            (Category::Lod(lod), Some(_), Some(library)) => self.lod_tiles(p, l, library, lod),
+            (Category::Online, _, _) => self.online_tiles(p, l),
+            (Category::ViewTemplates, Some(_), Some(library)) => self.view_template_tiles(p, l, library),
+            (Category::Codes, Some(_), Some(library)) => {
+                let mut tiles: Vec<Element<'_, Message>> = library
+                    .codes
+                    .iter()
+                    .map(|code| {
+                        let (on, press) = if project { (self.code_view.picked.as_deref() == Some(code.code.as_str()), Some(Message::Code(super::codes::CodeMessage::Pick(code.code.clone())))) } else { (false, None) };
+                        let look = container(text(code.code.clone()).size(26).color(p.text)).width(Fill).align_x(Center);
+                        let about = format!("{}: {}", l.text("typen", "types"), library.coded(&code.code, false).len());
+                        tile(p, look.into(), code.name(lang).to_string(), about, on, press)
+                    })
+                    .collect();
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Code", "+ Code"), Message::Code(super::codes::CodeMessage::Add)));
+                }
+                tiles
+            }
             (Category::HatchSet(set), _, _) => hatch::of(set)
                 .map(|h| {
                     let item = Item::Hatch(h.key.clone());
@@ -927,25 +1026,9 @@ impl App {
                     })
                     .collect()
             }
-            (Category::Colours, _, _) => {
-                let rgb = |c: Color| [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8];
-                let house: [(Color, &'static str); HOUSE_COLOURS] = [
-                    (p.accent, l.text("accent", "accent")),
-                    (p.text, l.text("tekst", "text")),
-                    (p.text_secondary, l.text("tweede tekst", "secondary text")),
-                    (p.border, l.text("rand", "border")),
-                    (p.surface, l.text("vlak", "surface")),
-                    (p.bg, l.text("achtergrond", "background")),
-                ];
-                house
-                    .into_iter()
-                    .map(|(colour, role)| {
-                        let swatch = container(Space::new().width(Fill).height(LOOK - 8.0)).style(move |_| container::Style { background: Some(colour.into()), border: iced::Border { color: p.border, width: 1.0, radius: 3.0.into() }, ..Default::default() });
-                        tile(p, swatch.into(), super::materials::hex(rgb(colour)), role.to_string(), false, None)
-                    })
-                    .collect()
-            }
-            (Category::Fonts, _, _) => vec![tile(p, container(text("Aa Bb 123").size(26).color(p.text)).width(Fill).align_x(Center).into(), "Inter".to_string(), l.text("het lettertype van de suite", "the suite's font").to_string(), false, None)],
+            (Category::Colours, _, _) => self.house_colour_tiles(p, l),
+            (Category::Fonts, _, _) => self.house_font_tiles(p, l),
+            (Category::Sheets, _, _) => self.house_sheet_tiles(p),
             (category, _, _) if category.of_standard() => self.standard_tiles(p, l, category),
             _ => Vec::new(),
         }
@@ -1000,6 +1083,12 @@ impl App {
         let nodes = ifcx::nodes(library);
         let node = |path: String| nodes.iter().find(|n| n["path"] == path.as_str()).cloned();
         match category {
+            Category::Codes => {
+                for c in &library.codes {
+                    let (on, press) = if project { (self.code_view.picked.as_deref() == Some(c.code.as_str()), Some(Message::Code(super::codes::CodeMessage::Pick(c.code.clone())))) } else { (false, None) };
+                    code.extend(node(bim_library::nlsfb::code_path(&c.code)).map(|node| (super::codes::named(library, &c.code, lang), press, on, node)));
+                }
+            }
             Category::Materials => {
                 for m in &library.materials {
                     let item = Item::Material(shelf, m.key.clone());
@@ -1162,7 +1251,6 @@ impl App {
 }
 
 /// How many colours a house style shows.
-const HOUSE_COLOURS: usize = 6;
 
 /// A node as text: indented as JSON is, but a list of numbers, of texts or of points stays on one
 /// line, so a colour or a line reads as one.
@@ -1348,7 +1436,8 @@ mod tests {
         // the general library: materials, the planar elements together, the linear ones with the
         // steel table, the systems, and the hatches: the suite's own, and those of its standard
         let general = app.library_tree();
-        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Hatches]);
+        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Objects, Heading::Lod, Heading::Codes, Heading::Sets, Heading::Hatches]);
+        assert_eq!(general.iter().find(|(heading, _)| *heading == Heading::Codes).map(|(_, list)| list.clone()), Some(vec![(Category::Codes, Library::starter().codes.len())]));
         assert_eq!(categories(&general, Heading::Planar), Role::ALL.map(Category::Planar));
         assert_eq!(general[0].1, [(Category::Materials, Library::starter().materials.len())]);
         assert!(categories(&general, Heading::Linear).starts_with(&[Category::Linear(LinearRole::Column), Category::Linear(LinearRole::Beam)]));
@@ -1373,7 +1462,7 @@ mod tests {
         assert_eq!((app.category(), app.shown_hatches().1), (Category::Kinds, "NEN 47"));
         // a company: its house style; the project: its own library and its standard
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Company));
-        assert_eq!(app.library_tree(), [(Heading::House, vec![(Category::Colours, 6), (Category::Fonts, 1)])]);
+        assert_eq!(app.library_tree(), [(Heading::House, vec![(Category::Colours, 6), (Category::Fonts, 2), (Category::Sheets, 5)])]);
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
         app.library.materials.truncate(2);
         let project = app.library_tree();
@@ -1390,7 +1479,7 @@ mod tests {
             let messages: Vec<Message> = {
                 let palette = app.theme.palette();
                 let part = if pane { app.libraries_pane(palette, l) } else { app.libraries_page(palette, l) };
-                let mut ui = crate::app::test_ui_of(iced::Size::new(if pane { 260.0 } else { 1200.0 }, 1400.0), part);
+                let mut ui = crate::app::test_ui_of(iced::Size::new(if pane { 260.0 } else { 1200.0 }, 2600.0), part);
                 ui.click(label).unwrap_or_else(|_| panic!("no {label}"));
                 ui.into_messages().collect()
             };
@@ -1495,12 +1584,12 @@ mod tests {
         // the Netherlands: both sets, and what each kind of material is drawn with
         let _ = app.libraries_update(LibrariesMessage::Country(Country::Netherlands));
         let hatches = app.library_tree().into_iter().find(|(heading, _)| *heading == Heading::Hatches).map(|(_, list)| list);
-        assert_eq!(hatches, Some(vec![(Category::HatchSet(HatchSet::Nen47), 23), (Category::HatchSet(HatchSet::OpenAec), 72), (Category::Hatches, 9)]));
+        assert_eq!(hatches, Some(vec![(Category::HatchSet(HatchSet::Nen47), 27), (Category::HatchSet(HatchSet::OpenAec), 76), (Category::Hatches, 9)]));
         // a tile per sign of NEN 47; a click looks at it in the right pane
         let _ = app.libraries_update(LibrariesMessage::Category(Category::HatchSet(HatchSet::Nen47)));
         let messages: Vec<Message> = {
             let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 3000.0), app.libraries_page(palette, l));
-            assert!(page.find("NEN 47").is_ok() && page.find("Country · Netherlands · 23").is_ok() && page.find("brickwork").is_ok() && page.find("NEN 47 · 12").is_ok());
+            assert!(page.find("NEN 47").is_ok() && page.find("Country · Netherlands · 27").is_ok() && page.find("brickwork").is_ok() && page.find("NEN 47 · 12").is_ok());
             page.click("softwood").expect("the tile of sign 12");
             page.into_messages().collect()
         };
@@ -1528,7 +1617,7 @@ mod tests {
         // as code: a node per hatch, the one looked at marked, and first on the page
         let _ = app.libraries_update(LibrariesMessage::Page(Page::Code));
         let code = app.category_code(l, Category::HatchSet(HatchSet::OpenAec));
-        assert_eq!((code.len(), code.iter().filter(|(_, _, on, _)| *on).count()), (72, 1));
+        assert_eq!((code.len(), code.iter().filter(|(_, _, on, _)| *on).count()), (76, 1));
         let (name, press, _, node) = code.iter().find(|(_, _, on, _)| *on).expect("the one looked at");
         assert_eq!((name.as_str(), node["path"].as_str(), node["attributes"]["openaec::hatch"]["key"].as_str()), ("spruce", Some(hatch::hatch_path("openaec-12-spruce").as_str()), Some("openaec-12-spruce")));
         assert!(matches!(press, Some(Message::Libraries(LibrariesMessage::Look(Item::Hatch(key)))) if key == "openaec-12-spruce"));

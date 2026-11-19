@@ -346,6 +346,80 @@ mod tests {
     }
 
     #[test]
+    fn a_wall_of_one_material_is_cut_with_that_materials_own_hatch() {
+        let mut app = project();
+        let timber = app.library.buildups.iter().find(|b| b.layers.len() == 1 && b.layers[0].material == "timber" && b.role == bim_library::Role::Wall).expect("a timber wall").id.clone();
+        let a = app.add_element("Wall", None, wall(&app, 0.0, &timber)).unwrap();
+        let pattern = |app: &App| {
+            let shown = app.modeller.shown.and_then(|id| app.models.iter().find(|e| e.model.id == id)).expect("the model shows").model.clone();
+            let layer = shown.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == a.0)).expect("the wall's layer");
+            crate::hatching::pattern_of(&shown, layer, Some(a.0), bim_library::DrawingStandard::Nen47)
+        };
+        // timber starts with the softwood sign: lines at 45°, 1.5 mm of the tile apart at 0.75
+        let softwood = pattern(&app);
+        assert_eq!((softwood.grids.len(), softwood.fill), (1, Some([230, 190, 155])));
+        assert!((softwood.grids[0].offset - 1.5 * 0.75 * 0.05).abs() < 1e-12);
+        // given the hardwood sign it is crossed; without a hatch of its own, its hatch kind
+        let _ = app.update(Message::Material(MaterialMessage::Pick("timber".into())));
+        let _ = app.update(Message::Material(MaterialMessage::Sign(Some("openaec-13".into()))));
+        assert_eq!(pattern(&app).grids.len(), 2);
+        let _ = app.update(Message::Material(MaterialMessage::Sign(None)));
+        assert_eq!(pattern(&app), bim_library::HatchKind::Timber.pattern(bim_library::DrawingStandard::Nen47).into());
+    }
+
+    #[test]
+    fn a_layered_wall_is_cut_layer_by_layer_each_with_its_materials_hatch() {
+        let mut app = project();
+        let a = app.add_element("Wall", None, wall(&app, 0.0, "wall.cavity-pir-360")).unwrap();
+        let shown = app.modeller.shown.and_then(|id| app.models.iter().find(|e| e.model.id == id)).expect("the model shows").model.clone();
+        // a plan at 1 m: the brick, the insulation and the sand-lime brick are each a face (the
+        // cavity is no solid), and each is hatched as its material
+        let mut cut = crate::drawing::cut_at(&shown, crate::drawing::Shown::all(), 1.0);
+        let of_wall: Vec<&crate::drawing::Fill> = cut.fills.iter().filter(|f| f.element == Some(a.0)).collect();
+        assert_eq!(of_wall.len(), 3, "a face per solid layer");
+        let material = |fill: &crate::drawing::Fill| shown.project.part_materials[fill.part.expect("a part") as usize].name.clone();
+        let mut names: Vec<String> = of_wall.iter().map(|f| material(f)).collect();
+        names.sort();
+        assert_eq!(names, ["PIR insulation", "brickwork", "sand-lime brick"]);
+        let pattern = |name: &str| crate::hatching::fill_pattern(&shown, of_wall.iter().find(|f| material(f) == name).unwrap(), bim_library::DrawingStandard::Nen47);
+        // brickwork: the pairs of lines of its sign; PIR: the crossed lines of insulation in its own colour
+        assert_eq!((pattern("brickwork").grids.len(), pattern("PIR insulation").grids.len(), pattern("PIR insulation").fill), (2, 2, Some([245, 235, 195])));
+        assert_ne!(pattern("brickwork"), pattern("sand-lime brick"));
+        // hatched, every face has lines
+        crate::hatching::hatch(&mut cut, &shown, bim_library::DrawingStandard::Nen47, 50.0);
+        assert!(cut.fills.iter().filter(|f| f.element == Some(a.0)).all(|f| !f.rows.is_empty() && f.look.is_some()));
+        // a wall of one material is one face, as before
+        let concrete = app.library.buildups.iter().find(|b| b.layers.len() == 1 && b.layers[0].material == "concrete" && b.role == bim_library::Role::Wall).unwrap().id.clone();
+        let b = app.add_element("Wall", None, wall(&app, 5.0, &concrete)).unwrap();
+        let shown = app.modeller.shown.and_then(|id| app.models.iter().find(|e| e.model.id == id)).unwrap().model.clone();
+        let cut = crate::drawing::cut_at(&shown, crate::drawing::Shown::all(), 1.0);
+        assert_eq!(cut.fills.iter().filter(|f| f.element == Some(b.0)).map(|f| f.part).collect::<Vec<_>>(), [None]);
+    }
+
+    #[test]
+    fn an_element_has_the_nl_sfb_code_of_its_type() {
+        let mut app = project();
+        let a = app.add_element("Wall", None, wall(&app, 0.0, "wall.cavity-pir-360")).unwrap();
+        let b = app.add_element("Wall", None, wall(&app, 3.0, "wall.metal-stud-75")).unwrap();
+        let code = |app: &App, id: ElementId| {
+            let shown = app.modeller.shown.and_then(|at| app.models.iter().find(|e| e.model.id == at)).expect("the model shows").model.clone();
+            shown.element_props(id.0).into_iter().find(|(k, _)| k == "NL-SfB").map(|(_, v)| v)
+        };
+        assert_eq!((code(&app, a).as_deref(), code(&app, b).as_deref()), (Some("21"), Some("21")));
+        // the partition's type is given the code of an internal wall: its elements have it
+        let _ = app.update(Message::BuildUp(BuildUpMessage::Pick("wall.metal-stud-75".into())));
+        let _ = app.update(Message::BuildUp(BuildUpMessage::Coded(Some("22".into()))));
+        assert_eq!((code(&app, a).as_deref(), code(&app, b).as_deref()), (Some("21"), Some("22")));
+        // and the file has it as IFCX has a classification
+        let shown = app.modeller.shown.and_then(|at| app.models.iter().find(|e| e.model.id == at)).unwrap().model.clone();
+        let mut out = Vec::new();
+        crate::export::ifcx::write(&shown, &app.document, "codes.ifcx", &mut out).unwrap();
+        let text = serde_json::to_string(&serde_json::from_slice::<serde_json::Value>(&out).unwrap()).unwrap();
+        assert!(text.contains(r#""nlsfb::class":{"code":"22","uri":"https://identifier.buildingsmart.org/uri/nlsfb/nlsfb2005/2.2/class/22"}"#), "the partition's node has its code");
+        assert!(!text.contains("bsi::ifc::prop::NL-SfB"));
+    }
+
+    #[test]
     fn systems_follow_their_type() {
         let mut app = project();
         let line = |y: f64| SystemDef { start: DVec2::new(0.0, y), end: DVec2::new(6.0, y), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };

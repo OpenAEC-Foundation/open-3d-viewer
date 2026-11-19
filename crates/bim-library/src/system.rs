@@ -258,6 +258,9 @@ pub struct SystemType {
     /// A lying system's face, this high above its level (metres).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lying: Option<f64>,
+    /// An NL-SfB code of its own, in place of the rule's ("21.22").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 /// Whether a grid fits members `width` wide: positive bays and rows, wider than the members.
@@ -444,7 +447,7 @@ pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
     let glass = || Panels::new("glass", 0.024);
-    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None };
+    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, code: None };
     // aluminium and PVC frames are mitred at their corners
     let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
     // boards of `material` laid edge to edge, `bay` wide and `row` high; membranes come in rolls
@@ -504,6 +507,7 @@ pub fn starter() -> Vec<SystemType> {
     };
     let hollow_core = |depth: f64| SystemType {
         lying: Some(3.0),
+        code: None,
         ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, 6.0, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))
     };
     let mut types = vec![

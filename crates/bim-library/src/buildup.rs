@@ -88,11 +88,14 @@ pub struct BuildUp {
     /// file keeps the name it had there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// An NL-SfB code of its own, in place of the rule's ("21.22").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl BuildUp {
     pub fn new(id: &str, role: Role, layers: Vec<Layer>) -> Self {
-        Self { id: id.into(), role, layers, name: None }
+        Self { id: id.into(), role, layers, name: None, code: None }
     }
 
     /// The total thickness.

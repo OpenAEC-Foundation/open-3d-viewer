@@ -267,6 +267,8 @@ pub struct Step {
     pub library: Option<Arc<bim_library::Library>>,
     /// The project's drawing standard, kept as the library is.
     pub standard: Option<Arc<bim_library::drawing::Standard>>,
+    /// The house style the project follows, kept as the library is.
+    pub house: Option<Arc<bim_library::house::HouseStyle>>,
 }
 
 impl App {
@@ -285,6 +287,8 @@ impl App {
                 }
             } else if let Some(standards) = definition.get(crate::export::ifcx::STANDARDS) {
                 self.adopt_standard(standards);
+            } else if let Some(style) = definition.get(crate::export::ifcx::HOUSE) {
+                self.adopt_house(style);
             } else if let Some(rooms) = definition.get(crate::export::ifcx::ROOMS) {
                 self.modeller.rooms = serde_json::from_value(rooms.clone()).unwrap_or_default();
             } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
@@ -711,15 +715,22 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let mut layers = viewer_layers(&self.modeller.model, &levels, &self.library);
+        let (mut layers, parts) = viewer_layers(&self.modeller.model, &levels, &self.library);
         // the spaces its walls close in stand beside its elements, on a layer of their own
         layers.extend(spaces::space_layer(&self.spaces(), &levels));
         let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
+        // a material with a hatch of its own in the hatch catalogue is cut with it
+        built.project.cut_patterns = crate::hatching::library_patterns(&self.library);
+        // an element of several materials is cut a face per part, each hatched as its material
+        built.project.parts = parts;
+        built.project.part_materials = crate::hatching::part_materials(&self.library);
         // and its drawing standard: the kinds of drawing and their settings, a node each
         built.project.types.extend(bim_library::drawing::nodes(&self.standard));
+        // and the house style it follows
+        built.project.types.push(bim_library::house::node(&self.house));
         // and the names given to its spaces
         if !self.modeller.rooms.is_empty() {
             built.project.types.push(serde_json::json!({ "path": "openaec-rooms", "attributes": { crate::export::ifcx::ROOMS: self.modeller.rooms } }));
@@ -957,13 +968,21 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// `levels` names the levels by path.
 /// A part of a layered element has the colour of its layer's material in `library`.
 pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
-    Model::new(PathBuf::from("model.ifcx"), "IFCX", viewer_layers(model, levels, library))
+    let (layers, parts) = viewer_layers(model, levels, library);
+    let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
+    built.project.parts = parts;
+    built.project.part_materials = crate::hatching::part_materials(library);
+    built.project.cut_patterns = crate::hatching::library_patterns(library);
+    built
 }
 
-/// The layers of the model shown: one per class, each element with its properties.
-fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Vec<Layer> {
+/// The layers of the model shown: one per class, each element with its properties; and the
+/// parts of the elements that are of several materials (see `ProjectData::parts`): the layer,
+/// the first index and the index count of each part, and its material in the library's order.
+fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> (Vec<Layer>, Vec<(usize, u32, u32, u32)>) {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
+    let mut of_parts: Vec<(usize, u32, u32, u32)> = Vec::new();
     for element in model.iter() {
         let Ok(parts) = model.evaluate(element.id) else { continue };
         if parts.is_empty() {
@@ -979,8 +998,11 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
         };
         let layer = &mut layers[k];
         let first = layer.indices.len() as u32;
+        // of several materials: each part is told from the others where it is cut
+        let several = parts.iter().filter_map(|p| p.material.as_deref()).collect::<std::collections::HashSet<_>>().len() > 1;
         for part in &parts {
             let Ok(mesh) = Mesh::of(&part.solid) else { continue };
+            let part_first = layer.indices.len() as u32;
             // tile-local f64 to the scene's f32, through the tile origin in f64
             let origin = grid.origin(part.tile);
             let base = (layer.positions.len() / 3) as u32;
@@ -993,13 +1015,40 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
                 layer.normals.extend(n.as_vec3().to_array());
             }
             layer.indices.extend(mesh.indices.iter().map(|i| i + base));
+            if let Some(material) = part.material.as_deref().filter(|_| several).and_then(|key| library.materials.iter().position(|m| m.key == key)) {
+                of_parts.push((k, part_first, layer.indices.len() as u32 - part_first, material as u32));
+            }
         }
         let count = layer.indices.len() as u32 - first;
         layer.elements.push((element.id.0, first, count));
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
         layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
-    layers
+    of_parts.sort_unstable();
+    (layers, of_parts)
+}
+
+/// The NL-SfB code of an element: of its build-up, its linear type (found by the name its
+/// profile has) or its system type as the library has it; of a type the library lacks, the
+/// rule's for its layers. None for what has no type.
+fn nlsfb_of(e: &Element, library: &bim_library::Library) -> Option<String> {
+    match &e.shape {
+        Shape::Planar(p) => {
+            let b = p.build_up.as_ref()?;
+            let role = match p.form {
+                PlanarForm::Wall { .. } => bim_library::Role::Wall,
+                _ => library.buildup(&b.id).map_or(bim_library::Role::Floor, |of| of.role),
+            };
+            let of = library.buildup(&b.id).cloned().unwrap_or_else(|| bim_library::BuildUp::new(&b.id, role, b.layers.iter().map(|l| bim_library::Layer::new(&l.material, l.thickness)).collect()));
+            Some(of.nlsfb(&library.materials))
+        }
+        Shape::Linear(l) => {
+            let name = l.profile.name();
+            library.linear_types.iter().find(|t| library.linear_name(&t.id, bim_library::Lang::En).as_deref() == Some(name.as_str())).map(|t| t.nlsfb())
+        }
+        Shape::System(s) => library.system_type(&s.system_type.as_ref()?.id).map(|t| t.nlsfb()),
+        _ => None,
+    }
 }
 
 /// An element's properties as a flat JSON object.
@@ -1064,6 +1113,14 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Primary", c.primary.0.to_string());
             put("Secondary", c.secondary.0.to_string());
         }
+    }
+    // its NL-SfB code: that of its type in the library, else the rule's for what it is
+    if let Some(code) = nlsfb_of(e, library) {
+        put(crate::export::ifc::NLSFB, code);
+    }
+    // what it is made of, when it is of one material: the cut of it takes that material's hatch
+    if let Some(key) = parts.first().and_then(|p| p.material.as_deref()).filter(|key| parts.iter().all(|p| p.material.as_deref() == Some(key))) {
+        put("Material", library.material(key).map_or(key, |m| m.name(bim_library::Lang::En)).to_string());
     }
     let volume: f64 = parts.iter().map(|p| p.solid.volume()).sum();
     if volume > 0.0 {

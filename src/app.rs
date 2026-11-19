@@ -44,6 +44,12 @@ mod later;
 mod precut;
 mod levels;
 pub mod buildups;
+pub mod codes;
+pub mod drawing_sets;
+pub mod view_templates;
+pub mod house;
+pub mod objects;
+pub mod online;
 pub mod libraries;
 pub mod library;
 pub mod materials;
@@ -386,6 +392,15 @@ pub struct App {
     pub buildup_view: buildups::BuildUpView,
     /// The material edited on the Library page, and what is being typed of it.
     pub material_view: materials::MaterialView,
+    pub code_view: codes::CodeView,
+    pub object_view: objects::ObjectView,
+    /// The online libraries: the place, its index once fetched, and what was added from it.
+    pub online: online::OnlineView,
+    pub drawing_set_view: drawing_sets::DrawingSetView,
+    pub view_template_view: view_templates::ViewTemplateView,
+    /// The house style the project follows: how its sheets and documents look.
+    pub house: bim_library::house::HouseStyle,
+    pub house_view: house::HouseView,
     /// The linear type edited on the Library page, the role whose types show and what of the
     /// steel table shows.
     pub profile_view: profiles::ProfileView,
@@ -575,6 +590,12 @@ pub enum Message {
     BuildUp(buildups::BuildUpMessage),
     /// The materials of the project on the Library page: picking and editing one.
     Material(materials::MaterialMessage),
+    Code(codes::CodeMessage),
+    Object(objects::ObjectMessage),
+    Online(online::OnlineMessage),
+    DrawingSet(drawing_sets::DrawingSetMessage),
+    ViewTemplate(view_templates::ViewTemplateMessage),
+    House(house::HouseMessage),
     /// The linear types of the project on the Library page: picking one and editing its profile.
     Profile(profiles::ProfileMessage),
     /// The system types of the project on the Library page: picking one and editing its parts.
@@ -1074,6 +1095,13 @@ impl Default for App {
             standard_view: standards::StandardView::default(),
             buildup_view: buildups::BuildUpView::default(),
             material_view: materials::MaterialView::default(),
+            code_view: codes::CodeView::default(),
+            object_view: objects::ObjectView::default(),
+            online: online::OnlineView::default(),
+            drawing_set_view: drawing_sets::DrawingSetView::default(),
+            view_template_view: view_templates::ViewTemplateView::default(),
+            house: bim_library::house::HouseStyle::starter(),
+            house_view: house::HouseView::default(),
             profile_view: profiles::ProfileView::default(),
             system_view: systems::SystemView::default(),
             follow_refused: Vec::new(),
@@ -2341,6 +2369,12 @@ impl App {
             Message::Standard(message) => return self.standard_update(message),
             Message::BuildUp(message) => return self.buildup_update(message),
             Message::Material(message) => return self.material_update(message),
+            Message::Code(message) => return self.code_update(message),
+            Message::Object(message) => self.object_update(message),
+            Message::Online(message) => return self.online_update(message),
+            Message::DrawingSet(message) => self.drawing_set_update(message),
+            Message::ViewTemplate(message) => self.view_template_update(message),
+            Message::House(message) => return self.house_update(message),
             Message::Profile(message) => return self.profile_update(message),
             Message::SystemType(message) => return self.system_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]

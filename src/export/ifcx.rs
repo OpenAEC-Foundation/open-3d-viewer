@@ -35,7 +35,7 @@ impl Writer for IfcxWriter {
 }
 
 /// Property keys that are written as their own attributes, not as properties.
-const OWN_KEYS: [&str; 9] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION, DERIVED];
+const OWN_KEYS: [&str; 10] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION, DERIVED, super::ifc::NLSFB];
 
 /// The property of a modelled element that holds its definitions (a JSON array: the element's
 /// and its connections'); written as the node's `openaec::element` attribute, from which the
@@ -61,6 +61,8 @@ pub const LIBRARY: &str = "openaec::library";
 /// The key the reader gives a file's drawing standard back under, among the project's
 /// definitions: the nodes of its kinds of drawing and their settings (see `bim_library::drawing`).
 pub const STANDARDS: &str = "openaec::drawing::standards";
+/// The key under which a file's house style comes back, as the reader read it.
+pub const HOUSE: &str = "openaec::housestyle::held";
 
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.
@@ -147,6 +149,10 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             attributes.insert("bsi::ifc::prop::Name".into(), name.clone().into());
             for (key, value) in props.iter().filter(|(k, _)| !OWN_KEYS.contains(&k.as_str())) {
                 attributes.insert(format!("bsi::ifc::prop::{key}"), value.clone().into());
+            }
+            // its NL-SfB code as IFCX has it, not as a property
+            if let Some(code) = prop(super::ifc::NLSFB).filter(|code| bim_library::nlsfb::valid(code)) {
+                attributes.insert(bim_library::nlsfb::CLASS.into(), bim_library::nlsfb::class_value(code));
             }
             if let Some(definition) = prop(DEFINITION).and_then(|d| serde_json::from_str::<Value>(d).ok()) {
                 attributes.insert("openaec::element".into(), definition);

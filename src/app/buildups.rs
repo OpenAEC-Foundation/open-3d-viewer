@@ -34,6 +34,8 @@ pub enum BuildUpMessage {
     Remove,
     /// A name of its own, in place of the rule's; empty for the rule's.
     Named(String),
+    /// An NL-SfB code of its own, one of the library's; none for the rule's.
+    Coded(Option<String>),
     /// The material (its key) of a layer.
     Material(usize, String),
     /// Typed as a layer's thickness in millimetres.
@@ -175,6 +177,7 @@ impl App {
                 Some(Ok(()))
             }
             BuildUpMessage::Named(name) => picked.as_deref().map(|id| change(&mut self.library, id, |b| b.name = (!name.trim().is_empty()).then_some(name))),
+            BuildUpMessage::Coded(code) => picked.as_deref().map(|id| change(&mut self.library, id, |b| b.code = code)),
             BuildUpMessage::Material(layer, key) => picked.as_deref().map(|id| {
                 change(&mut self.library, id, |b| {
                     if let Some(layer) = b.layers.get_mut(layer) {
@@ -315,6 +318,7 @@ impl App {
             layers,
             text(total).size(11).color(p.text_secondary),
             own,
+            super::codes::picker(p, l, library, b.rule_code(&library.materials), b.code.as_deref(), BuildUpMessage::Coded),
             row![act(l.text("Dupliceren", "Duplicate"), BuildUpMessage::Duplicate), act(l.text("Verwijderen", "Remove"), BuildUpMessage::Remove), Space::new().width(Fill)].spacing(4),
         ]
         .push(refused)

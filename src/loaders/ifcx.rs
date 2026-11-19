@@ -692,6 +692,10 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         if let Some(standards) = bim_library::drawing::held(&nodes) {
             definitions.push(serde_json::json!({ crate::export::ifcx::STANDARDS: standards }));
         }
+        // and the house style it follows
+        if let Some(style) = bim_library::house::read(&serde_json::json!({ "data": nodes })).ok().and_then(|styles| styles.into_iter().next()) {
+            definitions.push(serde_json::json!({ crate::export::ifcx::HOUSE: style }));
+        }
     }
     // and the names given to its spaces
     if let Some(rooms) = flat.values().find_map(|node| node.attributes.get(crate::export::ifcx::ROOMS)) {

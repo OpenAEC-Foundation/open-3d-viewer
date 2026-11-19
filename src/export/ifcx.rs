@@ -4,6 +4,10 @@
 //! plans, sections, elevations and sheets as `o3v::` nodes, which the IFCX reader gives back to
 //! the document. Coordinates are the model's (metres, Z up); an element under a storey is
 //! placed relative to it, as the storey's transform moves its children.
+//!
+//! Saving authors a new Suite project header (including its version, author and time).
+//! It does not preserve the original source envelope. In contrast, saving the parsed
+//! source document with `ifcx_core::parser` retains absent or explicitly empty metadata.
 
 use super::Writer;
 use crate::document::{uuid, Document};
@@ -426,5 +430,63 @@ mod tests {
         let bytes = crate::export::to_bytes(&model, &Document::from_model(&model), "house.ifcx").unwrap();
         let file: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(file["header"]["ifcxVersion"], "ifcx_alpha");
+    }
+
+    #[test]
+    fn a_model_opened_with_minimal_metadata_can_be_saved_and_reopened() {
+        let model = house();
+        let mut document = Document::from_model(&model);
+        let ground = document.levels()[0].path.clone();
+        let plan = document.add_plan(&ground).unwrap();
+        document.add_dimension(&plan, [0.0, 0.0], [8.0, 0.0]);
+        let original = crate::export::to_bytes(&model, &document, "house.ifcx").unwrap();
+        let original: Value = serde_json::from_slice(&original).unwrap();
+        for header in [None, Some(json!({})), Some(json!({"author": ""})), Some(json!({"ifcxVersion": "ifcx_alpha"}))] {
+            let mut source = original.clone();
+            match header {
+                Some(header) => { source["header"] = header; }
+                None => { source.as_object_mut().unwrap().remove("header"); }
+            }
+            let opened = reopen(serde_json::to_vec(&source).unwrap());
+            assert_eq!(opened.triangle_count(), model.triangle_count());
+            let opened_document = Document::from_model(&opened);
+            let saved = crate::export::to_bytes(&opened, &opened_document, "saved.ifcx").unwrap();
+            let output: Value = serde_json::from_slice(&saved).unwrap();
+            // Suite exports its scene as a new project, with its own metadata. This is
+            // distinct from saving the original ifcx-core document without modification.
+            assert_eq!(output["header"]["id"], "saved.ifcx");
+            assert_eq!(output["header"]["ifcxVersion"], "ifcx_alpha");
+            assert_eq!(output["header"]["dataVersion"], "1.0.0");
+            assert_eq!(output["header"]["author"], format!("Open BIM Suite {}", env!("CARGO_PKG_VERSION")));
+            assert!(output["header"]["timestamp"].as_str().unwrap().ends_with('Z'));
+            ifcx_core::parser::from_slice(&saved).expect("Suite output is readable by the shared core");
+            let reopened = reopen(saved);
+            assert_eq!(reopened.triangle_count(), model.triangle_count());
+            assert_eq!(reopened.project.levels, opened.project.levels);
+            assert!(reopened.props.values().any(|p| p.contains("\"FireRating\":\"R60\"")));
+            let back_document = Document::from_model(&reopened);
+            assert_eq!(back_document.plan(&plan).expect("saved plan").dimensions.len(), 1);
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_headerless_file_can_be_opened_saved_and_reopened_on_disk() {
+        let model = house();
+        let initial = crate::export::to_bytes(&model, &Document::from_model(&model), "house.ifcx").unwrap();
+        let mut input: Value = serde_json::from_slice(&initial).unwrap();
+        input.as_object_mut().unwrap().remove("header");
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.ifcx");
+        std::fs::write(&source, serde_json::to_vec(&input).unwrap()).unwrap();
+        let opened = crate::loaders::load_with(&Source::File(source), &Progress::default()).unwrap();
+        let destination = directory.path().join("saved.ifcx");
+        crate::export::save(&opened, &Document::from_model(&opened), &destination, false).unwrap();
+        let saved = ifcx_core::parser::from_file(&destination).expect("the saved file is valid core input");
+        assert_eq!(serde_json::to_value(saved).unwrap()["header"]["id"], "saved.ifcx");
+        let reopened = crate::loaders::load_with(&Source::File(destination), &Progress::default()).unwrap();
+        assert_eq!(reopened.triangle_count(), model.triangle_count());
+        assert_eq!(reopened.project.levels, opened.project.levels);
+        assert!(reopened.props.values().any(|p| p.contains("\"FireRating\":\"R60\"")));
     }
 }

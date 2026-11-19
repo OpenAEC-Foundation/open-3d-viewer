@@ -89,7 +89,7 @@ pub(super) fn geometric<'a>(model: &'a Model, stands: Framed<'a>, end: usize, ti
     let p = stands.ends[end];
     let mut runs = None;
     for e in model.iter().filter(|e| e.id != stands.id) {
-        let Some(other) = Framed::of(model, e, tile) else { continue };
+        let Some(other) = Framed::of(model, e, tile).filter(|o| o.beside(&stands)) else { continue };
         if other.ends.iter().any(|q| (*q - p).length() <= JOIN_TOLERANCE) {
             return None;
         }
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn frames_that_do_not_meet_in_a_simple_t_junction_are_left_as_they_are() {
-        let others: [Vec<Shape>; 7] = [
+        let others: [Vec<Shape>; 6] = [
             // two that end at one point of its side
             vec![frame((2.4, 0.0), (2.4, 3.0)), frame((2.4, 0.0), (2.4, -3.0))],
             // not square to it
@@ -444,8 +444,6 @@ mod tests {
             // an end short of its line, and one beyond its end
             vec![frame((2.4, 0.5), (2.4, 3.0))],
             vec![frame((L + 0.5, 0.0), (L + 0.5, 3.0))],
-            // a system that is not framed
-            vec![Shape::System(def((2.4, 0.0), (2.4, 3.6), 2.7, "system.curtain-wall-aluminium-1500"))],
         ];
         for (i, shapes) in others.into_iter().enumerate() {
             let mut m = Model::new(TileGrid::default());

@@ -2,6 +2,13 @@
 //! of both ends where the corner puts it, so the frames and their layers meet without a gap or an
 //! overlap.
 //!
+//! - **Systems on a grid** (a curtain wall, masonry, cladding) meet the same way: one runs through
+//!   to the outer face of the other, which stops against it. Their members are centred on the
+//!   grid's lines, the edges included, so a face of those ends half a member short of where a
+//!   framed face would: its edge member stands against the other system, or lies flush with it.
+//!   A system that lies (a floor, a ceiling) meets none.
+//! - **Storeys.** Only systems that stand beside each other over some of their height count: the
+//!   frames of the storey above end at the same points in plan and are neither met nor in the way.
 //! - **Which meet.** Two framed systems with one end of each within [`JOIN_TOLERANCE`] of the
 //!   other's, no third framed system ending there, on one base, as high as each other and square
 //!   to each other. An end against another's side is a T junction ([`super::tee`]). Anything else
@@ -117,9 +124,11 @@ impl<'a> Framed<'a> {
     }
 
     /// System `s` of element `id`, its coordinates in tile `from`, in the frame of `tile`; `None`
-    /// when it is not framed.
+    /// when it lies (a floor, a ceiling): only standing systems meet at corners and T junctions.
     pub(super) fn new(model: &Model, id: ElementId, from: TileKey, s: &'a SystemDef, tile: TileKey) -> Option<Self> {
-        s.system_type.as_ref()?.framing?;
+        if s.lies() {
+            return None;
+        }
         let offset = model.grid.offset(from, tile).truncate();
         let ends = [s.start + offset, s.end + offset];
         ((ends[1] - ends[0]).length() > LINEAR_TOLERANCE).then_some(Self { id, def: s, ends })
@@ -135,6 +144,13 @@ impl<'a> Framed<'a> {
         if end == 0 { dir } else { -dir }
     }
 
+    /// Whether it and `other` stand beside each other over some of their height. Systems on two
+    /// storeys do not: they neither meet nor stand in the way of what meets on their own storey.
+    pub(super) fn beside(&self, other: &Framed) -> bool {
+        let (a, b) = (self.def, other.def);
+        (a.base + a.height).min(b.base + b.height) - a.base.max(b.base) > LINEAR_TOLERANCE
+    }
+
     /// To the right of its line: its exterior.
     pub(super) fn right(&self) -> DVec2 {
         let dir = self.inward(0);
@@ -147,7 +163,7 @@ impl<'a> Framed<'a> {
 fn at_end<'a>(model: &'a Model, me: &Framed<'_>, end: usize, tile: TileKey) -> Option<(Framed<'a>, usize)> {
     let mut found = None;
     for e in model.iter().filter(|e| e.id != me.id) {
-        let Some(other) = Framed::of(model, e, tile) else { continue };
+        let Some(other) = Framed::of(model, e, tile).filter(|o| o.beside(me)) else { continue };
         for k in 0..2 {
             if (other.ends[k] - me.ends[end]).length() <= JOIN_TOLERANCE {
                 if found.is_some() {
@@ -347,7 +363,19 @@ fn ends_of(s: &SystemDef, joins: &Joins) -> Option<Ends> {
         (None, None) => Some(Vec::new()),
     };
     let breaks = joins.sides.iter().map(|t| tee::breaks(&mine, &Section::of(t.stands.def), t)).collect();
-    Some(Ends { start: at(0)?, end: at(1)?, breaks })
+    // members on a grid are centred on its lines, the edges included: a face of those ends half a
+    // member short, so its edge member stands against the other system instead of in it, and
+    // lies flush with it where the face runs through
+    let faces = faces(s);
+    let inset = |mut ends: Vec<FaceEnd>| {
+        for (e, f) in ends.iter_mut().zip(&faces) {
+            if let (Some((member, _)), None) = (f.member, f.framing) {
+                e.reach -= member.x / 2.0;
+            }
+        }
+        ends
+    };
+    Some(Ends { start: inset(at(0)?), end: inset(at(1)?), breaks })
 }
 
 /// Whether system `s` can be made with what it meets, `joins`.
@@ -700,8 +728,6 @@ pub(super) mod tests {
             frame((L, 0.0), (L + 2.0, 2.0)),
             // across the other
             frame((2.4, -1.5), (2.4, 1.5)),
-            // a system that is not framed
-            Shape::System(def((L, 0.0), (L, 3.6), 2.7, "system.curtain-wall-aluminium-1500")),
         ];
         for (i, other) in others.into_iter().enumerate() {
             let mut m = Model::new(TileGrid::default());
@@ -855,6 +881,79 @@ pub(super) mod tests {
         let x = add(&mut m, frame((0.0, 0.0), (L, 0.0)));
         let y = add(&mut m, frame((L + 0.002, 0.0), (L + 0.002, 3.0)));
         assert!(plain(&m, x) && plain(&m, y));
+    }
+
+    /// The volume the parts of `a` share with the parts of `b` (m³).
+    fn shared(m: &Model, a: ElementId, b: ElementId) -> f64 {
+        let (a, b) = (m.evaluate(a).unwrap(), m.evaluate(b).unwrap());
+        let mut volume = 0.0;
+        for p in &a {
+            for q in &b {
+                let (pb, qb) = (p.solid.bounds(), q.solid.bounds());
+                if (pb.1.min(qb.1) - pb.0.max(qb.0)).min_element() <= 1e-6 {
+                    continue;
+                }
+                match crate::boolean(&p.solid, &q.solid, crate::BooleanOp::Intersection) {
+                    Ok(common) => volume += common.volume(),
+                    Err(Refusal::Empty) => {}
+                    Err(refusal) => panic!("{refusal:?}"),
+                }
+            }
+        }
+        volume
+    }
+
+    #[test]
+    fn systems_on_a_grid_meet_in_corners_and_t_junctions_too() {
+        for id in ["system.curtain-wall-aluminium-1500", "system.masonry-waal-stretcher", "system.cladding-zinc-standing-seam-430"] {
+            // a corner: the longer one runs through, and nothing of one stands in the other
+            let mut m = Model::new(TileGrid::default());
+            let x = add(&mut m, Shape::System(def((0.0, 0.0), (L, 0.0), 2.7, id)));
+            let y = add(&mut m, Shape::System(def((L, 0.0), (L, 3.0), 2.7, id)));
+            assert_eq!(corners(&m, m.get(x).unwrap())[1], Some(Meeting { with: y, through: true }), "{id}");
+            assert_eq!(corners(&m, m.get(y).unwrap())[0], Some(Meeting { with: x, through: false }), "{id}");
+            assert!(shared(&m, x, y) < 1e-9, "{id}: {} m³ shared at the corner", shared(&m, x, y));
+            // the one that stops is shorter than alone, the one that runs through reaches the
+            // other's outer face and no farther
+            let reach = |id: ElementId| pieces(&m, id).iter().fold((f64::INFINITY, f64::NEG_INFINITY), |r, p| (r.0.min(p.lo.x.min(p.lo.y)), r.1.max(p.hi.x.max(p.hi.y))));
+            let half = super::Section::of(system(&m, y)).half;
+            assert!((reach(x).1 - (L + half)).abs() < 1e-9, "{id}: {:?}", reach(x));
+            // a T junction: the one that ends on the other's line stands against its side
+            let mut m = Model::new(TileGrid::default());
+            let x = add(&mut m, Shape::System(def((0.0, 0.0), (L, 0.0), 2.7, id)));
+            let y = add(&mut m, Shape::System(def((2.4, 0.0), (2.4, 3.0), 2.7, id)));
+            assert!(shared(&m, x, y) < 1e-9, "{id}: {} m³ shared at the T junction", shared(&m, x, y));
+            assert!(!plain(&m, y), "{id}: the one that stands against the other ends at its face");
+        }
+    }
+
+    #[test]
+    fn a_frame_and_a_system_on_a_grid_meet_in_a_corner() {
+        let mut m = Model::new(TileGrid::default());
+        let x = add(&mut m, frame((0.0, 0.0), (L, 0.0)));
+        let y = add(&mut m, Shape::System(def((L, 0.0), (L, 3.0), 2.7, "system.curtain-wall-aluminium-1500")));
+        assert_eq!(corners(&m, m.get(x).unwrap())[1], Some(Meeting { with: y, through: true }));
+        assert!(shared(&m, x, y) < 1e-9, "{} m³ shared", shared(&m, x, y));
+    }
+
+    #[test]
+    fn frames_on_two_storeys_meet_each_on_its_own_storey() {
+        // a corner and a T junction, and the same again a storey higher: the frames above end
+        // at the same points in plan, and are not in the way
+        let mut m = Model::new(TileGrid::default());
+        let mut storeys = Vec::new();
+        for base in [0.0, 3.0] {
+            let at = |a, b| Shape::System(SystemDef { base, ..def(a, b, 2.7, EXTERIOR) });
+            let x = add(&mut m, at((0.0, 0.0), (L, 0.0)));
+            let y = add(&mut m, at((L, 0.0), (L, 3.0)));
+            let z = add(&mut m, at((2.4, 0.0), (2.4, 3.0)));
+            storeys.push((x, y, z));
+        }
+        for (x, y, z) in storeys {
+            assert_eq!(corners(&m, m.get(x).unwrap())[1], Some(Meeting { with: y, through: true }));
+            assert_eq!(tees(&m, m.get(z).unwrap()).ends[0], Some(x));
+            assert!(shared(&m, x, y) < 1e-9 && shared(&m, x, z) < 1e-9);
+        }
     }
 
     #[test]

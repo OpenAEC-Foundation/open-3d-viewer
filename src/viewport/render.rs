@@ -965,7 +965,7 @@ impl ScenePipeline {
         if Arc::ptr_eq(&primitive.faces, &self.overlay_faces_source) {
             return;
         }
-        let vertices: Vec<Vertex> = primitive.faces.iter().flat_map(|(t, color)| t.map(|p| Vertex { position: p, normal: [0.0, 0.0, 1.0], color: *color, unit: 0 })).collect();
+        let vertices: Vec<Vertex> = primitive.faces.iter().flat_map(|(t, colors)| [0, 1, 2].map(|k| Vertex { position: t[k], normal: [0.0, 0.0, 1.0], color: colors[k], unit: 0 })).collect();
         self.overlay_faces = (!vertices.is_empty()).then(|| {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("o3v.overlay_faces"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
             (buffer, vertices.len() as u32)

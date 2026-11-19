@@ -602,6 +602,21 @@ fn model_in(m: &w::Model, source: &SourceInfo) -> Result<AnalysisModel, String> 
                     Some(payload)
                 }
             };
+            let inline = match &x.surface_mesh {
+                None => inline,
+                Some(mesh) => {
+                    let mut payload = inline.unwrap_or_default();
+                    payload.surface_mesh = Some(results::SurfaceTable {
+                        points: mesh.points.iter().map(|p| DVec3::from_array(*p)).collect(),
+                        displacements: mesh.displacements.iter().map(|p| DVec3::from_array(*p)).collect(),
+                        elements: mesh.elements.iter().map(|e| [e[0], e[1], e[2], *e.get(3).unwrap_or(&e[2])]).collect(),
+                        surface: mesh.surface.iter().map(|id| normalise(IdKind::Surface, *id)).collect(),
+                        thickness: mesh.thickness.clone(),
+                        fields: mesh.fields.iter().map(|f| results::SurfaceField { name: f.name.clone(), unit: f.unit.clone(), values: f.values.clone() }).collect(),
+                    });
+                    Some(payload)
+                }
+            };
             Ok(ResultSet {
                 id,
                 number: x.no.clone(),
@@ -857,6 +872,14 @@ fn model_out(m: &AnalysisModel) -> w::Model {
                         inl.set(w::TableName::from_kind(block.kind), base64::encode(&results::encode(&block)));
                     }
                     inl
+                }),
+                surface_mesh: x.inline.as_ref().and_then(|p| p.surface_mesh.as_ref()).map(|t| w::SurfaceMesh {
+                    points: t.points.iter().map(|p| p.to_array()).collect(),
+                    displacements: t.displacements.iter().map(|p| p.to_array()).collect(),
+                    elements: (0..t.elements.len()).map(|k| t.corners(k).to_vec()).collect(),
+                    surface: t.surface.clone(),
+                    thickness: t.thickness.clone(),
+                    fields: t.fields.iter().map(|f| w::SurfaceField { name: f.name.clone(), unit: f.unit.clone(), values: f.values.clone() }).collect(),
                 }),
             })
             .collect(),

@@ -228,7 +228,7 @@ mod tests {
         Shape::Planar(PlanarDef {
             form: PlanarForm::Wall { start: DVec2::new(1.0, 2.0), end: DVec2::new(7.0, 2.0), base: 0.0, height: 3.0 },
             thickness: 0.14,
-            openings: vec![Opening { along: 2.0, sill: 0.9, width: 1.2, height: 1.5 }],
+            openings: vec![Opening { along: 2.0, sill: 0.9, width: 1.2, height: 1.5, framing: None }],
             build_up: None,
         })
     }

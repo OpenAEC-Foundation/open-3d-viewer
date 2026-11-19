@@ -346,7 +346,7 @@ fn laying_plan(model: &Model, element: &Element, s: &bim_core::SystemDef, named:
             }
         }
         for (long, n) in list {
-            d.texts.push(Text2d { pen: Pen::Text, at: [0.0, y], height: text, text: format!("{n} × {} L={long}", named("steel")), align: Align::Left });
+            d.texts.push(Text2d { pen: Pen::Text, at: [0.0, y], height: text, text: format!("{n} × {} L={long}", named("steel")), align: Align::Left, angle: 0.0 });
             y -= text * 1.8;
         }
     }
@@ -371,7 +371,7 @@ fn write_list(d: &mut Drawing2d, mut y: f64, text: f64, title: String, parts: &[
     }
     list.sort_by(|a, b| b.0 .1.cmp(&a.0 .1).then(b.0 .0.cmp(&a.0 .0)));
     let mut write = |size: f64, line: String| {
-        d.texts.push(Text2d { pen: Pen::Text, at: [0.0, y], height: size, text: line, align: Align::Left });
+        d.texts.push(Text2d { pen: Pen::Text, at: [0.0, y], height: size, text: line, align: Align::Left, angle: 0.0 });
         y -= size * 1.8;
     };
     write(text * 1.4, title);

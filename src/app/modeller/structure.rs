@@ -89,7 +89,7 @@ pub fn to_level(height: f64) -> String {
 pub fn tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &str) -> Vec<Note> {
     // a millimetre on paper between a label and what it labels
     let gap = scale * 0.001;
-    let note = |at: DVec2, text: String, align: Align, angle: f64| Note { at: at.to_array(), text, size: NOTE_HEIGHT, align, angle, face: crate::typeface::Face::default() };
+    let note = |at: DVec2, text: String, align: Align, angle: f64| Note { at: at.to_array(), text, size: NOTE_HEIGHT, align, angle, level: false, face: crate::typeface::Face::default() };
     let piles = piles(model, level, elevation);
     let mut notes = Vec::new();
     for (e, l) in members(model, level) {

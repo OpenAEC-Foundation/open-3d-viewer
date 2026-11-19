@@ -52,7 +52,7 @@ use crate::join::{self, JoinKind, Member, MemberEnd};
 use crate::profile::Profile;
 use crate::solid::{Axes, Plane, Solid};
 use crate::{positive, Refusal, LINEAR_TOLERANCE};
-use bim_library::system::{Corner, Framing, Pattern, StudStart, SystemLayer, SystemType};
+use bim_library::system::{Corner, Framing, Gauge, Pattern, StudStart, SystemLayer, SystemType};
 use bim_library::Library;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,9 @@ pub struct SystemTypeDef {
     pub corners: Corner,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framing: Option<Framing>,
+    /// Its members cold-formed of sheet: C studs seated in U tracks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gauge: Option<Gauge>,
     /// The system lies (a floor, a ceiling): its face is level, its `height` the width it reaches
     /// to the left of its line, its `base` the height of its top.
     #[serde(default, skip_serializing_if = "is_upright")]
@@ -135,6 +138,7 @@ impl SystemDef {
             layers: t.layers.clone(),
             corners: t.corners,
             framing: t.members.framing,
+            gauge: t.members.gauge,
             lying: t.lying.is_some(),
         });
         self
@@ -156,6 +160,7 @@ struct Face<'a> {
     corners: Corner,
     member: Option<(DVec2, Option<&'a str>)>,
     framing: Option<Framing>,
+    gauge: Option<Gauge>,
     panel: (f64, Option<&'a str>),
 }
 
@@ -279,6 +284,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         corners: t.map_or(Corner::Butt, |t| t.corners),
         member: Some((s.member, t.map(|t| t.member_material.as_str()))),
         framing: t.and_then(|t| t.framing),
+        gauge: t.and_then(|t| t.gauge),
         panel: (s.panel, t.map(|t| t.panel_material.as_str())),
     };
     let layers = t.into_iter().flat_map(|t| &t.layers).map(|l| Face {
@@ -288,6 +294,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         corners: Corner::Butt,
         member: l.members.as_ref().map(|m| (DVec2::new(m.width, m.depth), Some(m.material.as_str()))),
         framing: l.members.as_ref().and_then(|m| m.framing),
+        gauge: l.members.as_ref().and_then(|m| m.gauge),
         panel: (l.panels.thickness, Some(l.panels.material.as_str())),
     });
     std::iter::once(own).chain(layers).collect()
@@ -754,7 +761,7 @@ impl Line {
     fn framed(&self, f: &Face, framing: Framing, size: DVec2, material: Option<&str>, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let mut openings: Vec<&Opening> = openings.iter().collect();
         openings.sort_by(|a, b| a.along.total_cmp(&b.along));
-        let mut frame = Frame { line: self, face: f, size, members: Vec::new(), cells: Vec::new() };
+        let mut frame = Frame { line: self, face: f, size, members: Vec::new(), cells: Vec::new(), plates: (framing.bottom_plates, framing.top_plates) };
         let tol = LINEAR_TOLERANCE;
         // the system's own frame is cut at every joint; a framed layer only where it is made in units
         let joints = if framing.unit.is_some() || f.offset == 0.0 { joints } else { &[] };
@@ -773,7 +780,8 @@ impl Line {
         for m in &frame.members {
             parts.push(PartSolid { class: "IfcMember", solid: join::finish(&m.member, None, None, &[], &[])?, material: material.map(str::to_string) });
         }
-        for c in &frame.cells {
+        // an air cavity between the members is no part
+        for c in frame.cells.iter().filter(|_| f.panel.1 != Some("air")) {
             parts.push(self.panel(f, c[0], c[1], c[2] - c[0], c[3] - c[1])?);
         }
         Ok(())
@@ -804,10 +812,10 @@ impl Frame<'_> {
             let v = (f64::from(k) + 0.5) * w;
             let mut from = start;
             for o in openings.iter().filter(|o| is_door(o)) {
-                frame.rail(v, from, o.along, w)?;
+                frame.track(v, from, o.along, w, k + 1 == framing.bottom_plates)?;
                 from = o.along + o.width;
             }
-            frame.rail(v, from, end, w)?;
+            frame.track(v, from, end, w, k + 1 == framing.bottom_plates)?;
         }
         for k in 0..framing.top_plates {
             frame.rail(height - (f64::from(k) + 0.5) * w, start, end, w)?;
@@ -840,15 +848,15 @@ impl Frame<'_> {
             for k in 0..kings {
                 let out = inner + (f64::from(k) + 0.5) * w;
                 frame.stud(a - out, bottom, top)?;
-                frame.stud(b + out, bottom, top)?;
+                frame.post(b + out, bottom, top, true)?;
             }
             for k in 0..trimmers {
                 let out = (f64::from(k) + 0.5) * w;
                 frame.stud(a - out, bottom, head)?;
-                frame.stud(b + out, bottom, head)?;
+                frame.post(b + out, bottom, head, true)?;
                 // cripples over the trimmers, so a board's seam on the jamb has timber behind it
                 frame.stud(a - out, head + header, top)?;
-                frame.stud(b + out, head + header, top)?;
+                frame.post(b + out, head + header, top, true)?;
             }
             frame.rail(head + header / 2.0, a - inner, b + inner, header)?;
             // and cripples between them at the bay's centres
@@ -864,7 +872,7 @@ impl Frame<'_> {
             frame.stud(end - d - w / 2.0, bottom, top)?;
             frame.fill(end - d, end - w, bottom, top)?;
         }
-        frame.stud(end - w / 2.0, bottom, top)
+        frame.post(end - w / 2.0, bottom, top, true)
     }
 }
 
@@ -1076,24 +1084,87 @@ struct Frame<'a> {
     size: DVec2,
     members: Vec<Piece>,
     cells: Vec<[f64; 4]>,
+    /// How many plates the framing has at its foot and at its head.
+    plates: (u8, u8),
+}
+
+/// The C section of a cold-formed stud `width` by `depth` of sheet `g`: its web at the side its
+/// `x` is negative (or positive, `turned`), its lips at the other.
+fn c_section(width: f64, depth: f64, g: Gauge, turned: bool) -> Result<Profile, Refusal> {
+    let (w, h, t) = (width / 2.0, depth / 2.0, g.thickness);
+    let lip = g.lip.max(t);
+    let side = if turned { -1.0 } else { 1.0 };
+    let p = |x: f64, y: f64| DVec2::new(side * x, y);
+    let mut ring = vec![p(-w, -h), p(w, -h)];
+    if lip > t + LINEAR_TOLERANCE {
+        ring.extend([p(w, -h + lip), p(w - t, -h + lip)]);
+    }
+    ring.extend([p(w - t, -h + t), p(-w + t, -h + t), p(-w + t, h - t), p(w - t, h - t)]);
+    if lip > t + LINEAR_TOLERANCE {
+        ring.extend([p(w - t, h - lip), p(w, h - lip)]);
+    }
+    ring.extend([p(w, h), p(-w, h)]);
+    Profile::new(ring, Vec::new())
+}
+
+/// The U section of a cold-formed track `depth` across and `high` of sheet `t` thick: its web
+/// where its `y` is positive (or negative, `turned`).
+fn u_section(depth: f64, high: f64, t: f64, turned: bool) -> Result<Profile, Refusal> {
+    let (d, h) = (depth / 2.0, high / 2.0);
+    let side = if turned { -1.0 } else { 1.0 };
+    let p = |x: f64, y: f64| DVec2::new(x, side * y);
+    Profile::new(vec![p(-d, h), p(d, h), p(d, -h), p(d - t, -h), p(d - t, h - t), p(-d + t, h - t), p(-d + t, -h), p(-d, -h)], Vec::new())
 }
 
 impl Frame<'_> {
     /// A stud centred at `u`, from `from` up to `to`, if that is a length.
     fn stud(&mut self, u: f64, from: f64, to: f64) -> Result<(), Refusal> {
-        if to - from > LINEAR_TOLERANCE {
-            self.members.push(self.line.vertical(self.face, self.size, u, from, to)?);
+        self.post(u, from, to, false)
+    }
+
+    /// A stud as [`Self::stud`]; a cold-formed one a C section, its web toward the frame's start
+    /// or, `turned`, toward its end. It fits between the flanges of the tracks and is seated in
+    /// them: down to the web of the bottom plate it stands on, up to the web of the plate, the
+    /// header or the sill it ends under.
+    fn post(&mut self, u: f64, from: f64, to: f64, turned: bool) -> Result<(), Refusal> {
+        let tol = LINEAR_TOLERANCE;
+        if to - from <= tol {
+            return Ok(());
         }
+        let Some(g) = self.face.gauge else {
+            self.members.push(self.line.vertical(self.face, self.size, u, from, to)?);
+            return Ok(());
+        };
+        let (w, seat) = (self.size.x, self.size.x - g.thickness);
+        let on_plate = self.plates.0 > 0 && (from - f64::from(self.plates.0) * w).abs() < tol;
+        let under_none = self.plates.1 == 0 && (to - self.line.height).abs() < tol;
+        let (lo, hi) = (if on_plate { from - seat } else { from }, if under_none { to } else { to + seat });
+        let mut piece = self.line.vertical(self.face, self.size, u, lo, hi)?;
+        piece.member.profile = c_section(w, self.size.y - 2.0 * g.thickness, g, turned)?;
+        self.members.push(piece);
+        Ok(())
+    }
+
+    /// A horizontal member as [`Self::rail`], a cold-formed one a track open upward when `up`:
+    /// the plate the studs stand in.
+    fn track(&mut self, v: f64, from: f64, to: f64, high: f64, up: bool) -> Result<(), Refusal> {
+        if to - from <= LINEAR_TOLERANCE {
+            return Ok(());
+        }
+        let mut piece = self.line.horizontal(self.face, DVec2::new(high, self.size.y), v, from, to)?;
+        if let Some(g) = self.face.gauge {
+            // the web at the head of the section, or at its foot when it opens upward
+            let head_is_y = piece.member.axes.y.dot(self.line.up) > 0.0;
+            piece.member.profile = u_section(self.size.y, high, g.thickness, head_is_y == up)?;
+        }
+        self.members.push(piece);
         Ok(())
     }
 
     /// A horizontal member `high` in the face, centred at `v`, from `from` along to `to`, if that
     /// is a length.
     fn rail(&mut self, v: f64, from: f64, to: f64, high: f64) -> Result<(), Refusal> {
-        if to - from > LINEAR_TOLERANCE {
-            self.members.push(self.line.horizontal(self.face, DVec2::new(high, self.size.y), v, from, to)?);
-        }
-        Ok(())
+        self.track(v, from, to, high, false)
     }
 
     /// Fills the room between members ending at `lo` and starting at `hi`, from `v0` up to `v1`:
@@ -1523,6 +1594,70 @@ mod tests {
         let window = Opening { along: 2.7, sill: 0.9, width: 1.2, height: 1.2, framing: None };
         let through = SystemDef { breaks: vec![3.0], ..opened(7.2, 2.7, "system.timber-frame-140", vec![window]) };
         assert_eq!(units(&through).unwrap_err(), Refusal::NoUnitJoint);
+    }
+
+    #[test]
+    fn a_steel_frame_has_c_studs_seated_in_u_tracks() {
+        // 3.0 m by 2.7 m: C studs 50 by 150 of 1.5 mm sheet with lips of 15, in tracks
+        let (w, d, t, lip) = (0.05, 0.15, 0.0015, 0.015);
+        let made = parts(&typed(3.0, 2.7, "system.steel-frame-150")).unwrap();
+        let steel = of(&made, "steel");
+        // the tracks: a U as deep as the frame, the bottom one open upward
+        let u_area = d * t + 2.0 * (w - t) * t;
+        let tracks: Vec<_> = steel.iter().filter(|p| (p.solid.bounds().1.x - p.solid.bounds().0.x - 3.0).abs() < 1e-9).collect();
+        assert_eq!(tracks.len(), 2);
+        for p in &tracks {
+            let (lo, hi) = p.solid.bounds();
+            assert!((hi.y - lo.y - d).abs() < 1e-9 && (hi.z - lo.z - w).abs() < 1e-9, "{lo} {hi}");
+            assert!((p.solid.volume() - u_area * 3.0).abs() < 1e-9, "{}", p.solid.volume());
+        }
+        // the studs: a C that fits between the tracks' flanges, from web to web
+        let c_area = (d - 2.0 * t) * t + 2.0 * (w - t) * t + 2.0 * (lip - t) * t;
+        let studs: Vec<_> = steel.iter().filter(|p| p.solid.bounds().1.z - p.solid.bounds().0.z > 2.0).collect();
+        assert_eq!(studs.len(), 6, "at 0, 600 ... 2400 and the end");
+        for p in &studs {
+            let (lo, hi) = p.solid.bounds();
+            assert!((lo.z - t).abs() < 1e-9 && (hi.z - (2.7 - t)).abs() < 1e-9, "seated: {lo} {hi}");
+            assert!((hi.y - lo.y - (d - 2.0 * t)).abs() < 1e-9 && (hi.x - lo.x - w).abs() < 1e-9, "{lo} {hi}");
+            assert!((p.solid.volume() - c_area * (2.7 - 2.0 * t)).abs() < 1e-9, "{}", p.solid.volume());
+        }
+        // a window: the trimmers end in the header, the cripples under the sill in the sill
+        let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2, framing: None };
+        let made = parts(&opened(3.6, 2.7, "system.steel-frame-150", vec![window])).unwrap();
+        let steel = of(&made, "steel");
+        let tops: Vec<f64> = steel.iter().map(|p| p.solid.bounds()).filter(|(lo, hi)| hi.x - lo.x < 0.06 && hi.z - lo.z > 0.5).map(|(_, hi)| hi.z).collect();
+        let ends_at = |z: f64| tops.iter().filter(|v| (**v - z).abs() < 1e-9).count();
+        assert_eq!(ends_at(2.1 + w - t), 2, "the trimmers: {tops:?}");
+        assert!(ends_at(0.9 - t) >= 1, "the cripples under the sill: {tops:?}");
+        // the type's sheet stays with the system in its file
+        let s = typed(3.0, 2.7, "system.steel-frame-150");
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(text.contains("\"gauge\""), "{text}");
+        assert_eq!(serde_json::from_str::<SystemDef>(&text).unwrap(), s);
+        assert!(!serde_json::to_string(&typed(3.0, 2.7, "system.timber-frame-140")).unwrap().contains("gauge"));
+    }
+
+    #[test]
+    fn a_clad_timber_frame_has_battens_and_weatherboards_outside_its_membrane() {
+        let (depth, membrane, cavity, board) = (0.14, 0.0005, 0.022, 0.018);
+        let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2, framing: None };
+        let made = parts(&opened(3.3, 2.7, "system.timber-frame-140-clad", vec![window])).unwrap();
+        // the cavity is no part
+        assert!(of(&made, "air").is_empty());
+        // the battens stand in the cavity, on the membrane: at the studs' centres, none of them a plate
+        let out = depth / 2.0 + membrane;
+        let battens: Vec<_> = of(&made, "timber").into_iter().map(|p| p.solid.bounds()).filter(|(lo, hi)| (lo.y.abs().min(hi.y.abs()) - out).abs() < 1e-9 && (lo.y.abs().max(hi.y.abs()) - out - cavity).abs() < 1e-9).collect();
+        assert!(battens.len() >= 6, "{}", battens.len());
+        assert!(!battens.iter().any(|(lo, hi)| hi.x - lo.x > 3.0), "no plate closes the cavity");
+        assert!(battens.iter().filter(|(lo, hi)| (hi.z - lo.z - 2.7).abs() < 1e-9).count() >= 4, "battens over the whole height");
+        // the weatherboards: courses of 130 on the battens, none across the window
+        let boards: Vec<_> = of(&made, "timber-cladding").into_iter().map(|p| p.solid.bounds()).collect();
+        assert!(boards.len() > 20, "{}", boards.len());
+        for (lo, hi) in &boards {
+            assert!(hi.z - lo.z <= 0.13 + 1e-9 && ((hi.y - lo.y) - board).abs() < 1e-9, "{lo} {hi}");
+            let over_window = lo.x < 2.4 - 1e-9 && hi.x > 1.2 + 1e-9 && lo.z < 2.1 - 1e-9 && hi.z > 0.9 + 1e-9;
+            assert!(!over_window, "{lo} {hi}");
+        }
     }
 
     #[test]

@@ -97,6 +97,7 @@ fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
         SystemGroup::Frame => l.text("Kozijnen", "Frames"),
         SystemGroup::TimberFrame => l.text("Houtskeletbouw", "Timber frames"),
         SystemGroup::MetalStud => l.text("Metal stud", "Metal stud walls"),
+        SystemGroup::SteelFrame => l.text("Staalframebouw", "Steel frames"),
         SystemGroup::Masonry => l.text("Metselwerk", "Masonry"),
         SystemGroup::Cladding => l.text("Gevelbekleding", "Cladding"),
         SystemGroup::Floor => l.text("Vloeren", "Floors"),
@@ -468,7 +469,7 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     list = list.push(small(format!("{} {} × {} mm{pattern}", l.text("Raster", "Grid"), mm(t.grid.bay, l), mm(t.grid.row, l)), p));
     // what the members are: a frame's mullions and transoms, a ceiling's profiles, or joints
     let members = match t.group {
-        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud => l.text("Stijlen en regels", "Members"),
+        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame => l.text("Stijlen en regels", "Members"),
         SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
         SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
     };

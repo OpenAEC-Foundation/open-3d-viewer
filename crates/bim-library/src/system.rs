@@ -28,6 +28,8 @@ pub enum SystemGroup {
     TimberFrame,
     /// A partition of steel studs between tracks, lined with boards.
     MetalStud,
+    /// A load-bearing frame of cold-formed steel: C studs seated in U tracks.
+    SteelFrame,
     Masonry,
     Cladding,
     Floor,
@@ -35,7 +37,7 @@ pub enum SystemGroup {
 }
 
 impl SystemGroup {
-    pub const ALL: [SystemGroup; 8] = [SystemGroup::CurtainWall, SystemGroup::Frame, SystemGroup::TimberFrame, SystemGroup::MetalStud, SystemGroup::Masonry, SystemGroup::Cladding, SystemGroup::Floor, SystemGroup::Ceiling];
+    pub const ALL: [SystemGroup; 9] = [SystemGroup::CurtainWall, SystemGroup::Frame, SystemGroup::TimberFrame, SystemGroup::MetalStud, SystemGroup::SteelFrame, SystemGroup::Masonry, SystemGroup::Cladding, SystemGroup::Floor, SystemGroup::Ceiling];
 
     /// Its name in `lang`, as a type's name starts.
     pub fn name(self, lang: Lang) -> &'static str {
@@ -44,6 +46,7 @@ impl SystemGroup {
             SystemGroup::Frame => ["Kozijn", "Frame", "Rahmen", "Châssis"],
             SystemGroup::TimberFrame => ["Houtskeletbouw", "Timber frame", "Holzrahmenbau", "Ossature bois"],
             SystemGroup::MetalStud => ["Metal stud", "Metal stud", "Metallständerwand", "Cloison à ossature métallique"],
+            SystemGroup::SteelFrame => ["Staalframebouw", "Steel frame", "Stahlleichtbau", "Ossature acier"],
             SystemGroup::Masonry => ["Metselwerk", "Masonry", "Mauerwerk", "Maçonnerie"],
             SystemGroup::Cladding => ["Gevelbekleding", "Cladding", "Fassadenbekleidung", "Bardage"],
             SystemGroup::Floor => ["Vloer", "Floor", "Decke", "Plancher"],
@@ -60,7 +63,7 @@ impl SystemGroup {
     /// Whether a type of it is named after its members (a curtain wall's mullions, a timber
     /// frame's studs) rather than its panels (bricks, boards, slabs, tiles).
     pub fn framed(self) -> bool {
-        matches!(self, SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud)
+        matches!(self, SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame)
     }
 
     /// The IFC class of its type and its predefined type.
@@ -68,7 +71,7 @@ impl SystemGroup {
         match self {
             SystemGroup::CurtainWall => ("IfcCurtainWallType", "NOTDEFINED"),
             SystemGroup::Frame => ("IfcWindowType", "WINDOW"),
-            SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::Masonry => ("IfcWallType", "STANDARD"),
+            SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame | SystemGroup::Masonry => ("IfcWallType", "STANDARD"),
             SystemGroup::Cladding => ("IfcCoveringType", "CLADDING"),
             SystemGroup::Floor => ("IfcSlabType", "FLOOR"),
             SystemGroup::Ceiling => ("IfcCoveringType", "CEILING"),
@@ -305,8 +308,25 @@ impl Framing {
     }
 }
 
+/// Members cold-formed of sheet `thickness` thick: the studs C sections with lips `lip` long, the
+/// plates, headers, sills and noggins U sections (tracks) the studs are seated in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Gauge {
+    pub thickness: f64,
+    pub lip: f64,
+}
+
+impl Gauge {
+    /// Whether members `width` by `depth` can be formed of it: sheet at least 0.1 mm, a web and
+    /// flanges that leave room between them, lips that do not meet.
+    pub fn fits(&self, width: f64, depth: f64) -> bool {
+        let t = self.thickness;
+        t.is_finite() && t >= MIN_THICKNESS && self.lip.is_finite() && self.lip >= 0.0 && width > 2.0 * t + MIN_THICKNESS && depth > 6.0 * t + MIN_THICKNESS && 2.0 * (self.lip + 2.0 * t) < depth
+    }
+}
+
 /// The members of a face: `width` in the face, `depth` across it, of `material`; on a grid's lines
-/// or, with a framing, framed.
+/// or, with a framing, framed; solid, or cold-formed of sheet of a `gauge`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Members {
     pub width: f64,
@@ -314,16 +334,23 @@ pub struct Members {
     pub material: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framing: Option<Framing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gauge: Option<Gauge>,
 }
 
 impl Members {
     pub fn new(width: f64, depth: f64, material: &str) -> Self {
-        Self { width, depth, material: material.into(), framing: None }
+        Self { width, depth, material: material.into(), framing: None, gauge: None }
     }
 
     /// These members framed as `framing` says.
     pub fn framed(self, framing: Framing) -> Self {
         Self { framing: Some(framing), ..self }
+    }
+
+    /// These members cold-formed of sheet `thickness` thick, the studs' lips `lip` long.
+    pub fn cold_formed(self, thickness: f64, lip: f64) -> Self {
+        Self { gauge: Some(Gauge { thickness, lip }), ..self }
     }
 }
 
@@ -406,7 +433,7 @@ impl SystemType {
                 return Err(LibraryError::NotPositive);
             }
             if let Some(m) = members {
-                if !thick(m.width) || !thick(m.depth) || m.framing.is_some_and(|f| !thick(f.header) || f.unit.is_some_and(|u| !thick(u)) || !f.fits()) {
+                if !thick(m.width) || !thick(m.depth) || m.gauge.is_some_and(|g| !g.fits(m.width, m.depth)) || m.framing.is_some_and(|f| !thick(f.header) || f.unit.is_some_and(|u| !thick(u)) || !f.fits()) {
                     return Err(LibraryError::NotPositive);
                 }
                 known(&m.material)?;
@@ -464,6 +491,15 @@ impl SystemType {
                 name = format!("{name} {}×{}", face.len(), mm(board.panels.thickness));
             }
         }
+        // a timber or a steel frame with more outside its membrane also by its outermost layer
+        // ("… houten gevelbekleding 18")
+        if matches!(self.group, SystemGroup::TimberFrame | SystemGroup::SteelFrame) {
+            let outermost = self.layers.iter().filter(|l| l.offset > 0.0).max_by(|a, b| a.offset.total_cmp(&b.offset));
+            let wrapped = self.layers.iter().any(|l| l.offset > 0.0 && l.panels.material.ends_with("membrane"));
+            if let Some(l) = outermost.filter(|l| wrapped && !l.panels.material.ends_with("membrane")) {
+                name = format!("{name} {} {}", material(&l.panels.material), mm(l.panels.thickness));
+            }
+        }
         if let Some(pattern) = self.grid.pattern.name(self.group, lang) {
             name = format!("{name} {pattern}");
         }
@@ -510,6 +546,43 @@ pub fn starter() -> Vec<SystemType> {
             ..upright(id, TimberFrame, Grid::new(centres, row, Stack), Members::new(0.038, depth, "timber").framed(Framing::PLATES.with_unit(3.3)), Panels::new("mineral-wool", depth))
         }
     };
+    // that frame clad: over its membrane a ventilated cavity of battens 22×45 at the studs'
+    // centres, a batten over and under an opening, and on them weatherboards 18 thick that cover
+    // 130 each, laid in courses with staggered ends
+    let clad = |id: &str, depth: f64| {
+        let mut t = timber_frame(id, depth, 0.6);
+        let (membrane, cavity, board) = (0.0005, 0.022, 0.018);
+        let out = depth / 2.0 + membrane;
+        let battens = Members::new(0.045, cavity, "timber").framed(Framing { bottom_plates: 0, top_plates: 0, ..Framing::PLATES }.with_header(0.045));
+        t.layers.push(SystemLayer { offset: out + cavity / 2.0, grid: Grid::new(0.6, 50.0, Stack), members: Some(battens), panels: Panels::new("air", cavity) });
+        t.layers.push(SystemLayer { offset: out + cavity + board / 2.0, grid: Grid::new(4.8, 0.13, RunningBond), members: None, panels: Panels::new("timber-cladding", board) });
+        t
+    };
+    // a load-bearing steel frame, from the outside in: a breather membrane; PIR boards of 50 over
+    // the frame, against the cold bridge of its studs; the frame, C studs 50 wide and `depth` deep
+    // of 1.5 mm sheet at 600, seated in U tracks, mineral wool between them, a header 150 high
+    // over an opening; a vapour control layer; two gypsum boards of 12.5. Made in prefab units of
+    // at most 6 m.
+    let steel_frame = |depth: f64| {
+        let (membrane, pir, vapour, gypsum) = (0.0005, 0.05, 0.0002, 0.0125);
+        let inside = |before: f64, thickness: f64| -(depth / 2.0 + before + thickness / 2.0);
+        SystemType {
+            layers: vec![
+                boards(depth / 2.0 + pir / 2.0, "insulation-pir", pir, 1.2, 3.0),
+                roll(depth / 2.0 + pir + membrane / 2.0, "breather-membrane", membrane),
+                roll(inside(0.0, vapour), "vapour-control-membrane", vapour),
+                boards(inside(vapour, gypsum), "gypsum-board", gypsum, 1.2, 3.0),
+                boards(inside(vapour + gypsum, gypsum), "gypsum-board", gypsum, 1.2, 3.0),
+            ],
+            ..upright(
+                &format!("system.steel-frame-{}", (depth * 1000.0).round()),
+                SteelFrame,
+                Grid::new(0.6, 3.0, Stack),
+                Members::new(0.05, depth, "steel").framed(Framing::PLATES.with_header(0.15).with_unit(6.0)).cold_formed(0.0015, 0.015),
+                Panels::new("mineral-wool", depth),
+            )
+        }
+    };
     // an interior timber frame: studs 38×89 at 600 with mineral wool, gypsum board on either face,
     // a plate laid flat over an opening
     let internal = SystemType {
@@ -553,7 +626,12 @@ pub fn starter() -> Vec<SystemType> {
         timber_frame("system.timber-frame-140-610", 0.14, 0.61),
         timber_frame("system.timber-frame-184-610", 0.184, 0.61),
         timber_frame("system.timber-frame-235-610", 0.235, 0.61),
+        clad("system.timber-frame-140-clad", 0.14),
+        clad("system.timber-frame-184-clad", 0.184),
         internal,
+        steel_frame(0.1),
+        steel_frame(0.15),
+        steel_frame(0.2),
         metal_stud(0.075, 1),
         metal_stud(0.075, 2),
         metal_stud(0.1, 1),
@@ -583,7 +661,7 @@ mod tests {
     #[test]
     fn the_starter_types_check_and_have_names_of_their_own() {
         let types = starter();
-        assert_eq!(types.len(), 30);
+        assert_eq!(types.len(), 35);
         for t in &types {
             t.check(&materials()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }
@@ -606,6 +684,9 @@ mod tests {
         assert_eq!(name("system.timber-frame-140", Lang::Fr), "Ossature bois 38×140 entraxe 600");
         assert_eq!(name("system.timber-frame-235-610", Lang::En), "Timber frame 38×235 c/c 610");
         assert_eq!(name("system.timber-frame-internal-89", Lang::Nl), "Houtskeletbouw 38×89 h.o.h. 600");
+        assert_eq!(name("system.timber-frame-184-clad", Lang::Nl), "Houtskeletbouw 38×184 h.o.h. 600 houten gevelbekleding 18");
+        assert_eq!(name("system.steel-frame-150", Lang::Nl), "Staalframebouw 50×150 h.o.h. 600");
+        assert_eq!(name("system.steel-frame-150", Lang::En), "Steel frame 50×150 c/c 600");
         assert_eq!(name("system.frame-pvc-70", Lang::De), "Rahmen PVC 64×70 Achsabstand 1000");
         assert_eq!(name("system.masonry-waal-stretcher", Lang::Nl), "Metselwerk 100 220×62.5 halfsteensverband");
         assert_eq!(name("system.masonry-waal-stack", Lang::En), "Brickwork 100 220×62.5 stack bond");

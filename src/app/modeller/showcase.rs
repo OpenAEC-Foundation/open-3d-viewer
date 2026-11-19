@@ -116,7 +116,7 @@ fn build() -> (App, Log) {
         let y = -6.0 - 5.0 * row as f64;
         for (k, t) in lib.system_types_of(group).enumerate() {
             let x = 5.0 * k as f64;
-            let framed = matches!(group, SystemGroup::TimberFrame | SystemGroup::MetalStud);
+            let framed = matches!(group, SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame);
             let openings = if framed { vec![window(1.2)] } else { Vec::new() };
             let (a, b) = if t.lying.is_some() { (p(x, y), p(x + 3.6, y + 3.0)) } else { (p(x, y), p(x + 3.6, y)) };
             match system(&app, &t.id, a, b, h, openings) {
@@ -150,7 +150,9 @@ fn build() -> (App, Log) {
     meet(&mut app, &mut log, p(x0 + 18.0, 0.0), "system.timber-frame-140", "system.timber-frame-140", false, Some(ConnectionKind::Butt));
     meet(&mut app, &mut log, p(x0 + 24.0, 0.0), "system.timber-frame-140", "system.timber-frame-140", false, Some(ConnectionKind::Apart));
     let mut col = 0.0;
-    for group in [SystemGroup::CurtainWall, SystemGroup::MetalStud, SystemGroup::Masonry, SystemGroup::Cladding] {
+    meet(&mut app, &mut log, p(x0 + 30.0, 0.0), "system.timber-frame-184-clad", "system.timber-frame-184-clad", false, None);
+    meet(&mut app, &mut log, p(x0 + 36.0, 0.0), "system.timber-frame-184-clad", "system.timber-frame-140-clad", true, None);
+    for group in [SystemGroup::CurtainWall, SystemGroup::MetalStud, SystemGroup::SteelFrame, SystemGroup::Masonry, SystemGroup::Cladding] {
         if let Some(t) = lib.system_types_of(group).next() {
             meet(&mut app, &mut log, p(x0 + col, 4.5), &t.id, &t.id, false, None);
             meet(&mut app, &mut log, p(x0 + col + 6.0, 4.5), &t.id, &t.id, true, None);

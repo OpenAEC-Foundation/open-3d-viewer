@@ -432,14 +432,25 @@ pub(crate) fn joined_parts(model: &Model, element: &Element, s: &SystemDef) -> R
 }
 
 /// The lengths of the prefab units `element` is made of in `model`, from its frame's start: as
-/// [`units`], with its frame ending at its corners and its T junctions. None for an element that
-/// is not a system.
+/// [`units`], with its frame ending at its corners and its T junctions and with the doors and
+/// windows standing in it, as the model makes it. None for an element that is not a system.
 pub fn joined_units(model: &Model, element: &Element) -> Result<Vec<f64>, Refusal> {
     let Shape::System(s) = &element.shape else { return Ok(Vec::new()) };
-    match joined_ends(model, element, s).and_then(|ends| plan(s, &ends).ok()) {
+    let of = |s: &SystemDef| match joined_ends(model, element, s).and_then(|ends| plan(s, &ends).ok()) {
         Some(plan) => Ok(plan.units()),
         None => units(s),
+    };
+    // as the model makes it: with the doors and windows standing in it, where it can be made
+    // with them
+    let standing = model.standing_openings(element);
+    if !standing.is_empty() {
+        let mut with = s.clone();
+        with.openings.extend(standing);
+        if let Ok(units) = of(&with) {
+            return Ok(units);
+        }
     }
+    of(s)
 }
 
 /// The corners `element` makes with other framed systems of `model`: at its start and at its end.

@@ -96,6 +96,10 @@ pub struct SystemTypeDef {
     /// A floor of slabs: how the slabs an opening cuts through are carried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trimmer: Option<Trimmer>,
+    /// Its bays are whole ones from its start, the last one cut to fit (a fitting slab), rather
+    /// than equal ones.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole: bool,
 }
 
 fn is_upright(lying: &bool) -> bool {
@@ -145,6 +149,7 @@ impl SystemDef {
             gauge: t.members.gauge,
             lying: t.lying.is_some(),
             trimmer: t.trimmer,
+            whole: t.whole,
         });
         self
     }
@@ -166,6 +171,8 @@ struct Face<'a> {
     member: Option<(DVec2, Option<&'a str>)>,
     framing: Option<Framing>,
     gauge: Option<Gauge>,
+    /// Whole bays from its start, the last one cut to fit.
+    whole: bool,
     panel: (f64, Option<&'a str>),
 }
 
@@ -175,8 +182,9 @@ impl Face<'_> {
     }
 
     /// The bays and rows on a face `length` long and `height` high, and their size: with members,
-    /// equal ones as near the grid's as fit; without (boards), whole ones from the start and the
-    /// foot, the last ones cut, which are counted with them.
+    /// equal ones as near the grid's as fit, or (a face of whole bays) whole ones from the start,
+    /// the last one, which is counted with them, ending at the face's end; without (boards), whole
+    /// ones from the start and the foot, the last ones cut, which are counted with them.
     fn division(&self, length: f64, height: f64) -> (usize, usize, f64, f64) {
         // a count beyond any system's (and beyond what usize holds) is refused by the part count
         let count = |n: f64| (n.min(1e12) as usize).max(1);
@@ -184,7 +192,13 @@ impl Face<'_> {
             let whole = |extent: f64, pitch: f64| count(((extent - LINEAR_TOLERANCE) / pitch).ceil());
             return (whole(length, self.spacing.x), whole(height, self.spacing.y), self.spacing.x, self.spacing.y);
         }
-        let (bays, rows) = (count((length / self.spacing.x).round()), count((height / self.spacing.y).round()));
+        let rows = count((height / self.spacing.y).round());
+        if self.whole {
+            // what is left for the last bay is wider than a member, or it goes with the one before
+            let bays = count(((length - self.width() - LINEAR_TOLERANCE) / self.spacing.x).ceil());
+            return (bays, rows, self.spacing.x, height / rows as f64);
+        }
+        let bays = count((length / self.spacing.x).round());
         (bays, rows, length / bays as f64, height / rows as f64)
     }
 
@@ -290,6 +304,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         member: Some((s.member, t.map(|t| t.member_material.as_str()))),
         framing: t.and_then(|t| t.framing),
         gauge: t.and_then(|t| t.gauge),
+        whole: t.is_some_and(|t| t.whole),
         panel: (s.panel, t.map(|t| t.panel_material.as_str())),
     };
     let layers = t.into_iter().flat_map(|t| &t.layers).map(|l| Face {
@@ -300,6 +315,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         member: l.members.as_ref().map(|m| (DVec2::new(m.width, m.depth), Some(m.material.as_str()))),
         framing: l.members.as_ref().and_then(|m| m.framing),
         gauge: l.members.as_ref().and_then(|m| m.gauge),
+        whole: false,
         panel: (l.panels.thickness, Some(l.panels.material.as_str())),
     });
     std::iter::once(own).chain(layers).collect()
@@ -900,6 +916,8 @@ impl Line {
     fn grid(&self, f: &Face, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let (bays, rows, bay, row) = f.division(self.length, self.height);
         let w = f.width();
+        // where division `i` along is: the last one at the face's end, also after a fitting bay
+        let line = |i: usize| if i == bays { self.length } else { i as f64 * bay };
         // a panel between the lines `w` apart, up to the face's end and head (where boards are
         // cut), cut around the openings and left out of the face's gaps
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
@@ -926,12 +944,12 @@ impl Line {
                     let mut verticals = Vec::with_capacity(bays + 1);
                     for i in 0..=bays {
                         let (from, to) = span(i == 0 || i == bays);
-                        pieces.push(self.vertical(f, size, i as f64 * bay, from, to)?);
+                        pieces.push(self.vertical(f, size, line(i), from, to)?);
                         verticals.push(pieces.len() - 1);
                     }
                     for i in 0..bays {
                         for j in 0..=rows {
-                            pieces.push(self.horizontal(f, size, j as f64 * row, i as f64 * bay, (i + 1) as f64 * bay)?);
+                            pieces.push(self.horizontal(f, size, j as f64 * row, line(i), line(i + 1))?);
                             let h = pieces.len() - 1;
                             let edge_row = j == 0 || j == rows;
                             joins.push((if edge_row && i == 0 { corner } else { JoinKind::Butt }, verticals[i], h));
@@ -945,6 +963,7 @@ impl Line {
                         let whole = ((self.length - first - LINEAR_TOLERANCE) / bay).ceil().clamp(0.0, 1e12) as usize;
                         once((0.0, first)).chain((0..whole).map(|i| (first + i as f64 * bay, bay))).collect()
                     }
+                    None if f.member.is_some() => (0..bays).map(|i| (line(i), line(i + 1) - line(i))).collect(),
                     None => (0..bays).map(|i| (i as f64 * bay, bay)).collect(),
                 };
                 for (u, du) in columns {

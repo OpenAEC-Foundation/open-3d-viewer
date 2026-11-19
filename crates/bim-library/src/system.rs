@@ -420,6 +420,10 @@ pub struct SystemType {
     /// A floor of slabs: how the slabs an opening cuts through are carried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trimmer: Option<Trimmer>,
+    /// Its bays are whole ones from its start and the last one is cut to fit (slabs of a fixed
+    /// width, the last a fitting slab), rather than equal ones as near the grid's as fit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole: bool,
 }
 
 /// Whether a grid fits members `width` wide: positive bays and rows, wider than the members.
@@ -544,7 +548,7 @@ pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
     let glass = || Panels::new("glass", 0.024);
-    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, trimmer: None };
+    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, trimmer: None, whole: false };
     // aluminium and PVC frames are mitred at their corners
     let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
     // boards of `material` laid edge to edge, `bay` wide and `row` high; membranes come in rolls
@@ -646,6 +650,7 @@ pub fn starter() -> Vec<SystemType> {
         let topping = depth - plank;
         SystemType {
             lying: Some(3.0),
+            whole: true,
             layers: vec![boards(plank / 2.0 + topping / 2.0, "topping-concrete", topping, 50.0, 50.0)],
             ..upright(&format!("system.wide-slab-{}", (depth * 1000.0).round()), Floor, Grid::new(2.4, 7.2, Stack), Members::new(0.002, plank, "topping-concrete"), Panels::new("wide-slab", plank))
         }
@@ -653,6 +658,7 @@ pub fn starter() -> Vec<SystemType> {
     let hollow_core = |depth: f64| SystemType {
         lying: Some(3.0),
         trimmer: Some(Trimmer::SLABS),
+        whole: true,
         ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, 6.0, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))
     };
     let mut types = vec![

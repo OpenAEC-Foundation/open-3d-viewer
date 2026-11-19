@@ -57,11 +57,11 @@ pub(super) fn bounded(s: &SystemDef) -> Result<Option<(SystemDef, Vec<DVec2>)>, 
 
 /// The slabs' seams either side of opening `o` in a face of `bays` bays `bay` wide with joints
 /// `w` wide: where the first slab it touches starts and the last one ends.
-fn seams(o: &Opening, bays: usize, bay: f64, w: f64) -> (f64, f64) {
+fn seams(o: &Opening, bays: usize, bay: f64, w: f64, length: f64) -> (f64, f64) {
     let tol = LINEAR_TOLERANCE;
     let first = ((o.along + tol) / bay).floor().clamp(0.0, bays as f64 - 1.0);
     let last = ((o.along + o.width - tol) / bay).ceil().clamp(first + 1.0, bays as f64);
-    (first * bay + w / 2.0, last * bay - w / 2.0)
+    (first * bay + w / 2.0, (if last >= bays as f64 { length } else { last * bay }) - w / 2.0)
 }
 
 /// Whether opening `o` of lying system `s` takes whole slabs out and hangs their ends in
@@ -91,8 +91,8 @@ pub(super) fn cut(s: &SystemDef, f: &Face, length: f64) -> Result<Vec<Opening>, 
             made.push(*o);
             continue;
         }
-        let (a, b) = seams(o, bays, bay, f.width());
-        if a < bay - tol || b > length - bay + tol {
+        let (a, b) = seams(o, bays, bay, f.width(), length);
+        if a < bay - tol || b + f.width() / 2.0 > length - f.width() - tol {
             return Err(Refusal::OpeningNotFramed);
         }
         made.push(Opening { along: a, width: b - a, ..*o });
@@ -211,7 +211,7 @@ pub(super) fn finish(s: &SystemDef, f: &Face, length: f64, top: f64, outline: Op
         }
         let (v0, v1) = (o.sill, o.sill + o.height);
         let r = if trimmed(s, o) {
-            let (a, b) = seams(o, bays, bay, w);
+            let (a, b) = seams(o, bays, bay, w, length);
             trimmers.extend(hung(s, dir, [a, v0, b, v1], top)?);
             [a - w - PAST, v0, b + w + PAST, v1]
         } else {
@@ -328,6 +328,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn slabs_are_whole_from_the_start_and_the_last_one_is_cut_to_fit() {
+        // 8.8 m of slabs 1200 wide: seven whole ones and a fitting slab of 400
+        let made = parts(&floor(8.8, 6.0, "system.hollow-core-200")).unwrap();
+        let mut widths: Vec<f64> = of(&made, "hollow-core-concrete").iter().map(|s| s.solid.bounds().1.x - s.solid.bounds().0.x).collect();
+        assert_eq!(widths.len(), 8);
+        let last = widths.pop().unwrap();
+        assert!(widths.iter().all(|w| (w - 1.18).abs() < 1e-9), "{widths:?}");
+        assert!((last - 0.38).abs() < 1e-9, "{last}");
+        apart(&made);
+        // a whole number of slabs has no fitting slab; a sliver narrower than a joint goes with the last
+        assert_eq!(of(&parts(&floor(4.8, 6.0, "system.hollow-core-200")).unwrap(), "hollow-core-concrete").len(), 4);
+        let wider = parts(&floor(4.81, 6.0, "system.hollow-core-200")).unwrap();
+        let slabs = of(&wider, "hollow-core-concrete");
+        assert_eq!(slabs.len(), 4);
+        assert!(slabs.iter().any(|s| (s.solid.bounds().1.x - s.solid.bounds().0.x - 1.19).abs() < 1e-9));
+        // an opening by the fitting slab is hung on it; one that takes it out has nothing to hang on
+        let hung = SystemDef { openings: vec![rect(7.3, 2.0, 1.0, 1.0)], ..floor(8.8, 6.0, "system.hollow-core-200") };
+        assert_eq!(of(&parts(&hung).unwrap(), "steel").len(), 6);
+        let end = SystemDef { openings: vec![rect(8.0, 2.0, 0.7, 1.0)], ..floor(8.8, 6.0, "system.hollow-core-200") };
+        assert_eq!(parts(&end), Err(Refusal::OpeningNotFramed));
     }
 
     #[test]

@@ -21,6 +21,7 @@
 //!
 //! Lengths are metres.
 
+pub mod annotate;
 pub mod buildup;
 pub mod drawing;
 pub mod dutch;

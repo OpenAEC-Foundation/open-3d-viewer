@@ -26,6 +26,8 @@
 //!   is the type's own.
 //! - A code of the library is a node with `nlsfb::class`, its English name and
 //!   `openaec::classification`.
+//! - A drawing set is a node with its English name and `openaec::drawingset`
+//!   (see [`crate::annotate`]).
 //!
 //! Paths are UUIDs derived from the key or id, so a library written twice has the same paths.
 //! Reading takes these nodes from any IFCX file and leaves the rest.
@@ -165,6 +167,7 @@ pub fn nodes(library: &Library) -> Vec<Value> {
         }));
     }
     nodes.extend(library.codes.iter().map(nlsfb::code_node));
+    nodes.extend(library.drawing_sets.iter().map(crate::annotate::node));
     nodes
 }
 
@@ -226,6 +229,11 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
         if let Some(own) = attributes.get(nlsfb::CLASSIFICATION).and_then(|own| own.get("system").and_then(Value::as_str).is_none_or(|system| system == "NL-SfB").then_some(own)) {
             let code: Code = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("code {path}: {e}")))?;
             library.add_code(code)?;
+            continue;
+        }
+        if let Some(own) = attributes.get(crate::annotate::DRAWING_SET) {
+            let set: crate::annotate::DrawingSet = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("drawing set {path}: {e}")))?;
+            library.add_drawing_set(set)?;
             continue;
         }
         // the code the node has as an element would, when it is one
@@ -321,7 +329,7 @@ mod tests {
         assert_eq!(masonry["attributes"][SYSTEM_TYPE]["grid"]["pattern"], "running_bond");
         let ceiling = nodes.iter().find(|n| n["path"] == system_type_path("system.ceiling-600x600")).unwrap();
         assert_eq!(ceiling["attributes"]["bsi::ifc::prop::PredefinedType"], "CEILING");
-        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len());
+        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len());
         // paths are stable
         assert_eq!(nodes, self::nodes(&Library::starter()));
     }

@@ -1,6 +1,7 @@
 //! A library: materials and the types made of them. A project has one (its types); a library file
 //! holds one; importing one adds what the project lacks ([`Library::merge`]).
 
+use crate::annotate::{self, DrawingSet};
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
 use crate::nlsfb::{self, Code};
@@ -27,6 +28,9 @@ pub struct Library {
     /// Its NL-SfB codes, each once: the groups of the table and the codes added to them.
     #[serde(default)]
     pub codes: Vec<Code>,
+    /// Its drawing sets: the rules by which a drawing of a kind is annotated ([`crate::annotate`]).
+    #[serde(default)]
+    pub drawing_sets: Vec<DrawingSet>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -61,7 +65,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), drawing_sets: annotate::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -226,6 +230,21 @@ impl Library {
         self.buildups_of(buildup.role).find(|b| same(b))
     }
 
+    /// The drawing set `key` of the library.
+    pub fn drawing_set(&self, key: &str) -> Option<&DrawingSet> {
+        self.drawing_sets.iter().find(|s| s.key == key)
+    }
+
+    /// Adds a drawing set. Refused when it does not hold together or the library has its key.
+    pub fn add_drawing_set(&mut self, set: DrawingSet) -> Result<(), LibraryError> {
+        set.check()?;
+        if self.drawing_set(&set.key).is_some() {
+            return Err(LibraryError::Duplicate(set.key));
+        }
+        self.drawing_sets.push(set);
+        Ok(())
+    }
+
     /// The code `code` of the library.
     pub fn code(&self, code: &str) -> Option<&Code> {
         self.codes.iter().find(|c| c.code == code)
@@ -268,6 +287,11 @@ impl Library {
     /// Returns how many materials and types were added.
     pub fn merge(&mut self, other: &Library) -> usize {
         let mut added = 0;
+        for s in &other.drawing_sets {
+            if self.add_drawing_set(s.clone()).is_ok() {
+                added += 1;
+            }
+        }
         // codes are not counted: they come with the types that have them
         for c in &other.codes {
             let _ = self.add_code(c.clone());
@@ -320,7 +344,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }

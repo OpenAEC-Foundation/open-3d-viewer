@@ -183,6 +183,8 @@ pub enum Category {
     Hatches,
     /// The NL-SfB codes of a library, each with the types that have it.
     Codes,
+    /// The drawing sets of a library: the rules by which a drawing of a kind is annotated.
+    DrawingSets,
     /// A company's house style.
     Colours,
     Fonts,
@@ -200,6 +202,7 @@ pub enum Heading {
     Standard,
     Hatches,
     Codes,
+    Sets,
     House,
 }
 
@@ -213,6 +216,7 @@ impl Heading {
             Heading::Standard => l.text("Tekenstandaard", "Drawing standard"),
             Heading::Hatches => l.text("Arceringen", "Hatches"),
             Heading::Codes => l.text("Coderingen", "Classification"),
+            Heading::Sets => l.text("Annotatie", "Annotation"),
             Heading::House => l.text("Huisstijl", "House style"),
         }
     }
@@ -244,6 +248,7 @@ impl Category {
             Category::HatchSet(set) => set.name(),
             Category::Hatches => l.text("Per materiaalsoort", "By kind of material"),
             Category::Codes => "NL-SfB",
+            Category::DrawingSets => l.text("Tekeningsets", "Drawing sets"),
             Category::Colours => l.text("Kleuren", "Colours"),
             Category::Fonts => l.text("Lettertypen", "Fonts"),
             Category::Sheets => l.text("Bladformaten", "Sheet formats"),
@@ -602,6 +607,7 @@ impl App {
             Category::HatchSet(set) => hatch::of(set).count(),
             Category::Hatches => HatchKind::ALL.len(),
             Category::Codes => of(&|lib| lib.codes.len()),
+            Category::DrawingSets => of(&|lib| lib.drawing_sets.len()),
             Category::Colours => self.house.colours.len(),
             Category::Fonts => 2,
             Category::Sheets => self.house.sheets.len(),
@@ -629,6 +635,7 @@ impl App {
                 (Heading::Linear, has(counted(LinearRole::ALL.map(Category::Linear).to_vec()))),
                 (Heading::Systems, has(counted(SystemGroup::ALL.map(Category::Systems).to_vec()))),
                 (Heading::Codes, has(counted(vec![Category::Codes]))),
+                (Heading::Sets, has(counted(vec![Category::DrawingSets]))),
             ]
         };
         let steel = |tree: &mut Vec<(Heading, Vec<(Category, usize)>)>| {
@@ -809,6 +816,11 @@ impl App {
         if self.category().of_standard() && view.query.trim().chars().count() < 2 {
             return self.standard_pane(p, l);
         }
+        if self.category() == Category::DrawingSets && view.query.trim().chars().count() < 2 {
+            if let Some(library) = self.shown_shelf().map(|shelf| self.shelf(shelf)) {
+                return self.drawing_set_pane(p, l, library);
+            }
+        }
         if view.source == Source::Company && view.query.trim().chars().count() < 2 {
             return self.house_pane(p, l);
         }
@@ -944,6 +956,7 @@ impl App {
                 }
                 tiles
             }
+            (Category::DrawingSets, Some(_), Some(library)) => self.drawing_set_tiles(p, l, library),
             (Category::Codes, Some(_), Some(library)) => {
                 let mut tiles: Vec<Element<'_, Message>> = library
                     .codes
@@ -1388,7 +1401,7 @@ mod tests {
         // the general library: materials, the planar elements together, the linear ones with the
         // steel table, the systems, and the hatches: the suite's own, and those of its standard
         let general = app.library_tree();
-        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Codes, Heading::Hatches]);
+        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Codes, Heading::Sets, Heading::Hatches]);
         assert_eq!(general.iter().find(|(heading, _)| *heading == Heading::Codes).map(|(_, list)| list.clone()), Some(vec![(Category::Codes, Library::starter().codes.len())]));
         assert_eq!(categories(&general, Heading::Planar), Role::ALL.map(Category::Planar));
         assert_eq!(general[0].1, [(Category::Materials, Library::starter().materials.len())]);

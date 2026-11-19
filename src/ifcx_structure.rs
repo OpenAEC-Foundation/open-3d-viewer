@@ -208,6 +208,140 @@ impl Structure {
         Ok(s)
     }
 
+    /// An IFC file in its STEP form (IFC2x3, IFC4, IFC4x3) taken apart the way an IFCX file is,
+    /// so both show alike: every element, type and material is a node at `#id` with its class
+    /// and name; what IFC says with a relation between them is a child (`IfcRelAggregates`,
+    /// `IfcRelNests`, `IfcRelContainedInSpatialStructure`, `IfcRelVoidsElement`,
+    /// `IfcRelFillsElement`) or an inherit (`IfcRelDefinesByType`, `IfcRelAssociatesMaterial`).
+    /// A property set or a set of quantities is a child of the elements it is given to
+    /// (`IfcRelDefinesByProperties`) and of the type that has it, with each property or quantity
+    /// as an attribute and its value. The text is the file's own lines.
+    pub fn read_step(source: &str, data: &[u8]) -> Result<Structure, String> {
+        use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner, IfcType};
+        let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
+        let text = String::from_utf8_lossy(data);
+        if !text.trim_start().starts_with("ISO-10303-21") {
+            return Err("IFC: not a STEP file".into());
+        }
+        // the lines as the file has them, and where each starts
+        let mut starts = Vec::new();
+        let mut lines = Vec::new();
+        let mut at = 0usize;
+        for line in text.split_inclusive('\n') {
+            starts.push(at);
+            at += line.len();
+            let line = line.trim_end_matches(['\r', '\n']);
+            let chars = line.chars().count();
+            lines.push(Line { depth: 0, text: line.chars().take(LINE_CHARS).collect(), chars, entry: None });
+        }
+        let line_of = |byte: usize| starts.partition_point(|&s| s <= byte).saturating_sub(1) as u32;
+        // the class as IFC writes it (`IfcWall`), where the schema knows the record's name
+        let class_of = |name: &str| {
+            let known = IfcType::from_str(name);
+            let proper = known.name();
+            if proper.eq_ignore_ascii_case(name) { proper.to_string() } else { name.to_string() }
+        };
+        let mut scanner = EntityScanner::new(text.as_ref());
+        let mut decoder = EntityDecoder::new(text.as_ref());
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut entry_of: HashMap<u32, usize> = HashMap::new();
+        // (parent, child) along a relation, and (node, name, target) it inherits
+        let mut holds: Vec<(u32, u32)> = Vec::new();
+        let mut inherits: Vec<(u32, &'static str, u32)> = Vec::new();
+        let mut materials: Vec<u32> = Vec::new();
+        // the property sets and sets of quantities: their node, and the records of what they hold
+        let mut sets: Vec<(usize, Vec<u32>)> = Vec::new();
+        while let Some((id, kind, start, end)) = scanner.next_entity() {
+            let upper = kind.to_ascii_uppercase();
+            if upper.starts_with("IFCREL") {
+                let Ok(e) = decoder.decode_at(start, end) else { continue };
+                let many = |i: usize| e.get_refs(i).unwrap_or_default();
+                match upper.as_str() {
+                    "IFCRELAGGREGATES" | "IFCRELNESTS" => holds.extend(e.get_ref(4).into_iter().flat_map(|p| many(5).into_iter().map(move |c| (p, c)))),
+                    "IFCRELCONTAINEDINSPATIALSTRUCTURE" => holds.extend(e.get_ref(5).into_iter().flat_map(|p| many(4).into_iter().map(move |c| (p, c)))),
+                    "IFCRELVOIDSELEMENT" | "IFCRELFILLSELEMENT" => holds.extend(e.get_ref(4).zip(e.get_ref(5))),
+                    "IFCRELDEFINESBYPROPERTIES" => holds.extend(e.get_ref(5).into_iter().flat_map(|set| many(4).into_iter().map(move |o| (o, set)))),
+                    "IFCRELDEFINESBYTYPE" => inherits.extend(e.get_ref(5).into_iter().flat_map(|t| many(4).into_iter().map(move |o| (o, "type", t)))),
+                    "IFCRELASSOCIATESMATERIAL" => {
+                        if let Some(m) = e.get_ref(5) {
+                            materials.push(m);
+                            inherits.extend(many(4).into_iter().map(|o| (o, "material", m)));
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            // what has an identity of its own: a GlobalId first (22 characters)
+            let Ok(e) = decoder.decode_at(start, end) else { continue };
+            let Some(guid) = e.get_string(0).filter(|g| g.len() == 22 && !g.contains(' ')) else { continue };
+            let said = |i: usize| e.get_string(i).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty());
+            let class = class_of(kind);
+            let mut attributes = vec![("bsi::ifc::class".to_string(), class.clone()), ("bsi::ifc::prop::GlobalId".to_string(), guid.to_string())];
+            let name = said(2);
+            for (key, value) in [("Name", name.clone()), ("Description", said(3)), ("ObjectType", said(4)), ("Tag", said(7))] {
+                if let Some(value) = value {
+                    attributes.push((format!("bsi::ifc::prop::{key}"), value));
+                }
+            }
+            match upper.as_str() {
+                "IFCPROPERTYSET" => sets.push((entries.len(), e.get_refs(4).unwrap_or_default())),
+                "IFCELEMENTQUANTITY" => sets.push((entries.len(), e.get_refs(5).unwrap_or_default())),
+                // a type holds its property sets itself
+                _ if upper.ends_with("TYPE") || upper.ends_with("STYLE") => holds.extend(e.get_refs(5).unwrap_or_default().into_iter().map(|set| (id, set))),
+                _ => {}
+            }
+            let line = line_of(start);
+            entry_of.insert(id, entries.len());
+            lines[line as usize].entry = Some(entries.len() as u32);
+            entries.push(Entry { path: format!("#{id}"), attributes, class: Some(class), name, line, ..Entry::default() });
+        }
+        // what a set holds: an attribute per property or quantity, with its value as the file
+        // writes it
+        for (entry, members) in sets {
+            for member in members {
+                let Ok(e) = decoder.decode_by_id(member) else { continue };
+                let Some(name) = e.get_string(0).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty()) else { continue };
+                let Some(record) = record_of(&text, member) else { continue };
+                let arguments = step_arguments(record);
+                // a single value is the third argument; a quantity's value the fourth
+                let at = if e.ifc_type.name().to_ascii_uppercase().starts_with("IFCQUANTITY") { 3 } else { 2 };
+                let value = arguments.get(at).map(|v| step_value(v)).unwrap_or_default();
+                entries[entry].attributes.push((format!("bsi::ifc::prop::{name}"), value));
+            }
+        }
+        // the materials named: nodes too, so an element shows what it is made of
+        materials.sort_unstable();
+        materials.dedup();
+        for m in materials {
+            if entry_of.contains_key(&m) {
+                continue;
+            }
+            let Ok(e) = decoder.decode_by_id(m) else { continue };
+            let name = e.get_string(0).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty());
+            let class = class_of(e.ifc_type.name());
+            // no class of its own here: a node with a class is what an element is typed by
+            let mut attributes = vec![("bsi::ifc::material".to_string(), class)];
+            attributes.extend(name.clone().map(|n| ("bsi::ifc::prop::Name".to_string(), n)));
+            entry_of.insert(m, entries.len());
+            entries.push(Entry { path: format!("#{m}"), attributes, name, ..Entry::default() });
+        }
+        for (parent, child) in holds {
+            let (Some(&p), Some(&c)) = (entry_of.get(&parent), entry_of.get(&child)) else { continue };
+            // a child is named by what it is called, and by its id: names repeat
+            let label = entries[c].name.clone().or_else(|| entries[c].class.clone()).unwrap_or_default();
+            entries[p].children.push((format!("{label} #{child}"), Some(format!("#{child}"))));
+        }
+        for (node, name, target) in inherits {
+            if let (Some(&n), true) = (entry_of.get(&node), entry_of.contains_key(&target)) {
+                entries[n].inherits.push((name.to_string(), Some(format!("#{target}"))));
+            }
+        }
+        let mut s = Structure { source: source.to_string(), bytes: data.len(), lines, entries, ..Structure::default() };
+        s.put_together(&HashSet::new());
+        Ok(s)
+    }
+
     /// The nodes from the entries, the roots, the links and the tree keys.
     fn put_together(&mut self, nulls: &HashSet<(u32, String)>) {
         let mut children: Vec<BTreeMap<String, Option<String>>> = Vec::new();
@@ -368,6 +502,73 @@ impl Structure {
 }
 
 /// The relation a child stands for, from the classes of the two nodes.
+/// The record `#id=…;` in an IFC file's text: what stands between its brackets.
+fn record_of(text: &str, id: u32) -> Option<&str> {
+    let mark = format!("#{id}");
+    let mut from = 0;
+    while let Some(at) = text[from..].find(&mark) {
+        let start = from + at;
+        let rest = text[start + mark.len()..].trim_start();
+        // the record itself, not a reference to it: at the start of a line, followed by `=`
+        let own = text[..start].trim_end_matches([' ', '\t']).ends_with(['\n', ';']) || start == 0;
+        if own && rest.starts_with('=') {
+            let open = rest.find('(')?;
+            let body = &rest[open + 1..];
+            let mut depth = 0i32;
+            let mut quoted = false;
+            for (i, c) in body.char_indices() {
+                match c {
+                    '\'' => quoted = !quoted,
+                    '(' if !quoted => depth += 1,
+                    ')' if !quoted && depth == 0 => return Some(&body[..i]),
+                    ')' if !quoted => depth -= 1,
+                    _ => {}
+                }
+            }
+            return None;
+        }
+        from = start + mark.len();
+    }
+    None
+}
+
+/// The arguments of a record, split at its commas outside brackets and strings.
+fn step_arguments(record: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quoted, mut from) = (0i32, false, 0);
+    for (i, c) in record.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth -= 1,
+            ',' if !quoted && depth == 0 => {
+                out.push(record[from..i].trim());
+                from = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(record[from..].trim());
+    out
+}
+
+/// A value as it reads: `IFCLABEL('REI 60')` is `REI 60`, `IFCBOOLEAN(.T.)` is `true`, a number
+/// stays a number; nothing for `$`.
+fn step_value(argument: &str) -> String {
+    let inner = match (argument.find('('), argument.ends_with(')')) {
+        (Some(open), true) if argument[..open].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && open > 0 => &argument[open + 1..argument.len() - 1],
+        _ => argument,
+    };
+    match inner {
+        "$" | "*" => String::new(),
+        ".T." => "true".into(),
+        ".F." => "false".into(),
+        ".U." => "unknown".into(),
+        text if text.starts_with('\'') && text.ends_with('\'') && text.len() >= 2 => ifc_lite_core::decode_ifc_string(&text[1..text.len() - 1]).to_string(),
+        other => other.trim_matches('.').to_string(),
+    }
+}
+
 fn child_relation(parent: Option<&str>, child: Option<&str>) -> Relation {
     let spatial = |c: &str| {
         let c = c.to_ascii_lowercase();
@@ -375,7 +576,10 @@ fn child_relation(parent: Option<&str>, child: Option<&str>) -> Relation {
             .contains(&c.as_str())
     };
     let opening = |c: &str| ["ifcopeningelement", "ifcopeningstandardcase", "ifcvoidingfeature"].contains(&c.to_ascii_lowercase().as_str());
+    // a set of properties or quantities is a part of what it describes
+    let set = |c: &str| ["ifcpropertyset", "ifcelementquantity"].contains(&c.to_ascii_lowercase().as_str());
     match (parent, child) {
+        (Some(_), Some(c)) if set(c) => Relation::Part,
         (Some(p), Some(c)) if spatial(p) && spatial(c) => Relation::Aggregates,
         (Some(p), Some(_)) if spatial(p) => Relation::Contains,
         (Some(_), Some(c)) if opening(c) => Relation::Voids,
@@ -642,6 +846,61 @@ fn compact(s: &str, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ifc_file_in_step_form_is_taken_apart_as_an_ifcx_file_is() {
+        let ifc = "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4X3_ADD2'));\nENDSEC;\nDATA;\n\
+            #1=IFCPROJECT('0aaaaaaaaaaaaaaaaaaaa1',$,'Project',$,$,$,$,$,$);\n\
+            #2=IFCBUILDING('0aaaaaaaaaaaaaaaaaaaa2',$,'Building',$,$,$,$,$,$,$,$,$);\n\
+            #3=IFCBUILDINGSTOREY('0aaaaaaaaaaaaaaaaaaaa3',$,'Ground floor',$,$,$,$,$,$,0.);\n\
+            #4=IFCWALL('0aaaaaaaaaaaaaaaaaaaa4',$,'Wall A','outer',$,$,$,'W1',$);\n\
+            #5=IFCWALLTYPE('0aaaaaaaaaaaaaaaaaaaa5',$,'Brick 100',$,$,$,$,$,$,.STANDARD.);\n\
+            #6=IFCMATERIAL('Brick',$,$);\n\
+            #7=IFCOPENINGELEMENT('0aaaaaaaaaaaaaaaaaaaa7',$,'Opening',$,$,$,$,$,$);\n\
+            #10=IFCRELAGGREGATES('0aaaaaaaaaaaaaaaaaaa10',$,$,$,#1,(#2));\n\
+            #11=IFCRELAGGREGATES('0aaaaaaaaaaaaaaaaaaa11',$,$,$,#2,(#3));\n\
+            #12=IFCRELCONTAINEDINSPATIALSTRUCTURE('0aaaaaaaaaaaaaaaaaaa12',$,$,$,(#4),#3);\n\
+            #13=IFCRELDEFINESBYTYPE('0aaaaaaaaaaaaaaaaaaa13',$,$,$,(#4),#5);\n\
+            #14=IFCRELASSOCIATESMATERIAL('0aaaaaaaaaaaaaaaaaaa14',$,$,$,(#4),#6);\n\
+            #15=IFCRELVOIDSELEMENT('0aaaaaaaaaaaaaaaaaaa15',$,$,$,#4,#7);\n\
+            #20=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('REI 60, tested'),$);\n\
+            #21=IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN(.T.),$);\n\
+            #22=IFCPROPERTYSET('0aaaaaaaaaaaaaaaaaaa22',$,'Pset_WallCommon',$,(#20,#21));\n\
+            #23=IFCRELDEFINESBYPROPERTIES('0aaaaaaaaaaaaaaaaaaa23',$,$,$,(#4),#22);\n\
+            #24=IFCQUANTITYLENGTH('Length',$,$,4.25,$);\n\
+            #25=IFCELEMENTQUANTITY('0aaaaaaaaaaaaaaaaaaa25',$,'Qto_WallBaseQuantities',$,$,(#24));\n\
+            #26=IFCRELDEFINESBYPROPERTIES('0aaaaaaaaaaaaaaaaaaa26',$,$,$,(#4),#25);\n\
+            ENDSEC;\nEND-ISO-10303-21;\n";
+        let s = Structure::read_step("small.ifc", ifc.as_bytes()).expect("an IFC file");
+        // the text is the file's own lines; a node knows the line of its record
+        assert_eq!(s.lines[2].text, "FILE_SCHEMA(('IFC4X3_ADD2'));");
+        let node = |path: &str| &s.nodes[s.index[path] as usize];
+        let wall = node("#4");
+        assert_eq!((wall.class.as_deref(), wall.name.as_deref()), (Some("IfcWall"), Some("Wall A")));
+        assert!(s.lines[s.entries[wall.entries[0] as usize].line as usize].text.starts_with("#4=IFCWALL"));
+        // the project is the one root, and the tree runs down the spatial structure to the wall
+        assert_eq!(s.roots, [s.index["#1"]]);
+        assert_eq!(node("#3").children, [("Wall A #4".to_string(), "#4".to_string())]);
+        // the relations are named as IFCX's are
+        let kind = |from: &str, to: &str| s.links.iter().find(|l| l.from == s.index[from] && l.target == to).map(|l| l.kind);
+        assert_eq!(kind("#1", "#2"), Some(Relation::Aggregates));
+        assert_eq!(kind("#3", "#4"), Some(Relation::Contains));
+        assert_eq!(kind("#4", "#7"), Some(Relation::Voids));
+        assert_eq!(kind("#4", "#5"), Some(Relation::Type));
+        assert_eq!(kind("#4", "#6"), Some(Relation::Material));
+        // a property set and a set of quantities hang under the wall, each property an attribute
+        // with its value
+        let pset = node("#22");
+        assert_eq!((pset.class.as_deref(), pset.name.as_deref()), (Some("IfcPropertySet"), Some("Pset_WallCommon")));
+        assert_eq!(kind("#4", "#22"), Some(Relation::Part));
+        let said = |path: &str, key: &str| s.entries[node(path).entries[0] as usize].attributes.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        assert_eq!(said("#22", "bsi::ifc::prop::FireRating").as_deref(), Some("REI 60, tested"));
+        assert_eq!(said("#22", "bsi::ifc::prop::IsExternal").as_deref(), Some("true"));
+        assert_eq!(said("#25", "bsi::ifc::prop::Length").as_deref(), Some("4.25"));
+        assert_eq!(kind("#4", "#25"), Some(Relation::Part));
+        // what is no IFC file is refused
+        assert!(Structure::read_step("x.ifc", b"{}").is_err());
+    }
 
     /// Header members in an order that is not alphabetical, two entries, a mesh.
     const FILE: &str = r#"{"header": {"ifcxVersion": "ifcx_alpha", "id": "x"},

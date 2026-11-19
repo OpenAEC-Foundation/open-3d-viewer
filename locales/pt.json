@@ -1404,6 +1404,10 @@
     "without steel in": "sem aço em",
     "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Escolha em Mosaicos uma composição, um tipo de barra, um perfil de aço ou um sistema: aparece aqui em 3D.",
     "Drag to turn it.": "Arraste para o rodar.",
-    "Pulled apart": "Explodido"
+    "Pulled apart": "Explodido",
+    "Flat bars": "Barras chatas",
+    "Round bars": "Barras redondas",
+    "cold-formed": "enformado a frio",
+    "Differdinger (old)": "Differdinger (antigo)"
   }
 }

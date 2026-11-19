@@ -815,7 +815,7 @@ impl App {
             }
             Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| {
                 let make = l.text("Maak er een balktype van in het project", "Make a beam type of it in the project");
-                (s.designation.clone(), profile_detail(p, &s.shape, general().material("steel"), Some(s.series.standard())), Some((make, Message::Profile(ProfileMessage::FromSteel(designation.clone())))))
+                (s.designation.clone(), profile_detail(p, &s.shape, general().material("steel"), Some(&s.source())), Some((make, Message::Profile(ProfileMessage::FromSteel(designation.clone())))))
             }),
             Item::Setting(_) => None,
             // (a hatch is the catalogue's: there is no copy of it to edit yet)

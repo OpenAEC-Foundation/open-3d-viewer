@@ -474,7 +474,7 @@ impl App {
             fields = fields.push(text(format!("A {:.1} cm² · Iy {:.0} cm⁴ · Iz {:.0} cm⁴", props.area * 1e4, props.iu * 1e8, props.iv * 1e8)).size(11).color(p.text_secondary));
         }
         if let Some(table) = t.designation.as_deref().and_then(steel) {
-            fields = fields.push(text(format!("{}: {} · {}", l.text("Uit de staaltabel", "From the steel table"), table.designation, table.series.standard())).size(11).color(p.text_secondary));
+            fields = fields.push(text(format!("{}: {} · {}", l.text("Uit de staaltabel", "From the steel table"), table.designation, table.source())).size(11).color(p.text_secondary));
         }
         let own_name = l.text("Eigen naam", "Own name");
         let own = text_input(l.text("volgens materiaal en maat", "by material and size"), t.name.as_deref().unwrap_or_default()).on_input(ProfileMessage::Named).size(12).padding([2, 6]);

@@ -385,6 +385,11 @@ impl App {
                 let title = match series {
                     Series::LEqual => format!("L {}", l.text("gelijkzijdig", "equal")),
                     Series::LUnequal => format!("L {}", l.text("ongelijkzijdig", "unequal")),
+                    Series::CfShs => format!("SHS {}", l.text("koudgevormd", "cold-formed")),
+                    Series::CfRhs => format!("RHS {}", l.text("koudgevormd", "cold-formed")),
+                    Series::Flat => l.text("Strippen", "Flat bars").to_string(),
+                    Series::Round => l.text("Rondstaal", "Round bars").to_string(),
+                    Series::Differdinger => l.text("Differdinger (oud)", "Differdinger (old)").to_string(),
                     s => s.name().to_string(),
                 };
                 body = body.push(container(header(title, of.len(), group)).padding(Padding { left: 12.0, ..Padding::ZERO }));
@@ -396,7 +401,7 @@ impl App {
                     let pick = Pick::Steel(s.designation.clone());
                     body = body.push(container(item(name(s.designation.clone()).into(), pick.clone())).padding(Padding { left: 12.0, ..Padding::ZERO }));
                     if view.picked.as_ref() == Some(&pick) {
-                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(s.series.standard())))));
+                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(&s.source())))));
                     }
                 }
             }
@@ -633,7 +638,7 @@ fn system_section(t: &SystemType, lib: &Library, line: Color) -> Section {
 }
 
 /// A profile drawn as its outline, with its sizes, area and second moments.
-pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&'static str>) -> Element<'a, Message> {
+pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&str>) -> Element<'a, Message> {
     let mut lines = vec![match *shape {
         ProfileShape::Rectangle { width, depth } => format!("b {} · h {} mm", mm_en(width), mm_en(depth)),
         ProfileShape::Circle { diameter } => format!("d {} mm", mm_en(diameter)),

@@ -1404,6 +1404,10 @@
     "without steel in": "çeliksiz, içinde",
     "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Kutucuklar altında bir katman yapısı, bir çubuk tipi, bir çelik profil veya bir sistem seçin: burada 3B olarak görünür.",
     "Drag to turn it.": "Döndürmek için sürükleyin.",
-    "Pulled apart": "Ayrık"
+    "Pulled apart": "Ayrık",
+    "Flat bars": "Lama demiri",
+    "Round bars": "Yuvarlak çubuklar",
+    "cold-formed": "soğuk şekillendirilmiş",
+    "Differdinger (old)": "Differdinger (eski)"
   }
 }

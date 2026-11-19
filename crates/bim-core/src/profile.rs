@@ -247,9 +247,11 @@ mod tests {
             assert_eq!(def.name(), p.designation);
             let profile = def.profile().unwrap_or_else(|e| panic!("{}: {e}", p.designation));
             let exact = p.shape.props().unwrap().area;
-            // round edges are chords within the chord tolerance, so a small tube has a little less
-            assert!((profile.area() - exact).abs() / exact < 0.01, "{}: {} vs {exact}", p.designation, profile.area());
-            assert_eq!(profile.holes().len(), usize::from(matches!(p.series, bim_library::Series::Shs | bim_library::Series::Rhs | bim_library::Series::Chs)));
+            // round edges are chords within the chord tolerance, so a small tube has a little less;
+            // a thin round bar is the polygon of the fewest sides, 2.6 % less than its circle
+            let tolerance = if matches!(p.shape, bim_library::ProfileShape::Circle { .. }) { 0.03 } else { 0.01 };
+            assert!((profile.area() - exact).abs() / exact < tolerance, "{}: {} vs {exact}", p.designation, profile.area());
+            assert_eq!(profile.holes().len(), usize::from(p.series.hollow()));
         }
         assert!(ProfileDef::steel("HEA 210").is_none());
     }

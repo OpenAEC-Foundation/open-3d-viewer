@@ -725,6 +725,8 @@
     "Click where that point turns to · Esc: start again": "Clique para onde esse ponto roda · Esc: recomeçar",
     "Click a point of the mirror axis · Esc: stop": "Clique num ponto do eixo de espelho · Esc: parar",
     "Click a second point of the mirror axis · Esc: start again": "Clique num segundo ponto do eixo de espelho · Esc: recomeçar",
+    "Click the line to align to (grid, wall, edge) · Esc: stop": "Clique na linha à qual alinhar (grelha, parede, aresta) · Esc: parar",
+    "Click the point that comes onto that line · Esc: start again": "Clique no ponto que fica sobre essa linha · Esc: recomeçar",
     "Metal stud walls": "Paredes de montantes metálicos",
     "Hidden line": "Linhas ocultas",
     "Shaded": "Sombreado",

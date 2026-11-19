@@ -725,6 +725,8 @@
     "Click where that point turns to · Esc: start again": "O noktanın döneceği yere tıklayın · Esc: baştan başla",
     "Click a point of the mirror axis · Esc: stop": "Aynalama ekseninin bir noktasına tıklayın · Esc: bitir",
     "Click a second point of the mirror axis · Esc: start again": "Aynalama ekseninin ikinci noktasına tıklayın · Esc: baştan başla",
+    "Click the line to align to (grid, wall, edge) · Esc: stop": "Hizalanacak çizgiye tıklayın (aks, duvar, kenar) · Esc: durdur",
+    "Click the point that comes onto that line · Esc: start again": "O çizgiye gelecek noktaya tıklayın · Esc: yeniden başla",
     "Metal stud walls": "Metal dikmeli duvarlar",
     "Hidden line": "Gizli çizgi",
     "Shaded": "Gölgeli",

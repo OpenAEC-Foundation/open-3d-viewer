@@ -725,6 +725,8 @@
     "Click where that point turns to · Esc: start again": "Klicka dit punkten ska roteras · Esc: börja om",
     "Click a point of the mirror axis · Esc: stop": "Klicka på en punkt på spegelaxeln · Esc: avsluta",
     "Click a second point of the mirror axis · Esc: start again": "Klicka på en andra punkt på spegelaxeln · Esc: börja om",
+    "Click the line to align to (grid, wall, edge) · Esc: stop": "Klicka på linjen att justera mot (stomlinje, vägg, kant) · Esc: avbryt",
+    "Click the point that comes onto that line · Esc: start again": "Klicka på punkten som hamnar på den linjen · Esc: börja om",
     "Metal stud walls": "Stålregelväggar",
     "Hidden line": "Dolda linjer",
     "Shaded": "Skuggad",

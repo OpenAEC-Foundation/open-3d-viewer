@@ -2654,7 +2654,7 @@ dependencies = [
 [[package]]
 name = "ifcx-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/ifcx-rs?rev=a333af2278ff3fb3de1d9deb2fd17291b64d3c2b#a333af2278ff3fb3de1d9deb2fd17291b64d3c2b"
+source = "git+https://github.com/OpenAEC-Foundation/ifcx-rs?rev=46a594360cbe8dde181f9663e4b0ece5dc6cd625#46a594360cbe8dde181f9663e4b0ece5dc6cd625"
 dependencies = [
  "hecs",
  "memmap2",

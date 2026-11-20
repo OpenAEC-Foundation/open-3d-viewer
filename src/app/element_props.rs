@@ -355,6 +355,20 @@ impl App {
         self.change_element(changed);
     }
 
+    /// Gives the selected join the recipe of a type of the library, sizes and all (a cut stays a
+    /// cut, and a join of members takes no cut).
+    pub(super) fn set_join_recipe(&mut self, kind: ConnectionKind) {
+        let Some(e) = self.defined().cloned() else { return };
+        let Shape::Connection(c) = &e.shape else { return };
+        if c.kind == ConnectionKind::Cut || kind == ConnectionKind::Cut || c.kind == kind {
+            return;
+        }
+        let mut changed = e.clone();
+        changed.shape = Shape::Connection(ConnectionDef { kind, ..c.clone() });
+        self.modeller.refusal = None;
+        self.change_element(changed);
+    }
+
     /// Turns the selected join round: its other member becomes the primary (the one that runs
     /// through).
     pub(super) fn swap_join(&mut self) {
@@ -580,6 +594,8 @@ impl App {
                         ]
                         .spacing(6),
                     )
+                    // its type from the project's library: the recipe with its sizes
+                    .push(self.join_type_picker(p, l, &c.kind))
                 };
             }
             // what it is to the analysis model

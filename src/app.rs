@@ -4794,7 +4794,7 @@ impl App {
         });
         let boxed = self.box_select.map(|(from, to)| canvas(crate::viewport::box_select::BoxOverlay { from, to }).width(Fill).height(Fill));
         // the dimensions and texts of the view shown in its tab
-        let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| m.widget());
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
         // edit mode's points, else the selected element's grips: one slot, so a drag that begins on
         // a grip keeps its overlay

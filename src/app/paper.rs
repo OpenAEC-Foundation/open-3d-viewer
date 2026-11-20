@@ -479,7 +479,21 @@ impl App {
         let path = self.active_doc_sheet.as_ref()?;
         self.document.sheet(path)?;
         let drawing = self.paper_drawing(p, l)?;
-        Some(canvas_widget(drawing).width(Fill).height(Fill).into())
+        let images: Vec<_> = drawing.placed.iter().enumerate().filter_map(|(i, placed)| {
+            placed.image.as_ref()?.placed(None, |q| drawing.to_paper(i, q))
+        }).collect();
+        if images.is_empty() { return Some(canvas_widget(drawing).width(Fill).height(Fill).into()); }
+        let paper = drawing.sheet.paper;
+        let background = crate::raster::Backdrop(move |frame: &mut Frame, bounds: Rectangle| {
+            let fit = Fit::of(paper, bounds.size());
+            let at = fit.point([0.0, paper[1]]);
+            let end = fit.point([paper[0], 0.0]);
+            let size = Size::new(end.x - at.x, end.y - at.y);
+            frame.fill_rectangle(Point::new(at.x + 3.0, at.y + 3.0), size, Color { a: 0.12, ..Color::BLACK });
+            frame.fill_rectangle(at, size, if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE });
+            for image in &images { image.draw(frame, |q| Some(fit.point(q))); }
+        });
+        Some(iced::widget::stack![canvas_widget(background).width(Fill).height(Fill), canvas_widget(drawing).width(Fill).height(Fill)].into())
     }
 
     /// The Sheet section of the right pane while a sheet is shown: its paper, its arranging, its
@@ -988,8 +1002,10 @@ impl canvas::Program<Message> for PaperDrawing {
         // the paper and its frame (10 mm, 20 mm on the binding side), the title at the lower right
         let [w, h] = self.sheet.paper;
         let (at, size) = rect([0.0, 0.0], [w, h]);
-        frame.fill_rectangle(Point::new(at.x + 3.0, at.y + 3.0), size, Color { a: 0.12, ..Color::BLACK });
-        frame.fill_rectangle(at, size, paper);
+        if self.placed.iter().all(|v| v.image.is_none()) {
+            frame.fill_rectangle(Point::new(at.x + 3.0, at.y + 3.0), size, Color { a: 0.12, ..Color::BLACK });
+            frame.fill_rectangle(at, size, paper);
+        }
         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
         let (inner, inner_size) = rect([0.02, 0.01], [w - 0.01, h - 0.01]);
         frame.stroke(&Path::rectangle(inner, inner_size), Stroke::default().with_color(ink).with_width(1.4));
@@ -1031,7 +1047,6 @@ impl canvas::Program<Message> for PaperDrawing {
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
             }
             let placed = self.placed.get(i).cloned().unwrap_or_default();
-            if let Some(image) = &placed.image { image.draw(&mut frame, |q| Some(fit.point(self.to_paper(i, q)))); }
             for fill in &placed.fills {
                 let path = Path::new(|p| {
                     let mut points = fill.points.iter().map(|&q| fit.point(self.to_paper(i, q)));

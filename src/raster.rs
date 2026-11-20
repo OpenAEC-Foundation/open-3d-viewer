@@ -155,3 +155,16 @@ impl OrthoPhoto {
         }
     }
 }
+
+/// A separate canvas layer keeps vector annotations above the image batch.
+pub(crate) struct Backdrop<F>(pub F);
+
+impl<Message, F: Fn(&mut canvas::Frame, Rectangle)> canvas::Program<Message> for Backdrop<F> {
+    type State = ();
+
+    fn draw(&self, _: &(), renderer: &iced::Renderer, _: &iced::Theme, bounds: Rectangle, _: iced::mouse::Cursor) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        (self.0)(&mut frame, bounds);
+        vec![frame.into_geometry()]
+    }
+}

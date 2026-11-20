@@ -12,13 +12,44 @@ use glam::{Mat4, Vec3};
 use iced::widget::canvas::{self, Frame, Path};
 use iced::{mouse, Color, Point, Rectangle, Size};
 
+pub(super) type Faces = Vec<Vec<Vec<Vec3>>>;
+
+fn part_faces(grid: &bim_core::TileGrid, part: &bim_core::Part) -> Faces {
+    let origin = grid.origin(part.tile);
+    let at = |i: &u32| (origin + part.solid.positions[*i as usize]).as_vec3();
+    part.solid.faces.iter().map(|f| f.rings.iter().map(|r| r.iter().map(at).collect()).collect()).collect()
+}
+
 impl App {
+    pub(super) fn copying(&self) -> bool {
+        self.modeller.transform.as_ref().is_some_and(|t| t.kind == super::transform::TransformKind::Copy)
+    }
+
+    pub(super) fn copy_source_faces(&self, ids: &[bim_core::ElementId], grid: Option<usize>, drawn: Option<&(std::sync::Arc<str>, std::ops::Range<usize>)>) -> Faces {
+        let model = &self.modeller.model;
+        let (z, ..) = self.work_plane();
+        let segment = |a: glam::DVec2, b: glam::DVec2| vec![vec![a.extend(z).as_vec3(), b.extend(z).as_vec3()]];
+        if let Some((view, run)) = drawn {
+            return self.document.view_lines(view)[run.clone()].iter().map(|[a, b]| segment((*a).into(), (*b).into())).collect();
+        }
+        if let Some(line) = grid.and_then(|i| model.grids().get(i)) {
+            return vec![segment(line.start, line.end)];
+        }
+        let mut faces = Vec::new();
+        for id in ids {
+            if let Ok(parts) = model.evaluate(*id) {
+                for part in parts { faces.extend(part_faces(&model.grid, &part)); }
+            }
+        }
+        faces
+    }
+
     /// The cursor rests at (x, y) in a viewport of width × height while a tool is on: the preview
     /// follows it. False when no tool is on.
     pub(super) fn model_hover(&mut self, x: f32, y: f32, width: f32, height: f32) -> bool {
-        let Some((tool, _)) = self.modeller.tool else { return false };
+        if self.modeller.tool.is_none() && !self.copying() { return false; }
         let (width, height) = (width.max(1.0), height.max(1.0));
-        if tool.opens() {
+        if let Some((tool, _)) = self.modeller.tool.filter(|(t, _)| t.opens()) {
             // a door or window aims at the wall under the cursor
             self.modeller.snap_mark = None;
             self.modeller.aim = self.opening_at(tool, x, y, width, height);
@@ -54,6 +85,13 @@ impl App {
     /// The preview over the viewport: the faces of the element [`App::placing`] gives, the points
     /// clicked so far and the cursor's point. `None` when no tool is on or the cursor is away.
     pub(super) fn placing_overlay(&self, ink: Color) -> Option<PlacingOverlay> {
+        if let Some(t) = self.modeller.transform.as_ref().filter(|_| self.copying()) {
+            let base = *t.points.first()?;
+            let cursor = self.modeller.cursor?;
+            let shift = (cursor - base).as_vec3();
+            let faces = t.copy_faces.iter().map(|face| face.iter().map(|r| r.iter().map(|p| *p + shift).collect()).collect()).collect();
+            return Some(PlacingOverlay { faces, points: vec![base.as_vec3()], cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, mark: self.snap_mark(), readout: None });
+        }
         if self.modeller.grid_tool {
             return self.grid_overlay(ink);
         }
@@ -69,9 +107,7 @@ impl App {
             // an element the kernel refuses (a wall of no length yet) shows no body
             if let Ok(parts) = alone.add(Element::in_project(&grid, "", None, shape)).and_then(|id| alone.evaluate(id)) {
                 for part in &parts {
-                    let origin = grid.origin(part.tile);
-                    let at = |i: &u32| (origin + part.solid.positions[*i as usize]).as_vec3();
-                    faces.extend(part.solid.faces.iter().map(|f| f.rings.iter().map(|ring| ring.iter().map(at).collect()).collect()));
+                    faces.extend(part_faces(&grid, part));
                 }
             }
         }

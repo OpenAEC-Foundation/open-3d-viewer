@@ -55,7 +55,7 @@ impl App {
     /// The grips of the selected element over the viewport: its ends, then its middle. A wall of
     /// an opened file that the Modeller can take over has them too (see `take_over`).
     pub(super) fn grip_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
-        if !self.annotates { return None; }
+        if self.copying() || !self.annotates { return None; }
         // a floor has grips of its own: its edges, its top and its underside
         if let Some(overlay) = self.slab_overlay(ink, fill) {
             return Some(overlay);

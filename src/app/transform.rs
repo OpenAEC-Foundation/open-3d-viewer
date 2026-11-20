@@ -95,6 +95,7 @@ pub struct Transform {
     /// The line to align to: a point on it and the way it runs.
     pub line: Option<(DVec2, DVec2)>,
     pub points: Vec<DVec3>,
+    pub(super) copy_faces: super::placing::Faces,
     /// What is drawn on a floor plan that it takes in place of elements: the plan, and the run of
     /// its lines that is the line or shape picked.
     pub drawn: Option<(std::sync::Arc<str>, std::ops::Range<usize>)>,
@@ -277,7 +278,13 @@ impl App {
         }
         self.modeller.edit = None;
         self.modeller.refusal = None;
-        self.modeller.transform = Some(Transform { kind, elements, grid, line: None, points: Vec::new(), drawn });
+        let copy_faces = if kind == TransformKind::Copy {
+            self.modeller.cursor = None;
+            self.copy_source_faces(&elements, grid, drawn.as_ref())
+        } else {
+            Vec::new()
+        };
+        self.modeller.transform = Some(Transform { kind, elements, grid, line: None, points: Vec::new(), drawn, copy_faces });
         // a fresh 3D cursor is the base point of a move; copying takes an explicit base point
         self.transform_from_cursor3d();
     }
@@ -314,6 +321,7 @@ impl App {
             return self.align_click(p, x, y, width, height);
         }
         let Some(t) = self.modeller.transform.as_mut() else { return };
+        if t.kind == TransformKind::Copy { self.modeller.cursor = Some(p); }
         t.points.push(p);
         if t.points.len() < t.kind.clicks() {
             return;
@@ -574,8 +582,22 @@ mod tests {
     fn copy_leaves_the_wall_and_makes_another_with_the_next_number() {
         let (mut app, id) = a_wall();
         let _ = app.update(Message::Transform(TransformKind::Copy));
+        let ink = iced::Color::BLACK;
+        assert!(app.placing_overlay(ink).is_none());
         click(&mut app, 10.0, 5.0);
+        let source = app.placing_overlay(ink).unwrap().faces;
+        assert!(!source.is_empty());
+        let (x, y) = app.on_screen(DVec3::new(10.0, 8.0, 0.0), 1000.0, 800.0).unwrap();
+        let hover = Navigate::Hover { x, y, width: 1000.0, height: 800.0 };
+        let _ = app.update(Message::Navigate(hover.clone()));
+        let preview = app.placing_overlay(ink).unwrap();
+        assert_eq!(app.modeller.model.len(), 1);
+        assert_eq!(preview.faces[0][0][0] - source[0][0][0], glam::Vec3::new(0.0, 3.0, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::HoverOff));
+        assert!(app.placing_overlay(ink).is_none());
+        let _ = app.update(Message::Navigate(hover));
         click(&mut app, 10.0, 8.0);
+        assert!(app.placing_overlay(ink).is_none());
         let walls: Vec<&bim_core::Element> = app.modeller.model.iter().filter(|e| e.class() == "IfcWall").collect();
         assert_eq!(walls.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Wall 1", "Wall 2"]);
         let (a, b) = ends(&app, id);

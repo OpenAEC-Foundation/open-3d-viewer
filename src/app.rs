@@ -2569,6 +2569,7 @@ impl App {
                 Navigate::HoverOff => {
                     self.modeller.cursor = None;
                     self.modeller.aim = None;
+                    if let Some(sketch) = &mut self.modeller.sketch { sketch.cursor = None; }
                     self.hover_request = None;
                     self.measure.hover = None;
                     self.structural_hover_off();
@@ -4630,7 +4631,7 @@ impl App {
             looks: &self.unit_looks,
             drag_selects: self.drag_selects(),
             cursor3d: self.has_cursor3d(),
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool || self.copying()) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,

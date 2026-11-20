@@ -49,21 +49,34 @@ pub fn cad_document(d: &Drawing2d) -> Document {
             let _ = doc.layers.add(layer);
         }
     }
-    // 2.5 mm text and ticks on paper, in the drawing's millimetres
+    // Use native CAD dimension entities and retain the view's paper style.
     let unit = MM / d.paper_per_unit();
-    let mut style = DimStyle::new(STYLE);
-    style.handle = doc.allocate_handle();
-    style.dimtxt = 0.0025 * unit;
-    style.dimasz = 0.0025 * unit;
-    style.dimtsz = 0.0012 * unit;
-    style.dimexo = 0.0015 * unit;
-    style.dimexe = 0.0015 * unit;
-    style.dimgap = 0.001 * unit;
-    style.dimdec = 0;
-    style.dimtad = 1;
-    style.dimtih = false;
-    style.dimtoh = false;
-    let _ = doc.dim_styles.add(style);
+    let mut styles = Vec::new();
+    for dim in &d.dimensions {
+        if styles.contains(&&dim.style) { continue; }
+        let index = styles.len();
+        styles.push(&dim.style);
+        let mut style = DimStyle::new(if index == 0 { STYLE.to_string() } else { format!("{STYLE}-{index}") });
+        style.handle = doc.allocate_handle();
+        style.dimtxt = dim.style.size * unit;
+        style.dimasz = dim.style.tick_size * unit;
+        style.dimtsz = 0.0;
+        match dim.style.tick {
+            crate::document::Tick::Slash => style.dimtsz = dim.style.tick_size * unit,
+            crate::document::Tick::Dot => style.dimblk_name = "_DOT".into(),
+            crate::document::Tick::None => style.dimblk_name = "_NONE".into(),
+            crate::document::Tick::Arrow => {}
+        }
+        style.dimexo = dim.style.gap * unit;
+        style.dimexe = dim.style.extension * unit;
+        style.dimgap = 0.001 * unit;
+        style.dimdec = dim.style.decimals as i16;
+        if dim.style.unit == crate::document::DimensionUnit::Metres { style.dimlfac = 0.001; }
+        style.dimtad = 1;
+        style.dimtih = false;
+        style.dimtoh = false;
+        let _ = doc.dim_styles.add(style);
+    }
 
     for l in &d.lines {
         let mut line = Line::from_points(mm(l.a), mm(l.b));
@@ -95,7 +108,8 @@ pub fn cad_document(d: &Drawing2d) -> Document {
         let mut aligned = DimensionAligned::new(mm(dim.from), mm(dim.to));
         aligned.definition_point = mm(on_line);
         let base = &mut aligned.base;
-        base.style_name = STYLE.into();
+        let index = styles.iter().position(|s| **s == dim.style).unwrap_or(0);
+        base.style_name = if index == 0 { STYLE.to_string() } else { format!("{STYLE}-{index}") };
         base.common.layer = Pen::Dimension.name().into();
         // the middle of its text
         let label = dim.label();

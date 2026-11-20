@@ -156,11 +156,16 @@ fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::S
         if s.trim().is_empty() {
             return;
         }
-        // Text2d uses capital height. The reference gives the em of its typeface.
-        let size = (em * 0.718).min(width / (0.81 * s.chars().count() as f64));
+        let bold = em >= 7.0 || matches!(s, "Projectnr:" | "Fase:" | "Auteur:");
+        let family = if em >= 7.0 { &style.fonts.heading } else { &style.fonts.text };
+        let advance = (family == "Segoe UI").then(|| crate::typeface::segoe_ui(bold)).flatten()
+            .and_then(|bytes| ttf_parser::Face::parse(bytes, 0).ok())
+            .map(|font| s.chars().filter_map(|c| font.glyph_hor_advance(font.glyph_index(c)?)).map(f64::from).sum::<f64>() / f64::from(font.units_per_em()))
+            .unwrap_or_else(|| s.chars().count() as f64 * 0.55);
+        let size = em.min(width / advance.max(0.01));
         out.texts.push(Text2d {
-            family: None,
-            bold: em >= 7.0 || matches!(s,"Projectnr:" | "Fase:" | "Auteur:"),
+            family: Some(family.as_str().into()),
+            bold,
             pen: Pen::Text,
             color: Some(color),
             at: at(x, y),

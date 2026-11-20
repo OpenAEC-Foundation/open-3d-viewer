@@ -278,14 +278,25 @@ pub const SWISS_POSTSCRIPT: &str = "Swiss721BT-RomanCondensed";
 /// File supplied by the desktop installation. Verify its identity before using it.
 pub(crate) fn swiss_condensed() -> Option<&'static [u8]> {
     static FILE: OnceLock<Option<Vec<u8>>> = OnceLock::new();
-    FILE.get_or_init(|| {
-        let path = std::path::PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts").join("swissc.ttf");
-        let bytes = std::fs::read(path).ok()?;
-        let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
-        let matched = face.names().into_iter().any(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME &&
-            n.to_string().as_deref() == Some(SWISS_POSTSCRIPT));
-        matched.then_some(bytes)
-    }).as_deref()
+    FILE.get_or_init(|| installed_ttf("swissc.ttf", SWISS_POSTSCRIPT)).as_deref()
+}
+
+pub(crate) fn segoe_ui(bold: bool) -> Option<&'static [u8]> {
+    static REGULAR: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    static BOLD: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    if bold {
+        BOLD.get_or_init(|| installed_ttf("segoeuib.ttf", "SegoeUI-Bold")).as_deref()
+    } else {
+        REGULAR.get_or_init(|| installed_ttf("segoeui.ttf", "SegoeUI")).as_deref()
+    }
+}
+
+fn installed_ttf(file: &str, postscript: &str) -> Option<Vec<u8>> {
+    let path = std::path::PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts").join(file);
+    let bytes = std::fs::read(path).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+    let matched = face.names().into_iter().any(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME && n.to_string().as_deref() == Some(postscript));
+    matched.then_some(bytes)
 }
 
 /// The name the fonts know a family by, when one of them is of it.
@@ -302,6 +313,11 @@ fn family(name: &str) -> Option<&'static str> {
         let mut fonts = iced::advanced::graphics::text::font_system().write().ok()?;
         if name.eq_ignore_ascii_case(SWISS_CONDENSED) {
             if let Some(bytes) = swiss_condensed() { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
+        }
+        if name.eq_ignore_ascii_case("Segoe UI") {
+            for bold in [false, true] {
+                if let Some(bytes) = segoe_ui(bold) { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
+            }
         }
         let spelled = fonts.raw().db().faces().flat_map(|f| f.families.iter()).find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(n, _)| n.clone());
         // a name lives as long as the app: the fonts of a file are few

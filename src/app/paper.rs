@@ -1051,9 +1051,15 @@ impl canvas::Program<Message> for PaperDrawing {
                 crate::drawing2d::Align::Right => alignment::Horizontal::Right,
                 crate::drawing2d::Align::Center => alignment::Horizontal::Center,
             };
+            let font = t.family.as_deref().map_or_else(|| if t.bold { FONT_BOLD } else { openaec_ui::fonts::MEDIUM }, |name| {
+                let mut face = crate::typeface::Face::of(name);
+                face.bold = t.bold;
+                face.font()
+            });
+            let size = t.height * fit.scale / if t.family.is_some() {1.0} else {0.72};
             frame.fill_text(canvas::Text {
-                content: t.text.clone(), position: fit.point(t.at), size: iced::Pixels((t.height * fit.scale / 0.72) as f32),
-                font: if t.bold { FONT_BOLD } else { openaec_ui::fonts::MEDIUM }, align_x: align.into(),
+                content: t.text.clone(), position: fit.point(t.at), size: iced::Pixels(size as f32),
+                font, align_x: align.into(),
                 align_y: alignment::Vertical::Bottom, color: t.color.map_or(ink, |[r,g,b]| Color::from_rgb8(r,g,b)),
                 ..canvas::Text::default()
             });
@@ -1379,6 +1385,28 @@ mod tests {
         let nodes = app.document.ifcx_drawing_nodes();
         let v = nodes.iter().find(|n| n["path"] == &*plan).unwrap();
         assert_eq!(v["attributes"]["o3v::view::plan"]["presentation"]["origin"], serde_json::json!([0.0,0.0]));
+    }
+
+    #[test]
+    fn office_frame_and_revision_entries_reopen_at_their_paper_coordinates() {
+        let (mut app, path, _, _) = sheet_with_plan(false);
+        let _ = app.update(Message::ProjectAddress("Projectadres".into()));
+        let _ = app.update(Message::SheetRevision(path.clone(), 0, true, "20-11-2026".into()));
+        let _ = app.update(Message::SheetRevision(path.clone(), 0, false, "Paalnummers gewijzigd".into()));
+        let nodes = app.document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut doc = crate::document::Document::from_model(&room());
+        doc.adopt_ifcx(&nodes);
+        let sheet = doc.sheet(&path).unwrap();
+        let mut style = app.house.clone();
+        style.key = "3bm".into();
+        let block = crate::title_block::title_block(&doc,sheet,&style);
+        assert!(block.owns_frame);
+        let text_at = |value: &str| block.texts.iter().find(|t| t.text == value).unwrap().at;
+        for (value, dx, y) in [("Projectadres",-0.19075,0.06607), ("A.",-0.20622,0.09224), ("F.",-0.20622,0.01724),
+                ("20-11-2026",-0.2085,0.09224), ("Paalnummers gewijzigd",-0.2085,0.08754)] {
+            let p = text_at(value);
+            assert!((p[0]-sheet.paper[0]-dx).abs()<1e-8 && (p[1]-y).abs()<1e-8, "{value}: {p:?}");
+        }
     }
 
     #[test]

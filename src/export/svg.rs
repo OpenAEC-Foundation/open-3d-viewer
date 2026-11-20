@@ -99,6 +99,11 @@ pub fn png(d: &Drawing2d, dpi: f64) -> Result<Vec<u8>, String> {
     if d.texts.iter().any(|t| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED)) {
         if let Some(font) = crate::typeface::swiss_condensed() { fonts.load_font_data(font.to_vec()); }
     }
+    for bold in [false, true] {
+        if d.texts.iter().any(|t| t.family.as_deref() == Some("Segoe UI") && t.bold == bold) {
+            if let Some(font) = crate::typeface::segoe_ui(bold) { fonts.load_font_data(font.to_vec()); }
+        }
+    }
     let options = usvg::Options { fontdb: Arc::new(fonts), ..usvg::Options::default() };
     let tree = usvg::Tree::from_str(&svg(d), &options).map_err(|e| format!("Cannot draw the drawing: {e}"))?;
     let (w, h) = page_mm(d);

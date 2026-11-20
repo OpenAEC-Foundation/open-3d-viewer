@@ -56,7 +56,15 @@ pub(crate) fn literal(text: &str) -> String {
 }
 
 /// The page's drawing operators.
-fn content(d: &Drawing2d, swiss: Option<&super::pdf_font::Font>) -> String {
+struct DrawingFont {
+    family: &'static str,
+    bold: bool,
+    resource: &'static str,
+    name: &'static str,
+    font: super::pdf_font::Font,
+}
+
+fn content(d: &Drawing2d, fonts: &[DrawingFont]) -> String {
     let (lo, _) = d.page();
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let at = |q: [f64; 2]| format!("{} {}", num((q[0] - lo[0]) * k), num((q[1] - lo[1]) * k));
@@ -91,9 +99,9 @@ fn content(d: &Drawing2d, swiss: Option<&super::pdf_font::Font>) -> String {
         let [r, g, b] = t.color.unwrap_or_default().map(|c| num(f64::from(c) / 255.0));
         let _ = writeln!(s, "{r} {g} {b} rg");
         let size = t.height * k / if t.family.is_some() { 1.0 } else { CAPITALS };
-        let face = swiss.filter(|_| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED));
+        let face = fonts.iter().find(|f| t.family.as_deref() == Some(f.family) && t.bold == f.bold);
         let (font, width) = match face {
-            Some(f) => ("F3", t.text.chars().map(|c| f64::from(f.widths[usize::from(win_ansi(c))])).sum::<f64>() * size / 1000.0),
+            Some(f) => (f.resource, t.text.chars().map(|c| f64::from(f.font.widths[usize::from(win_ansi(c))])).sum::<f64>() * size / 1000.0),
             None => (if t.bold { "F2" } else { "F1" }, width(&t.text, size)),
         };
         let shift = match t.align {
@@ -162,14 +170,21 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
     let (lo, hi) = d.page();
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let (w, h) = (num_to((hi[0] - lo[0]) * k, 2), num_to((hi[1] - lo[1]) * k, 2));
-    let swiss = d.texts.iter().any(|t| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED)).then(crate::typeface::swiss_condensed).flatten().and_then(|bytes| {
+    let choices: [(&str, bool, &str, &str, fn() -> Option<&'static [u8]>); 3] = [
+        (crate::typeface::SWISS_CONDENSED, false, "F3", crate::typeface::SWISS_POSTSCRIPT, crate::typeface::swiss_condensed),
+        ("Segoe UI", false, "F4", "SegoeUI", || crate::typeface::segoe_ui(false)),
+        ("Segoe UI", true, "F5", "SegoeUI-Bold", || crate::typeface::segoe_ui(true)),
+    ];
+    let embedded: Vec<_> = choices.into_iter().filter_map(|(family, bold, resource, name, load)| {
+        if !d.texts.iter().any(|t| t.family.as_deref() == Some(family) && t.bold == bold) { return None; }
+        let bytes = load()?;
         use ttf_parser::Permissions::{Editable, Installable, PreviewAndPrint};
         let face = ttf_parser::Face::parse(bytes, 0).ok()?;
-        // OS/2 versions 0–2 permit the least restrictive of multiple usage bits.
-        (face.is_outline_embedding_allowed() && matches!(face.permissions(), Some(Editable | Installable | PreviewAndPrint))).then(|| super::pdf_font::font(bytes))
-    });
-    let stream = content(d, swiss.as_ref());
-    let fonts = swiss.as_ref().map_or(String::new(), |_| format!("/F3 {} 0 R", 8 + d.images.len()));
+        (face.is_outline_embedding_allowed() && matches!(face.permissions(), Some(Editable | Installable | PreviewAndPrint)))
+            .then(|| DrawingFont { family, bold, resource, name, font: super::pdf_font::font(bytes) })
+    }).collect();
+    let stream = content(d, &embedded);
+    let fonts = embedded.iter().enumerate().map(|(i,f)| format!("/{} {} 0 R", f.resource, 8 + d.images.len() + 3*i)).collect::<Vec<_>>().join(" ");
     let references = (0..d.images.len()).map(|i| format!("/Im{i} {} 0 R", i+8)).collect::<Vec<_>>().join(" ");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -200,7 +215,7 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
         object.extend_from_slice(b"\nendstream");
         objects.push(object);
     }
-    if let Some(f) = &swiss { super::pdf_font::push_font(&mut objects, f, crate::typeface::SWISS_POSTSCRIPT, 80); }
+    for f in &embedded { super::pdf_font::push_font(&mut objects, &f.font, f.name, if f.bold {120} else {80}); }
     use std::io::Write as _;
     let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
@@ -255,6 +270,21 @@ mod tests {
         assert!(result.contains("/BaseFont /Swiss721BT-RomanCondensed"));
         assert!(result.contains("BT /F3 7 Tf"));
         assert!(result.contains(&format!("/Length1 {}", bytes.len())));
+    }
+
+    #[test]
+    fn office_stamp_uses_distinct_embedded_regular_and_bold_resources() {
+        if crate::typeface::segoe_ui(false).is_none() || crate::typeface::segoe_ui(true).is_none() { return; }
+        let mut page = sheet();
+        for (i,t) in page.texts.iter_mut().enumerate() {
+            t.family = Some("Segoe UI".into());
+            t.bold = i == 1;
+            t.height = 0.00353;
+        }
+        let bytes = pdf(&page);
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("/BaseFont /SegoeUI ") && output.contains("/BaseFont /SegoeUI-Bold "));
+        assert!(output.contains("BT /F4 10.006 Tf") && output.contains("BT /F5 10.006 Tf"));
     }
 
     #[test]

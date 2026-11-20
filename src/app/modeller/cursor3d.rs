@@ -7,7 +7,7 @@
 //! - **How it shows.** A red and white ring with a cross, the same size at any zoom.
 //! - **A snap point.** Once placed (not at home), a tool's click near it lands on it.
 //! - **Fresh.** A cursor moved since it was last used is the first point of the next wall, beam
-//!   or system drawn, and the base point of the next move or copy; that spends it. One taken
+//!   or system drawn, and the base point of the next move; that spends it. One taken
 //!   home is not fresh.
 //! - **Rotate.** Enter while Rotate waits for its centre turns about the cursor, fresh or not.
 
@@ -97,9 +97,9 @@ impl App {
         }
     }
 
-    /// A move or a copy began: a fresh 3D cursor is its base point.
+    /// A move began: a fresh 3D cursor is its base point.
     pub(in crate::app) fn transform_from_cursor3d(&mut self) {
-        let moves = self.modeller.transform.as_ref().is_some_and(|t| matches!(t.kind, TransformKind::Move | TransformKind::Copy) && t.points.is_empty());
+        let moves = self.modeller.transform.as_ref().is_some_and(|t| t.kind == TransformKind::Move && t.points.is_empty());
         if !moves {
             return;
         }

@@ -132,7 +132,16 @@ impl App {
                 self.begin_grab_objects();
             }
             ModelKey::Move => self.begin_transform(TransformKind::Move),
-            ModelKey::Copy => self.begin_transform(TransformKind::Copy),
+            ModelKey::Copy => {
+                if let Some(sketch) = self.modeller.sketch.as_mut() {
+                    sketch.tool = super::sketch::SketchTool::Copy;
+                    sketch.first = None;
+                    sketch.second = None;
+                    sketch.held = None;
+                } else {
+                    self.begin_transform(TransformKind::Copy);
+                }
+            }
             ModelKey::Rotate => self.begin_transform(TransformKind::Rotate),
             ModelKey::Mirror => self.begin_transform(TransformKind::Mirror),
             ModelKey::Align => self.begin_transform(TransformKind::Align),

@@ -70,6 +70,8 @@ impl TransformKind {
     /// What to click next, `placed` points in.
     pub fn hint(self, l: Language, placed: usize) -> &'static str {
         match (self, placed) {
+            (TransformKind::Copy, 0) => l.text("Kies het basispunt van de kopie", "Pick the base point for the copy"),
+            (TransformKind::Copy, _) => l.text("Kies het doelpunt van de kopie", "Pick the destination for the copy"),
             (TransformKind::Rotate, 0) => l.text("Klik het draaipunt · Esc: stoppen", "Click the centre to turn about · Esc: stop"),
             (TransformKind::Rotate, 1) => l.text("Klik een punt om vanaf te draaien · Esc: opnieuw", "Click a point to turn from · Esc: start again"),
             (TransformKind::Rotate, _) => l.text("Klik waar dat punt heen draait · Esc: opnieuw", "Click where that point turns to · Esc: start again"),
@@ -276,7 +278,7 @@ impl App {
         self.modeller.edit = None;
         self.modeller.refusal = None;
         self.modeller.transform = Some(Transform { kind, elements, grid, line: None, points: Vec::new(), drawn });
-        // a fresh 3D cursor is the base point of a move or a copy
+        // a fresh 3D cursor is the base point of a move; copying takes an explicit base point
         self.transform_from_cursor3d();
     }
 

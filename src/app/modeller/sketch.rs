@@ -163,6 +163,7 @@ pub enum SketchTool {
     /// Picks a line; a drag moves a point.
     #[default]
     Pick,
+    Copy,
     Line,
     Rectangle,
     Arc,
@@ -308,9 +309,16 @@ impl Sketch {
         points
     }
 
+    fn copy_at(&self, base: DVec2, target: DVec2) -> Option<Segment> {
+        let s = self.segments.get(self.picked?)?;
+        let delta = target - base;
+        Some(Segment { a: s.a + delta, b: s.b + delta, bulge: s.bulge })
+    }
+
     /// The lines a click would add now: from the points clicked to the cursor.
     fn preview(&self) -> Vec<Segment> {
         match (self.tool, self.first, self.second, self.cursor) {
+            (SketchTool::Copy, Some(a), _, Some(b)) => self.copy_at(a, b).into_iter().collect(),
             (SketchTool::Line, Some(a), _, Some(b)) | (SketchTool::Arc, Some(a), None, Some(b)) => vec![Segment::line(a, b)],
             (SketchTool::Rectangle, Some(a), _, Some(b)) => rectangle(a, b).to_vec(),
             (SketchTool::Arc, Some(a), Some(b), Some(p)) => vec![Segment::through(a, b, p)],
@@ -322,6 +330,15 @@ impl Sketch {
     fn place(&mut self, p: DVec2) {
         self.error = None;
         match (self.tool, self.first, self.second) {
+            (SketchTool::Copy, Some(a), _) if a.distance(p) > MEET => {
+                if let Some(copy) = self.copy_at(a, p) {
+                    self.picked = Some(self.segments.len());
+                    self.segments.push(copy);
+                    self.tool = SketchTool::Pick;
+                    self.first = None;
+                }
+            }
+            (SketchTool::Copy, None, _) if self.picked.is_some() => self.first = Some(p),
             (SketchTool::Line, Some(a), _) if a.distance(p) > MEET => {
                 self.segments.push(Segment::line(a, p));
                 self.first = Some(p);
@@ -405,7 +422,11 @@ impl App {
         let Some(tool) = self.modeller.sketch.as_ref().map(|s| s.tool) else { return false };
         self.modeller.refusal = None;
         match tool {
-            SketchTool::Line | SketchTool::Rectangle | SketchTool::Arc => {
+            SketchTool::Copy if self.modeller.sketch.as_ref().is_some_and(|s| s.picked.is_none()) => {
+                let under = self.sketch_line_under(x, y, width, height).map(|(index, _)| index);
+                self.modeller.sketch.as_mut().unwrap().picked = under;
+            }
+            SketchTool::Copy | SketchTool::Line | SketchTool::Rectangle | SketchTool::Arc => {
                 let p = self.sketch_point(x, y, width, height, None);
                 if let (Some(p), Some(sketch)) = (p, self.modeller.sketch.as_mut()) {
                     sketch.place(p);
@@ -554,7 +575,7 @@ impl App {
                 let Some(&p) = sketch.points().get(index) else { return true };
                 match sketch.tool {
                     SketchTool::Pick => sketch.held = Some(p),
-                    SketchTool::Line | SketchTool::Rectangle | SketchTool::Arc => sketch.place(p),
+                    SketchTool::Copy | SketchTool::Line | SketchTool::Rectangle | SketchTool::Arc => sketch.place(p),
                     SketchTool::Trim => {}
                 }
             }
@@ -631,6 +652,9 @@ impl App {
                 "Sleep een punt · klik een lijn: kiezen, Del: weg · L: lijn · R: rechthoek · A: boog · T: trimmen · Tab: klaar · Esc: annuleren",
                 "Drag a point · click a line: pick, Del: remove · L: line · R: rectangle · A: arc · T: trim · Tab: done · Esc: cancel",
             ),
+            SketchTool::Copy if sketch.picked.is_none() => l.text("Kopiëren: kies een contourlijn", "Copy: select an outline segment"),
+            SketchTool::Copy if sketch.first.is_none() => l.text("Kopiëren: kies het basispunt", "Copy: pick the base point"),
+            SketchTool::Copy => l.text("Kopiëren: kies het doelpunt", "Copy: pick the destination point"),
             SketchTool::Line => l.text("Lijn: klik de punten · Esc: stoppen · Tab: klaar", "Line: click the points · Esc: stop · Tab: done"),
             SketchTool::Rectangle => l.text("Rechthoek: klik twee hoeken · Esc: stoppen · Tab: klaar", "Rectangle: click two corners · Esc: stop · Tab: done"),
             SketchTool::Arc => l.text(
@@ -755,6 +779,43 @@ mod tests {
         let _ = app.update(action.into_inner().0.unwrap());
         assert_eq!(app.modeller.sketch.as_ref().unwrap().picked, Some(0));
         assert_eq!(app.sketch_overlay(Color::BLACK, Color::WHITE).unwrap().selected_sketch_line.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn co_copies_the_selected_floor_edge_from_the_clicked_base_point() {
+        use crate::product::Product;
+        use crate::shell::{Msg, Studio};
+        use iced::keyboard::{Key, Modifiers};
+        use openaec_ui::keyboard::KeyPress;
+        let (app, floor) = floor();
+        let mut studio = Studio::new(app);
+        studio.set_product(Product::Modeller);
+        studio.app.select_modelled(floor);
+        let co = |studio: &mut Studio| {
+            for key in ["c", "o"] {
+                let _ = studio.update(Msg::Key(KeyPress { key: Key::Character(key.into()), modifiers: Modifiers::empty() }));
+            }
+        };
+        studio.app.modeller.cursor3d.fresh = true;
+        co(&mut studio);
+        let copy = studio.app.modeller.transform.as_ref().unwrap();
+        assert_eq!(copy.kind, crate::app::transform::TransformKind::Copy);
+        assert!(copy.points.is_empty());
+        let _ = studio.update(Msg::App(Message::Escape));
+        let _ = studio.update(Msg::App(Message::EditMode));
+        click(&mut studio.app, 2.0, 0.0);
+        let original = studio.app.modeller.sketch.as_ref().unwrap().segments[0];
+        studio.app.camera.ortho = false;
+        co(&mut studio);
+        assert!(!studio.app.camera.ortho);
+        click(&mut studio.app, 10.0, 10.0);
+        click(&mut studio.app, 12.0, 13.0);
+        let sketch = studio.app.modeller.sketch.as_ref().unwrap();
+        assert_eq!(sketch.segments.len(), 5);
+        assert_eq!(sketch.segments[0], original);
+        let copy = sketch.segments[4];
+        assert!(copy.a.distance(original.a + DVec2::new(2.0, 3.0)) < MEET);
+        assert!(copy.b.distance(original.b + DVec2::new(2.0, 3.0)) < MEET);
     }
 
     #[test]

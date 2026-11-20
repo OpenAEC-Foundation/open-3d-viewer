@@ -665,6 +665,7 @@ impl Studio {
     /// The time is `now`: a letter that waited too long for its pair does what it does alone.
     pub(crate) fn expire_keys(&mut self, now: Instant) {
         if let Some(step) = self.keys.expire_step(now) {
+            if self.app.modeller.sketch.is_some() { return; }
             let _ = self.key_step(step);
         }
     }
@@ -812,6 +813,7 @@ impl Studio {
             return;
         }
         if product != self.product() {
+            self.keys.clear();
             self.ribbon_tab = 0;
         }
         // GIS works from its tab of the right pane
@@ -1350,7 +1352,7 @@ impl Studio {
                 .mode(!app.camera.ortho),
             Command::new("camera.ortho", l.text("Orthografisch", "Orthographic"), go(Message::Ortho(true)))
                 .icon(small("view.zoom-out"), large("view.zoom-out"))
-                .shortcut(key('o'))
+                .shortcut(Shortcut { alt: true, ..key('o') })
                 .mode(app.camera.ortho),
             Command::new("section.box", l.text("Doorsnedebox", "Section box"), go(Message::ToggleSection)).icon(small("section.box"), large("section.box")).toggle(app.section_on).enabled(loaded),
             Command::new("section.plane", l.text("Doorsnedevlak", "Section plane"), go(Message::TogglePlane))
@@ -2112,6 +2114,17 @@ impl Studio {
                 let sketching = self.app.modeller.sketch.is_some();
                 if self.dialog.is_none() && sketching && !press.modifiers.control() && !press.modifiers.alt() {
                     if let Key::Character(c) = &press.key {
+                        if c.eq_ignore_ascii_case("c") || (self.keys.pending() == Some('c') && c.eq_ignore_ascii_case("o")) {
+                            use crate::app::modeller::keys::{ModelKey, Step};
+                            let steps = self.keys.steps(c.chars().next().unwrap(), Instant::now());
+                            if steps.contains(&Step::Key(ModelKey::Copy)) {
+                                return self.key_step(Step::Key(ModelKey::Copy));
+                            }
+                            return Task::none();
+                        }
+                    }
+                    self.keys.clear();
+                    if let Key::Character(c) = &press.key {
                         if let Some(c) = c.chars().next().filter(|c| "lratLRAT".contains(*c)) {
                             return self.update(Msg::App(Message::EditKey(c)));
                         }
@@ -2179,6 +2192,7 @@ impl Studio {
             // Tab on a selected modelled element opens its edit mode, as in Blender; else it moves
             // the focus
             Msg::Navigate(openaec_ui::keyboard::Navigation::Next) if self.dialog.is_none() && !self.backstage && self.app.wants_tab() => {
+                self.keys.clear();
                 return self.update(Msg::App(Message::EditMode));
             }
             Msg::Navigate(step) => return openaec_ui::keyboard::navigate(step),

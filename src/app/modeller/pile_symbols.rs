@@ -152,6 +152,9 @@ impl HeadSymbol {
     }
 }
 
+mod migrate;
+pub(super) use migrate::adopt_registered_symbols;
+
 /// Square shaft, solid upper-right quarter and two axes extending half a shaft beyond each face.
 fn office_symbol(centre: DVec2, outline: &[DVec2], lines: &mut Vec<[[f64; 2]; 2]>, fills: &mut Vec<crate::document::Fill>) {
     for (&a, &b) in outline.iter().zip(outline.iter().cycle().skip(1)) {

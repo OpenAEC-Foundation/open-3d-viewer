@@ -114,7 +114,7 @@ mod tests {
     use glam::{DVec2, DVec3};
 
     fn beam(app: &mut App) -> ElementId {
-        let shape = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(4.0, 0.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let shape = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(4.0, 0.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() });
         let id = app.add_element("Beam", None, shape).unwrap();
         app.keep_model_history();
         id

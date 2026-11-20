@@ -30,7 +30,7 @@ pub mod tile;
 
 pub use boolean::{boolean, BooleanOp};
 pub use datum::GridDef;
-pub use element::{Fixity, BaseKind, OpeningKind, SlabRole, Slope, Top, BuildUpDef, ConnectionDef, ConnectionKind, Element, ElementId, LayerDef, LinearDef, Opening, OpeningFraming, PlanarDef, PointDef, Shape, SystemDef};
+pub use element::{Fixity, BaseKind, LinearRole, OpeningKind, SlabRole, Slope, Top, BuildUpDef, ConnectionDef, ConnectionKind, Element, ElementId, LayerDef, LinearDef, Opening, OpeningFraming, PlanarDef, PointDef, Shape, SystemDef};
 pub use mesh::Mesh;
 pub use model::{Model, Part};
 pub use profile::{Profile, ProfileDef};
@@ -99,6 +99,8 @@ pub enum Refusal {
     NoUnitJoint,
     /// Two building systems are joined only butt or apart, and only when both are framed.
     SystemJoin,
+    /// A run is too short to stop clear of the fitting at its end.
+    TooShortForFitting,
 }
 
 impl Refusal {
@@ -133,6 +135,7 @@ impl Refusal {
             Refusal::OpeningNotFramed => "Only a framed system, such as a timber frame, can have openings.",
             Refusal::NoUnitJoint => "The frame cannot be split into prefab units clear of its openings.",
             Refusal::SystemJoin => "Two framed systems are joined butt or kept apart.",
+            Refusal::TooShortForFitting => "A run is too short for the fitting at its end.",
         }
     }
 }

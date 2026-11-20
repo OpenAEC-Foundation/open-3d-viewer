@@ -404,7 +404,7 @@ impl Model {
             return Err(Refusal::SameMember);
         }
         match c.kind {
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
             ConnectionKind::Cut => {
                 let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
                 let parts = self.body(target)?;
@@ -474,6 +474,8 @@ impl Model {
             ConnectionKind::Mitre => JoinKind::Mitre,
             ConnectionKind::EndPlate(plate) => JoinKind::EndPlate(plate),
             ConnectionKind::FinPlate(plate) => JoinKind::FinPlate(plate),
+            ConnectionKind::Bend(b) => JoinKind::Bend(b),
+            ConnectionKind::Tee(t) => JoinKind::Tee(t),
             // two members kept apart: no join
             ConnectionKind::Apart => {
                 self.member(c.primary)?;
@@ -492,6 +494,13 @@ fn auto_kind(me: &LinearDef, other: &LinearDef, other_end: Option<MemberEnd>) ->
     let (a, b) = ((me.end - me.start).normalize_or_zero(), (other.end - other.start).normalize_or_zero());
     if a.cross(b).length() < 1e-6 {
         return None;
+    }
+    // two runs of one building service get its fittings: a bend end to end, a tee end to side
+    if me.role.is_service() && me.role == other.role {
+        return Some(match other_end {
+            Some(_) => ConnectionKind::Bend(join::Bend::of(me.role)),
+            None => ConnectionKind::Tee(join::Tee::of(me.role)),
+        });
     }
     Some(match other_end {
         Some(_) if me.profile == other.profile => ConnectionKind::Mitre,
@@ -531,7 +540,7 @@ mod tests {
     use crate::profile::ProfileDef;
 
     fn beam(start: DVec3, end: DVec3) -> Shape {
-        Shape::Linear(LinearDef { start, end, profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 })
+        Shape::Linear(LinearDef { start, end, profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() })
     }
 
     fn add(model: &mut Model, shape: Shape) -> ElementId {
@@ -563,7 +572,7 @@ mod tests {
         // a column at the origin, 400 wide along x (its profile's x is the project's x)
         let column = add(
             &mut m,
-            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }),
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0, role: Default::default() }),
         );
         let b = add(&mut m, beam(DVec3::new(0.0, 0.0, 2.5), DVec3::new(5.0, 0.0, 2.5)));
         add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: column, secondary: b }));
@@ -663,7 +672,7 @@ mod tests {
         // a beam crossing the tile boundary at x = 10 onto a column in the next tile
         let column = add(
             &mut m,
-            Shape::Linear(LinearDef { start: DVec3::new(12.0, 0.0, 0.0), end: DVec3::new(12.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }),
+            Shape::Linear(LinearDef { start: DVec3::new(12.0, 0.0, 0.0), end: DVec3::new(12.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0, role: Default::default() }),
         );
         let b = add(&mut m, beam(DVec3::new(6.0, 0.0, 2.5), DVec3::new(12.0, 0.0, 2.5)));
         assert_ne!(m.get(column).unwrap().tile, m.get(b).unwrap().tile);
@@ -759,7 +768,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let column = add(
             &mut m,
-            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }),
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0, role: Default::default() }),
         );
         let b = add(&mut m, beam(DVec3::new(0.0, 0.0, 2.5), DVec3::new(5.0, 0.0, 2.5)));
         let (column_before, beam_before) = (m.evaluate(column).unwrap()[0].solid.volume(), m.evaluate(b).unwrap()[0].solid.volume());
@@ -784,9 +793,9 @@ mod tests {
     #[test]
     fn a_fin_plate_connection_is_a_hinge_with_a_plate_and_bolts_through_the_web() {
         let mut m = Model::new(TileGrid::default());
-        let column = add(&mut m, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::steel("HEA 200").unwrap(), roll: 0.0 }));
-        let b = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::steel("IPE 300").unwrap(), roll: 0.0 }));
-        let free = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(0.0, 9.0, 2.5), end: DVec3::new(5.0, 9.0, 2.5), profile: ProfileDef::steel("IPE 300").unwrap(), roll: 0.0 }));
+        let column = add(&mut m, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::steel("HEA 200").unwrap(), roll: 0.0, role: Default::default() }));
+        let b = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::steel("IPE 300").unwrap(), roll: 0.0, role: Default::default() }));
+        let free = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(0.0, 9.0, 2.5), end: DVec3::new(5.0, 9.0, 2.5), profile: ProfileDef::steel("IPE 300").unwrap(), roll: 0.0, role: Default::default() }));
         let whole = m.evaluate(free).unwrap()[0].solid.volume();
         let plate = crate::join::FinPlate::default();
         let kind = ConnectionKind::FinPlate(plate);
@@ -851,7 +860,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let column = add(
             &mut m,
-            Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 0.0), end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }),
+            Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 0.0), end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0, role: Default::default() }),
         );
         let b = add(&mut m, beam(DVec3::new(0.0, 0.0, 3.0), DVec3::new(5.0, 0.0, 3.0)));
         add(&mut m, beam(DVec3::new(5.0, 0.0, 3.0), DVec3::new(9.0, 0.0, 3.0)));
@@ -939,5 +948,51 @@ mod tests {
         let back: Model = serde_json::from_str(&json).unwrap();
         assert_eq!(back, m);
         assert_eq!(back.evaluate(a), m.evaluate(a));
+    }
+
+    /// A rectangular duct 400 × 200, 1 mm of sheet, from `start` to `end`.
+    fn duct(start: DVec3, end: DVec3) -> Shape {
+        let shape = bim_library::ProfileShape::Rhs { h: 0.2, b: 0.4, t: 0.001, r_out: 0.0, r_in: 0.0 };
+        Shape::Linear(LinearDef { start, end, profile: ProfileDef::Catalogue { designation: "400×200".into(), shape }, roll: 0.0, role: crate::element::LinearRole::Duct })
+    }
+
+    #[test]
+    fn two_ducts_that_meet_at_a_corner_get_a_bend_and_one_that_ends_on_another_a_tee() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, duct(DVec3::new(0.0, 0.0, 2.6), DVec3::new(4.0, 0.0, 2.6)));
+        let b = add(&mut m, duct(DVec3::new(4.0, 0.0, 2.6), DVec3::new(4.0, 3.0, 2.6)));
+        let branch = add(&mut m, duct(DVec3::new(2.0, 0.0, 2.6), DVec3::new(2.0, -2.0, 2.6)));
+        assert_eq!(m.get(a).unwrap().class(), "IfcDuctSegment");
+        let (added, _) = m.update_joins("Fitting", None);
+        assert_eq!(added.len(), 2, "a bend and a tee");
+        let kinds: Vec<ConnectionKind> = added.iter().map(|id| match &m.get(*id).unwrap().shape { Shape::Connection(c) => c.kind, other => panic!("{other:?}") }).collect();
+        let bend = added[kinds.iter().position(|k| matches!(k, ConnectionKind::Bend(_))).expect("a bend")];
+        let tee = added[kinds.iter().position(|k| matches!(k, ConnectionKind::Tee(_))).expect("a tee")];
+        assert_eq!(m.get(bend).unwrap().class(), "IfcDuctFitting");
+        // a quarter turn in pieces of 15°, each a closed hollow solid of the fitting's class
+        let parts = m.evaluate(bend).unwrap();
+        assert_eq!(parts.len(), 6);
+        assert!(parts.iter().all(|p| p.class == "IfcDuctFitting" && p.solid.volume() > 0.0));
+        // the radius is once the width (0.4): both ducts stop 0.4 from the corner
+        let (lo, hi) = m.evaluate(a).unwrap()[0].solid.bounds();
+        assert!((hi.x - 3.6).abs() < 1e-9 && lo.x.abs() < 1e-9, "{lo} {hi}");
+        let (lo, _) = m.evaluate(b).unwrap()[0].solid.bounds();
+        assert!((lo.y - 0.4).abs() < 1e-9, "{lo}");
+        // the bend stays within the corner's square (its straight pieces reach 2 mm past the
+        // true arc at their joints), and reaches both ducts
+        let (lo, hi) = parts.iter().map(|p| p.solid.bounds()).reduce(|(a, b), (c, d)| (a.min(c), b.max(d))).unwrap();
+        assert!((lo.x - 3.6).abs() < 1e-9 && (hi.y - 0.4).abs() < 1e-9 && hi.x <= 4.2 + 0.003 && lo.y >= -0.2 - 0.003, "{lo} {hi}");
+        // the branch stops 0.1 short of the main's side (at y = −0.2), and the tee's branch fills that
+        let (_, hi) = m.evaluate(branch).unwrap()[0].solid.bounds();
+        assert!((hi.y + 0.3).abs() < 1e-9, "{hi}");
+        let tee_parts = m.evaluate(tee).unwrap();
+        let (lo, hi) = tee_parts[0].solid.bounds();
+        assert!(tee_parts.len() == 1 && (lo.y + 0.3).abs() < 1e-9 && (hi.y + 0.2).abs() < 1e-9, "{lo} {hi}");
+        // a structural beam meeting a duct gets no fitting
+        let mut m = Model::new(TileGrid::default());
+        add(&mut m, duct(DVec3::new(0.0, 0.0, 2.6), DVec3::new(4.0, 0.0, 2.6)));
+        add(&mut m, beam(DVec3::new(4.0, 0.0, 2.6), DVec3::new(4.0, 3.0, 2.6)));
+        let (added, _) = m.update_joins("Joint", None);
+        assert!(added.iter().all(|id| matches!(&m.get(*id).unwrap().shape, Shape::Connection(c) if !matches!(c.kind, ConnectionKind::Bend(_) | ConnectionKind::Tee(_)))));
     }
 }

@@ -272,7 +272,7 @@ mod tests {
         let w = wall(&mut app, &ground, 2.0);
         app.set_top(w, Some(Top { level: first.clone(), offset: -0.3 })).unwrap();
         assert!(close(stands(&app, w), (0.0, 2.7)));
-        let column = Shape::Linear(LinearDef { start: DVec3::new(6.0, 0.0, 0.0), end: DVec3::new(6.0, 0.0, 2.5), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 });
+        let column = Shape::Linear(LinearDef { start: DVec3::new(6.0, 0.0, 0.0), end: DVec3::new(6.0, 0.0, 2.5), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0, role: Default::default() });
         let c = app.add_element("Column", Some(ground.clone()), column).unwrap();
         app.set_top(c, Some(Top { level: first, offset: 0.0 })).unwrap();
         let Shape::Linear(l) = app.modeller.model.get(c).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(app.modeller.model.get(w).unwrap().top, None);
         assert!(close(stands(&app, w), (0.0, 3.0)), "its height stays what it was");
         // a beam has no top to set
-        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 5.0, 2.8), end: DVec3::new(4.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 5.0, 2.8), end: DVec3::new(4.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() });
         let b = app.add_element("Beam", Some(ground), beam).unwrap();
         assert!(app.top_choices(app.modeller.model.get(b).unwrap(), openaec_ui::Language::English).is_empty());
     }

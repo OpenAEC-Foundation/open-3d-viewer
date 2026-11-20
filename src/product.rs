@@ -159,7 +159,7 @@ impl Product {
     pub fn pages(self) -> &'static [RibbonPage] {
         match self {
             Product::Viewer => &[RibbonPage::Home],
-            Product::Modeller => &[RibbonPage::Model, RibbonPage::Draw, RibbonPage::Project, RibbonPage::View],
+            Product::Modeller => &[RibbonPage::Model, RibbonPage::Draw, RibbonPage::Project, RibbonPage::View, RibbonPage::Mep],
             Product::Validator => &[RibbonPage::Collaborate, RibbonPage::View],
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
@@ -278,6 +278,9 @@ pub enum RibbonPage {
     Home,
     /// The Modeller's base elements, the openings in walls, joins and changes.
     Model,
+    /// The Modeller's building services: ducts, pipes and cable trays, and the fittings between
+    /// them.
+    Mep,
     /// The Modeller's levels, views, sheets and library.
     Project,
     /// The Modeller's drawing in a floor plan, a section or on a sheet: selecting, the lines and
@@ -318,6 +321,7 @@ impl RibbonPage {
         match self {
             RibbonPage::Home => l.text("Start", "Home"),
             RibbonPage::Model => l.text("Modelleren", "Model"),
+            RibbonPage::Mep => "MEP",
             RibbonPage::Project => l.text("Project", "Project"),
             RibbonPage::Draw => l.text("Tekenen", "Draw"),
             RibbonPage::View => l.text("Beeld", "View"),

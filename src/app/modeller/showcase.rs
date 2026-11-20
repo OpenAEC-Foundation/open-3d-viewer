@@ -201,7 +201,7 @@ fn build() -> (App, Log) {
     // 5. joins of linear members: timber in a U (butts at the posts, mitres at the far corners),
     //    steel with an end plate, and a beam that cuts its way through a wall
     let y = 13.5;
-    let timber = |a: DVec3, b: DVec3, width: f64, height: f64| Shape::Linear(LinearDef { start: a, end: b, profile: ProfileDef::Rectangle { width, height }, roll: 0.0 });
+    let timber = |a: DVec3, b: DVec3, width: f64, height: f64| Shape::Linear(LinearDef { start: a, end: b, profile: ProfileDef::Rectangle { width, height }, roll: 0.0, role: Default::default() });
     for at in [p(x0, y), p(x0, y + 3.0)] {
         add(&mut app, &mut log, "Post", timber(at.extend(0.0), at.extend(h), 0.14, 0.14));
     }
@@ -211,8 +211,8 @@ fn build() -> (App, Log) {
     let steel = |d: &str| ProfileDef::steel(d);
     if let (Some(column), Some(beam)) = (steel("HEA200").or_else(|| steel("HEA 200")), steel("IPE200").or_else(|| steel("IPE 200"))) {
         let at = p(x0 + 8.0, y);
-        let c = add(&mut app, &mut log, "Column", Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: column, roll: 0.0 }));
-        let b = add(&mut app, &mut log, "Beam", Shape::Linear(LinearDef { start: at.extend(2.4), end: (at + p(3.6, 0.0)).extend(2.4), profile: beam, roll: 0.0 }));
+        let c = add(&mut app, &mut log, "Column", Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: column, roll: 0.0, role: Default::default() }));
+        let b = add(&mut app, &mut log, "Beam", Shape::Linear(LinearDef { start: at.extend(2.4), end: (at + p(3.6, 0.0)).extend(2.4), profile: beam, roll: 0.0, role: Default::default() }));
         connect(&mut app, &mut log, "End plate", ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), c, b);
     } else {
         log.refused.push("steel: HEA200 or IPE200 is not in the catalogue".into());

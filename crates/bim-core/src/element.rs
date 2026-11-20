@@ -80,6 +80,56 @@ pub struct LinearDef {
     pub profile: ProfileDef,
     #[serde(default)]
     pub roll: f64,
+    /// What it is: a member of the structure, or a run of a building service.
+    #[serde(default, skip_serializing_if = "LinearRole::is_member")]
+    pub role: LinearRole,
+}
+
+/// What a linear element is. The element is the same in every role (a profile along a line); the
+/// role says which IFC class it has and which fittings join it to another of its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearRole {
+    /// A column, a beam or another member: its class follows from the way it runs.
+    #[default]
+    Member,
+    /// A run of air duct.
+    Duct,
+    /// A run of pipe.
+    Pipe,
+    /// A run of cable tray.
+    CableTray,
+}
+
+impl LinearRole {
+    pub fn is_member(&self) -> bool {
+        *self == LinearRole::Member
+    }
+
+    /// Whether it is a run of a building service.
+    pub fn is_service(self) -> bool {
+        self != LinearRole::Member
+    }
+
+    /// The IFC class of a run in this role; none for a member, whose class follows from its axis.
+    pub fn segment_class(self) -> Option<&'static str> {
+        match self {
+            LinearRole::Member => None,
+            LinearRole::Duct => Some("IfcDuctSegment"),
+            LinearRole::Pipe => Some("IfcPipeSegment"),
+            LinearRole::CableTray => Some("IfcCableCarrierSegment"),
+        }
+    }
+
+    /// The IFC class of a fitting between two runs in this role.
+    pub fn fitting_class(self) -> &'static str {
+        match self {
+            LinearRole::Member => "IfcElementAssembly",
+            LinearRole::Duct => "IfcDuctFitting",
+            LinearRole::Pipe => "IfcPipeFitting",
+            LinearRole::CableTray => "IfcCableCarrierFitting",
+        }
+    }
 }
 
 /// A rectangular opening in a wall: `along` the axis from its start to the opening's near side,
@@ -341,6 +391,12 @@ pub enum ConnectionKind {
     /// A steel fin plate: the secondary stops a gap short of the primary's face, and a plate
     /// welded to that face is bolted through the secondary's web (see [`crate::join::FinPlate`]).
     FinPlate(crate::join::FinPlate),
+    /// A bend between two runs of a building service that meet end to end: both stop short of the
+    /// corner and a fitting turns from the one into the other (see [`crate::join::Bend`]).
+    Bend(crate::join::Bend),
+    /// A tee: a run of a building service that ends on the side of another, which runs through; a
+    /// fitting takes its end (see [`crate::join::Tee`]).
+    Tee(crate::join::Tee),
     /// The two are not joined where they meet: two building systems that would meet at a corner
     /// or a T junction are each made as they are alone, and two linear members get no join.
     Apart,
@@ -452,7 +508,7 @@ impl Element {
             Shape::Point(PointDef { opening: Some(OpeningKind::Door), .. }) => "IfcDoor",
             Shape::Point(PointDef { opening: Some(OpeningKind::Window), .. }) => "IfcWindow",
             Shape::Point(_) => "IfcBuildingElementProxy",
-            Shape::Linear(l) => linear_class(l.end - l.start),
+            Shape::Linear(l) => l.role.segment_class().unwrap_or_else(|| linear_class(l.end - l.start)),
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, .. }) => "IfcWall",
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { role: SlabRole::Roof, .. }, .. }) => "IfcRoof",
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { role: SlabRole::Ceiling, .. }, .. }) => "IfcCovering",
@@ -460,6 +516,9 @@ impl Element {
             Shape::System(_) => "IfcCurtainWall",
             // a join with parts of its own is an assembly of them; one without is a relation only
             Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_), .. }) => "IfcElementAssembly",
+            // a fitting of a building service: the bend or the tee itself
+            Shape::Connection(ConnectionDef { kind: ConnectionKind::Bend(b), .. }) => b.role.fitting_class(),
+            Shape::Connection(ConnectionDef { kind: ConnectionKind::Tee(t), .. }) => t.role.fitting_class(),
             Shape::Connection(_) => "IfcRelConnectsElements",
         }
     }
@@ -1118,11 +1177,11 @@ mod tests {
 
     #[test]
     fn a_beam_has_its_profile_upright() {
-        let l = LinearDef { start: DVec3::ZERO, end: DVec3::new(6.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 };
+        let l = LinearDef { start: DVec3::ZERO, end: DVec3::new(6.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() };
         let s = linear_solid(&l, None, None).unwrap();
         let (lo, hi) = s.bounds();
         assert!((hi - lo - DVec3::new(6.0, 0.2, 0.4)).length() < 1e-12, "{}", hi - lo);
-        let column = LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0 };
+        let column = LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0, role: Default::default() };
         let (lo, hi) = linear_solid(&column, None, None).unwrap().bounds();
         assert!((hi - lo - DVec3::new(0.3, 0.5, 3.0)).length() < 1e-12, "{}", hi - lo);
     }
@@ -1191,7 +1250,7 @@ mod tests {
     #[test]
     fn an_element_keeps_its_grade_when_reshaped_and_reads_without_one() {
         let grid = TileGrid::default();
-        let beam = |x: f64| Shape::Linear(LinearDef { start: DVec3::new(x, 0.0, 3.0), end: DVec3::new(x + 4.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let beam = |x: f64| Shape::Linear(LinearDef { start: DVec3::new(x, 0.0, 3.0), end: DVec3::new(x + 4.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() });
         let mut e = Element::in_project(&grid, "Beam 1", None, beam(0.0));
         let old = serde_json::to_string(&e).unwrap();
         assert!(!old.contains("grade"), "{old}");

@@ -1573,7 +1573,7 @@ impl Studio {
                 .toggle(app.section_tool && sections)
                 .enabled(sections),
         );
-        for tool in crate::app::modeller::ModelTool::ALL.into_iter().chain(crate::app::modeller::ModelTool::OPENINGS) {
+        for tool in crate::app::modeller::ModelTool::ALL.into_iter().chain(crate::app::modeller::ModelTool::OPENINGS).chain(crate::app::modeller::ModelTool::SERVICES) {
             let on = app.modeller.tool.is_some_and(|t| t.0 == tool);
             list.push(Command::new(tool.id(), tool.label(l), go(Message::ModelTool(Some((tool, tool.label(l)))))).icon(small(tool.icon()), large(tool.icon())).mode(on).enabled(loaded));
         }
@@ -2616,6 +2616,17 @@ impl Studio {
                 (l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
+                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), smalls(&["model.align"]), large("model.delete")]),
+            ],
+            // building services, by discipline as other BIM modellers have them: air, water and
+            // power. Where two runs of one kind meet, their fitting (a bend, a tee) is a connection
+            // made by itself, as a join between beams is.
+            RibbonPage::Mep => vec![
+                (l.text("Selecteren", "Select"), vec![large("model.select")]),
+                (l.text("Ventilatie", "HVAC"), vec![large("mep.duct"), large("mep.round-duct")]),
+                (l.text("Leidingen", "Plumbing"), vec![large("mep.pipe")]),
+                (l.text("Elektra", "Electrical"), vec![large("mep.cable-tray")]),
+                (l.text("Verbinding", "Connection"), vec![smalls(&["model.cut", "model.apart"])]),
                 (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), smalls(&["model.align"]), large("model.delete")]),
             ],
             // the project as its IFCX file has it: the ways to look at it, and saving it

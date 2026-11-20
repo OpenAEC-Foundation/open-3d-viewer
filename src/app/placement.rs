@@ -100,7 +100,7 @@ impl Settings {
     pub fn default_for(tool: ModelTool) -> Self {
         let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, grade: None, role: bim_core::SlabRole::Floor };
         use super::element_props::{DOOR, WINDOW};
-        use super::modeller::{BEAM, COLUMN, OBJECT, SLAB_THICKNESS, WALL_THICKNESS};
+        use super::modeller::{BEAM, CABLE_TRAY, COLUMN, DUCT, OBJECT, PIPE, ROUND_DUCT, SERVICE_HEIGHT, SLAB_THICKNESS, WALL_THICKNESS};
         match tool {
             ModelTool::Wall => plain(WALL_THICKNESS, 0.0, None),
             ModelTool::Slab => plain(SLAB_THICKNESS, 0.0, None),
@@ -108,6 +108,10 @@ impl Settings {
             ModelTool::Beam => plain(BEAM.0, BEAM.1, None),
             ModelTool::System => plain(0.0, 0.0, None),
             ModelTool::Point => plain(OBJECT.x, OBJECT.y, Some(OBJECT.z)),
+            ModelTool::Duct => plain(DUCT.0, DUCT.1, Some(SERVICE_HEIGHT)),
+            ModelTool::RoundDuct => plain(ROUND_DUCT, ROUND_DUCT, Some(SERVICE_HEIGHT)),
+            ModelTool::Pipe => plain(PIPE, PIPE, Some(SERVICE_HEIGHT)),
+            ModelTool::CableTray => plain(CABLE_TRAY.0, CABLE_TRAY.1, Some(SERVICE_HEIGHT)),
             ModelTool::Door => plain(DOOR.0, 0.0, Some(DOOR.1)),
             ModelTool::Window => Settings { sill: WINDOW.2, ..plain(WINDOW.0, 0.0, Some(WINDOW.1)) },
         }
@@ -191,6 +195,21 @@ impl App {
                 }
             }
             Shape::Linear(d) => {
+                // a run of a building service: its tool by its role and the shape of its profile
+                if d.role.is_service() {
+                    use bim_library::ProfileShape as P;
+                    let (tool, width, depth) = match (d.role, &d.profile) {
+                        (bim_core::LinearRole::Pipe, bim_core::ProfileDef::Catalogue { shape: P::Chs { d, .. }, .. }) => (ModelTool::Pipe, *d, *d),
+                        (_, bim_core::ProfileDef::Catalogue { shape: P::Chs { d, .. }, .. }) => (ModelTool::RoundDuct, *d, *d),
+                        (bim_core::LinearRole::CableTray, p) => {
+                            let (w, h) = p.profile().map_or((0.3, 0.06), |q| (2.0 * q.support(glam::DVec2::X), 2.0 * q.support(glam::DVec2::Y)));
+                            (ModelTool::CableTray, w, h)
+                        }
+                        (_, bim_core::ProfileDef::Catalogue { shape: P::Rhs { h, b, .. }, .. }) => (ModelTool::Duct, *b, *h),
+                        _ => (ModelTool::Duct, of(ModelTool::Duct).width, of(ModelTool::Duct).depth),
+                    };
+                    (tool, Settings { width, depth, ..of(tool) })
+                } else {
                 let tool = if e.class() == "IfcColumn" { ModelTool::Column } else { ModelTool::Beam };
                 let mut s = of(tool);
                 match &d.profile {
@@ -204,6 +223,7 @@ impl App {
                 }
                 s.grade = e.grade.clone();
                 (tool, s)
+                }
             }
             Shape::System(d) => (ModelTool::System, Settings { kind: d.system_type.as_ref().map(|t| t.id.clone()), height: e.top.is_none().then_some(d.height), ..of(ModelTool::System) }),
             Shape::Point(d) => {
@@ -264,6 +284,8 @@ fn fields(tool: ModelTool, l: Language) -> Vec<(PlaceField, &'static str)> {
         ModelTool::Beam => vec![width, (F::Depth, l.text("Profielhoogte", "Profile height")), (F::Height, l.text("Bovenkant", "Top height"))],
         ModelTool::System => vec![height, base],
         ModelTool::Point => vec![width, depth, height, base],
+        ModelTool::Duct | ModelTool::CableTray => vec![width, (F::Depth, l.text("Hoogte", "Height")), (F::Height, l.text("Hart boven niveau", "Centre above level"))],
+        ModelTool::RoundDuct | ModelTool::Pipe => vec![(F::Width, l.text("Diameter", "Diameter")), (F::Height, l.text("Hart boven niveau", "Centre above level"))],
         ModelTool::Door => vec![width, height],
         ModelTool::Window => vec![width, height, (F::Sill, l.text("Borstwering", "Sill"))],
     }
@@ -521,7 +543,7 @@ impl App {
                     }
                 }
             }
-            ModelTool::Point | ModelTool::Door | ModelTool::Window => return None,
+            ModelTool::Point | ModelTool::Door | ModelTool::Window | ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => return None,
         }
         Some(choices)
     }

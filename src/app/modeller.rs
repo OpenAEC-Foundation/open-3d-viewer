@@ -54,6 +54,11 @@ pub enum ModelTool {
     Door,
     /// A window in the wall clicked: an opening above a sill.
     Window,
+    /// Runs of building services: a rectangular and a round air duct, a pipe and a cable tray.
+    Duct,
+    RoundDuct,
+    Pipe,
+    CableTray,
 }
 
 impl ModelTool {
@@ -61,6 +66,18 @@ impl ModelTool {
     pub const ALL: [ModelTool; 6] = [ModelTool::Wall, ModelTool::Slab, ModelTool::Column, ModelTool::Beam, ModelTool::System, ModelTool::Point];
     /// The tools that make an opening in a wall.
     pub const OPENINGS: [ModelTool; 2] = [ModelTool::Door, ModelTool::Window];
+    /// The tools that draw a run of a building service.
+    pub const SERVICES: [ModelTool; 4] = [ModelTool::Duct, ModelTool::RoundDuct, ModelTool::Pipe, ModelTool::CableTray];
+
+    /// The role of the runs it draws; none for a tool of the building itself.
+    pub fn service(self) -> Option<bim_core::LinearRole> {
+        match self {
+            ModelTool::Duct | ModelTool::RoundDuct => Some(bim_core::LinearRole::Duct),
+            ModelTool::Pipe => Some(bim_core::LinearRole::Pipe),
+            ModelTool::CableTray => Some(bim_core::LinearRole::CableTray),
+            _ => None,
+        }
+    }
 
     /// Whether it makes an opening in a wall rather than an element.
     pub fn opens(self) -> bool {
@@ -78,6 +95,10 @@ impl ModelTool {
             ModelTool::System => "model.system",
             ModelTool::Door => "model.door",
             ModelTool::Window => "model.window",
+            ModelTool::Duct => "mep.duct",
+            ModelTool::RoundDuct => "mep.round-duct",
+            ModelTool::Pipe => "mep.pipe",
+            ModelTool::CableTray => "mep.cable-tray",
         }
     }
 
@@ -92,6 +113,10 @@ impl ModelTool {
             ModelTool::System => l.text("Vliesgevel", "Curtain wall"),
             ModelTool::Door => l.text("Deur", "Door"),
             ModelTool::Window => l.text("Raam", "Window"),
+            ModelTool::Duct => l.text("Kanaal", "Duct"),
+            ModelTool::RoundDuct => l.text("Rond kanaal", "Round duct"),
+            ModelTool::Pipe => l.text("Leiding", "Pipe"),
+            ModelTool::CableTray => l.text("Kabelgoot", "Cable tray"),
         }
     }
 
@@ -106,6 +131,8 @@ impl ModelTool {
             ModelTool::System => "curtain.new",
             ModelTool::Door => "frame.new-door",
             ModelTool::Window => "frame.new-turn-tilt",
+            ModelTool::Duct | ModelTool::CableTray => "draw.l-shape",
+            ModelTool::RoundDuct | ModelTool::Pipe => "draw.line",
         }
     }
 
@@ -114,7 +141,7 @@ impl ModelTool {
         use bim_core::BaseKind;
         match self {
             ModelTool::Point => BaseKind::Point,
-            ModelTool::Column | ModelTool::Beam => BaseKind::Linear,
+            ModelTool::Column | ModelTool::Beam | ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => BaseKind::Linear,
             ModelTool::Wall | ModelTool::Slab | ModelTool::Door | ModelTool::Window => BaseKind::Planar,
             ModelTool::System => BaseKind::System,
         }
@@ -124,13 +151,13 @@ impl ModelTool {
     pub(super) fn clicks(self) -> usize {
         match self {
             ModelTool::Point | ModelTool::Column | ModelTool::Door | ModelTool::Window => 1,
-            ModelTool::Beam | ModelTool::Wall | ModelTool::Slab | ModelTool::System => 2,
+            ModelTool::Beam | ModelTool::Wall | ModelTool::Slab | ModelTool::System | ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => 2,
         }
     }
 
     /// Whether the next element can start where the last one ended (the strip's Chain).
     pub(super) fn chains(self) -> bool {
-        matches!(self, ModelTool::Wall | ModelTool::Beam | ModelTool::System)
+        matches!(self, ModelTool::Wall | ModelTool::Beam | ModelTool::System) || self.service().is_some()
     }
 
     /// What to click next, `placed` points in.
@@ -153,6 +180,13 @@ pub(super) const WALL_THICKNESS: f64 = 0.2;
 pub(super) const SLAB_THICKNESS: f64 = 0.25;
 pub(super) const COLUMN: f64 = 0.3;
 pub(super) const BEAM: (f64, f64) = (0.2, 0.4);
+/// A rectangular duct's width and height, a round duct's and a pipe's diameter, a cable tray's
+/// width and height, and how high above its level the centre of a run lies.
+pub(super) const DUCT: (f64, f64) = (0.4, 0.2);
+pub(super) const ROUND_DUCT: f64 = 0.25;
+pub(super) const PIPE: f64 = 0.054;
+pub(super) const CABLE_TRAY: (f64, f64) = (0.3, 0.06);
+pub(super) const SERVICE_HEIGHT: f64 = 2.6;
 pub(super) const OBJECT: DVec3 = DVec3::new(0.6, 0.6, 0.9);
 const SYSTEM_SPACING: DVec2 = DVec2::new(1.5, 1.5);
 const SYSTEM_MEMBER: DVec2 = DVec2::new(0.05, 0.15);
@@ -692,7 +726,7 @@ impl App {
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
             ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
-            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -852,10 +886,10 @@ impl App {
         add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() }));
         // a pergola beside it: two columns and three beams in a U; the joins come by themselves
         // (butts at the columns, mitres at the far corners), and one butt becomes an end plate
-        let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 });
+        let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0, role: Default::default() });
         let c1 = add(self, "Column", column(p(13.0, 0.0)));
         add(self, "Column", column(p(13.0, 6.0)));
-        let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.6), end: b.extend(2.6), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 });
+        let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.6), end: b.extend(2.6), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0, role: Default::default() });
         add(self, "Beam", beam(p(13.0, 6.0), p(17.0, 6.0)));
         let b3 = add(self, "Beam", beam(p(13.0, 0.0), p(17.0, 0.0)));
         add(self, "Beam", beam(p(17.0, 0.0), p(17.0, 6.0)));
@@ -877,6 +911,23 @@ impl App {
 /// What `tool` places from its first point `a` to its last `b` (scene coordinates), on a work
 /// plane at height `z` with a storey of `storey` above it, with the type and sizes `s` (types
 /// from `library`). A wall's `a` and `b` are its axis ends, already on its location line.
+/// The profile of a run of a building service: a duct of 1 mm sheet `width` × `depth`, a round
+/// duct or a pipe of diameter `width` (a pipe's wall a twentieth of it, at least 1 mm), a cable
+/// tray `width` wide with sides `depth` high, of 2 mm sheet, open above.
+pub(super) fn service_profile(tool: ModelTool, width: f64, depth: f64) -> ProfileDef {
+    let mm = |v: f64| format!("{}", (v * 1000.0).round());
+    match tool {
+        ModelTool::RoundDuct => ProfileDef::Catalogue { designation: format!("Ø{}", mm(width)), shape: bim_library::ProfileShape::Chs { d: width, t: 0.001 } },
+        ModelTool::Pipe => ProfileDef::Catalogue { designation: format!("Ø{}", mm(width)), shape: bim_library::ProfileShape::Chs { d: width, t: (width / 20.0).max(0.001) } },
+        ModelTool::CableTray => {
+            let (w, h, t) = (width / 2.0, depth, 0.002);
+            let outer = vec![DVec2::new(-w, -h / 2.0), DVec2::new(w, -h / 2.0), DVec2::new(w, h / 2.0), DVec2::new(w - t, h / 2.0), DVec2::new(w - t, -h / 2.0 + t), DVec2::new(-w + t, -h / 2.0 + t), DVec2::new(-w + t, h / 2.0), DVec2::new(-w, h / 2.0)];
+            ProfileDef::Polygon { outer, holes: Vec::new() }
+        }
+        _ => ProfileDef::Catalogue { designation: format!("{}×{}", mm(width), mm(depth)), shape: bim_library::ProfileShape::Rhs { h: depth, b: width, t: 0.001, r_out: 0.0, r_in: 0.0 } },
+    }
+}
+
 pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64, s: &Settings, library: &bim_library::Library) -> Shape {
     // up to the next level, unless a height was typed
     let up_to = |base: f64| s.height.unwrap_or(z + storey - base);
@@ -896,14 +947,19 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
         }
         ModelTool::Column => {
             let base = z + s.offset;
-            Shape::Linear(LinearDef { start: a.truncate().extend(base), end: a.truncate().extend(base + up_to(base)), profile: profile(), roll: 0.0 })
+            Shape::Linear(LinearDef { start: a.truncate().extend(base), end: a.truncate().extend(base + up_to(base)), profile: profile(), roll: 0.0, role: Default::default() })
         }
         // a beam's top lies at the top of the storey, or at the height typed above its level
         ModelTool::Beam => {
             let profile = profile();
             let half = profile.profile().map_or(s.depth / 2.0, |p| p.outer().iter().map(|q| q.y).fold(0.0, f64::max));
             let up = DVec3::Z * (z + s.height.unwrap_or(storey) - half - a.z);
-            Shape::Linear(LinearDef { start: a + up, end: b + up, profile, roll: 0.0 })
+            Shape::Linear(LinearDef { start: a + up, end: b + up, profile, roll: 0.0, role: Default::default() })
+        }
+        ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => {
+            let up = DVec3::Z * (z + s.height.unwrap_or(SERVICE_HEIGHT) - a.z);
+            let role = tool.service().unwrap_or_default();
+            Shape::Linear(LinearDef { start: a + up, end: b + up, profile: service_profile(tool, s.width, s.depth), roll: 0.0, role })
         }
         ModelTool::Wall => {
             let base = z + s.offset;
@@ -1141,6 +1197,8 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
                 ConnectionKind::FinPlate(_) => "Fin plate",
+                ConnectionKind::Bend(_) => "Bend",
+                ConnectionKind::Tee(_) => "Tee",
                 ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
@@ -1192,6 +1250,45 @@ mod tests {
     pub(super) fn click(app: &mut App, x: f64, y: f64) {
         let (sx, sy) = app.on_screen(DVec3::new(x, y, 0.0), 1000.0, 800.0).unwrap();
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
+    }
+
+    #[test]
+    fn ducts_drawn_one_after_another_get_a_bend_where_they_turn_and_a_branch_gets_a_tee() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Duct, "Duct")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 10.0, 0.0);
+        // the chain goes on from the end of the first
+        click(&mut app, 10.0, 8.0);
+        app.set_model_tool(Some((ModelTool::RoundDuct, "Round duct")));
+        click(&mut app, 5.0, 0.0);
+        click(&mut app, 5.0, -6.0);
+        app.set_model_tool(None);
+        let classes = |app: &App| {
+            let mut c: Vec<&'static str> = app.modeller.model.iter().map(|e| e.class()).collect();
+            c.sort();
+            c
+        };
+        // two ducts and their bend; the round branch is a duct too, and ends on the first in a tee
+        assert_eq!(classes(&app), ["IfcDuctFitting", "IfcDuctFitting", "IfcDuctSegment", "IfcDuctSegment", "IfcDuctSegment"]);
+        let grid = app.modeller.model.grid;
+        let duct = app.modeller.model.iter().find(|e| e.class() == "IfcDuctSegment").unwrap();
+        let Shape::Linear(l) = duct.shape_in_project(&grid) else { panic!() };
+        assert_eq!((l.start.z, l.role, l.profile.name().as_str()), (SERVICE_HEIGHT, bim_core::LinearRole::Duct, "400×200"));
+        // every fitting has a body
+        for e in app.modeller.model.iter().filter(|e| e.class() == "IfcDuctFitting") {
+            assert!(!app.modeller.model.evaluate(e.id).unwrap().is_empty(), "{}", e.name);
+        }
+        // a pipe and a cable tray are runs of their own kind, and get no fitting to a duct
+        app.set_model_tool(Some((ModelTool::Pipe, "Pipe")));
+        click(&mut app, -20.0, 5.0);
+        click(&mut app, -10.0, 5.0);
+        app.set_model_tool(Some((ModelTool::CableTray, "Cable tray")));
+        click(&mut app, -20.0, 9.0);
+        click(&mut app, -10.0, 9.0);
+        app.set_model_tool(None);
+        let all = classes(&app);
+        assert!(all.contains(&"IfcPipeSegment") && all.contains(&"IfcCableCarrierSegment"), "{all:?}");
     }
 
     #[test]

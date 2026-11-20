@@ -248,10 +248,10 @@ mod tests {
 
     #[test]
     fn a_beam_a_column_and_a_slab_have_frames_and_an_object_none() {
-        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(0.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(0.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() });
         let f = frame(&beam).unwrap();
         assert!((f.lo - DVec2::new(0.0, 2.6)).length() < 1e-9 && (f.hi - DVec2::new(5.0, 3.0)).length() < 1e-9 && (f.volume - 0.4).abs() < 1e-9, "{f:?}");
-        let column = Shape::Linear(LinearDef { start: DVec3::new(4.0, 4.0, 0.0), end: DVec3::new(4.0, 4.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0 });
+        let column = Shape::Linear(LinearDef { start: DVec3::new(4.0, 4.0, 0.0), end: DVec3::new(4.0, 4.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0, role: Default::default() });
         let f = frame(&column).unwrap();
         assert!((f.hi.x - f.lo.x - 0.3).abs() < 1e-9 && (f.lo.y, f.hi.y) == (0.0, 3.0) && f.sizes == [0.3, 3.0, 0.5], "{f:?}");
         let slab = Shape::Planar(PlanarDef {

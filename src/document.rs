@@ -225,7 +225,11 @@ impl SectionView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PileLegendField {
     Report,
+    Advice,
+    Execution,
     Datum,
+    Foot(String),
+    Uncut(String),
     Cutoff(String),
 }
 
@@ -1515,22 +1519,25 @@ impl Document {
         self.plan(path).map(|p| &p.drawing).or_else(|| self.section(path).map(|s| &s.drawing))?.as_deref()
     }
 
-    /// Gives a view a kind of drawing (a key of the project's drawing standard), or none: the
-    /// kind usual for what it is.
+    /// Updates the authored values of the selected legend or group.
     pub fn set_pile_legend_field(&mut self, path: &str, field: &PileLegendField, value: String) -> bool {
         let Some(plan) = self.plans.iter_mut().find(|p| p.path == path && p.drawing.as_deref() == Some("pile-schedule")) else { return false };
         let legend = &mut plan.presentation["legend"];
         match field {
             PileLegendField::Report => legend["report"] = value.into(),
+            PileLegendField::Advice => legend["advice"] = value.into(),
+            PileLegendField::Execution => legend["execution"] = value.into(),
             PileLegendField::Datum => legend["datum"] = value.into(),
-            PileLegendField::Cutoff(key) => {
+            PileLegendField::Cutoff(key) | PileLegendField::Foot(key) | PileLegendField::Uncut(key) => {
                 if !legend["rows"].as_array().into_iter().flatten().any(|r| r["key"].as_str() == Some(key.as_str())) { return false; }
-                legend["cutoffs"][key.as_str()] = value.into();
+                let property = match field { PileLegendField::Foot(_) => "foot", PileLegendField::Uncut(_) => "uncut", _ => "cutoffs" };
+                legend[property][key.as_str()] = value.into();
             }
         }
         true
     }
 
+    /// Sets the drawing standard used by the view.
     pub fn set_view_drawing(&mut self, path: &str, kind: Option<String>) -> bool {
         if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
             p.drawing = kind;

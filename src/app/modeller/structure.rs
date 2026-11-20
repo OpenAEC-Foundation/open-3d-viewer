@@ -489,6 +489,39 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a local copy of a registered pile project with an office renvooi"]
+    fn issued_pile_legend_renvooi_is_native_and_uses_its_authored_levels() {
+        use crate::app::App;
+        use crate::loaders::{Source, load_with, Progress};
+        use std::sync::Arc;
+        let source=Source::File(std::env::var_os("PILE_RENVOOI_IFCX").unwrap().into());
+        let mut app=App::default();
+        app.set_model(Arc::new(load_with(&source,&Progress::default()).unwrap()));
+        let plan=app.document.plans().iter().find(|p| p.presentation["legend"]["layout"]=="pile-renvooi").unwrap();
+        assert!(plan.lines.is_empty() && plan.fills.is_empty());
+        assert!(plan.symbols.len()<200 && plan.symbol_fills.len()==3);
+        let text:Vec<_>=plan.notes.iter().chain(&plan.tags).map(|n|n.text.as_str()).collect();
+        assert_eq!(text.iter().filter(|&&s|s=="Renvooi prefab betonpalen").count(),1);
+        for phrase in ["+3,80 m","paalkop +1,70 m NAP","puntniveau -2,30 m NAP","Schacht","403 *","−2100"] {
+            assert!(text.iter().any(|s|s.eq_ignore_ascii_case(phrase)), "{phrase}");
+        }
+        assert!(text.iter().any(|s|s.starts_with("Sondeerrapport:") && s.contains("DKM19")));
+        assert!(text.iter().any(|s|s.starts_with("Funderingsadvies:") && s.contains("VK290")));
+        assert!(plan.notes.iter().any(|n|n.text.contains("vóór") && n.face.color.is_some()));
+        let view=plan.path.clone();
+        let saved=crate::export::to_bytes(app.model.as_ref().unwrap(),&app.document_now(),"renvooi.ifcx").unwrap();
+        let mut back=App::default();
+        back.set_model(Arc::new(load_with(&Source::Bytes{name:"renvooi.ifcx".into(),data:Arc::new(saved)},&Progress::default()).unwrap()));
+        let reopened=back.document.plan(&view).unwrap();
+        assert_eq!(reopened.presentation["legend"],plan.presentation["legend"]);
+        assert_eq!(reopened.tags,plan.tags);
+        let sheet=back.document.sheets().iter().find(|s|s.views.iter().any(|v|v.plan==view)).unwrap().path.clone();
+        back.open_doc_sheet(&sheet);
+        let drawing=back.drawing_to_export().unwrap();
+        assert!(drawing.texts.iter().any(|t|t.text=="403 *"));
+    }
+
+    #[test]
     fn pile_legend_renvooi_edits_print_and_survive_ifcx_reopening() {
         use crate::app::{App, Message};
         use crate::document::PileLegendField;
@@ -515,9 +548,19 @@ mod tests {
         let bytes = crate::export::to_bytes(app.model.as_ref().unwrap(),&app.document_now(),"fundering.ifcx").unwrap();
         let mut back = App::default();
         back.set_model(Arc::new(load_with(&Source::Bytes{name:"fundering.ifcx".into(),data:Arc::new(bytes)},&Progress::default()).unwrap()));
+        let sheet = back.document.add_sheet("Fundering");
         let plan = back.document.plan(&path).unwrap();
+        let (lo, hi) = plan.crop.unwrap();
+        let paper = back.document.sheet(&sheet).unwrap().paper;
+        let centre = back.pile_legend_centre(&sheet, &path).unwrap();
+        for i in 0..2 {
+            assert!((paper[i] - centre[i] - (hi[i] - lo[i]) / (2.0 * plan.scale) - 0.015).abs() < 1e-9);
+        }
+        back.place_on_sheet(&sheet, &path);
+        back.open_doc_sheet(&sheet);
+        let drawing = back.drawing_to_export().unwrap();
         for expected in ["290 × 290","Rapport: Advies R-12","Peil t.o.v. NAP: +0,20 m","+0,85 m NAP","-3,00","+1,00"] {
-            assert!(plan.tags.iter().any(|n| n.text == expected), "{expected}");
+            assert!(drawing.texts.iter().any(|n| n.text == expected), "{expected}");
         }
     }
 

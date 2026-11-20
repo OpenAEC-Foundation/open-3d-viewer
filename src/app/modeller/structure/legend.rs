@@ -1,4 +1,5 @@
 //! The placeable pile legend is regenerated from the same members and head symbols as a plan.
+mod office;
 use super::super::pile_symbols::HeadSymbol;
 use crate::document::{Align, NOTE_HEIGHT, Note, PlanView};
 use bim_core::{Model, ProfileDef, Shape};
@@ -51,7 +52,15 @@ fn metres(mm: i64, sign: bool) -> String {
 
 // The original editable text includes explanatory notes below the supplied table.
 // Its header and body are superseded by the live table. Keep its title and footnotes.
-fn adopt_legend(plan: &mut PlanView) {
+fn adopt_legend(plan: &mut PlanView) -> bool {
+    if plan
+        .notes
+        .first()
+        .is_some_and(|n| n.text.to_lowercase().starts_with("renvooi "))
+        && !office::adopt(plan)
+    {
+        return false;
+    }
     let legend = &mut plan.presentation["legend"];
     let rows = legend["rows"].as_array().map_or(0, Vec::len);
     let count = 8 + 6 * rows;
@@ -90,6 +99,7 @@ fn adopt_legend(plan: &mut PlanView) {
     plan.lines.clear();
     plan.shapes.clear();
     plan.fills.clear();
+    true
 }
 
 pub(in crate::app::modeller) fn schedule_table(
@@ -99,7 +109,9 @@ pub(in crate::app::modeller) fn schedule_table(
     aliases: &[String],
 ) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
     if registered(&plan.presentation) && plan.drawing.as_deref() != Some("pile-schedule") {
-        adopt_legend(plan);
+        if !adopt_legend(plan) {
+            return (Vec::new(), Vec::new());
+        }
     }
     plan.drawing = Some("pile-schedule".into());
     if plan.presentation.is_null() {
@@ -191,6 +203,10 @@ pub(in crate::app::modeller) fn schedule_table(
             })
             .count += 1;
         ids.push(e.id.0);
+    }
+    if office || legend["layout"] == "pile-renvooi" {
+        let numbers: Vec<_> = model.iter().filter_map(|e| e.pile_number).collect();
+        return office::draw(plan, groups, ids, &numbers);
     }
     let nap = legend["nap"].as_bool().unwrap_or(false);
     let title = legend["title"].as_str().unwrap_or("Paallegenda");

@@ -44,65 +44,38 @@ pub(super) fn draw(
         }) {
             continue;
         }
-        let (Ok((axes, _)), Ok(profile)) =
-            (bim_core::element::linear_axes(&l), l.profile.profile())
-        else {
-            continue;
-        };
-        let outline: Vec<DVec2> = profile
-            .outer()
-            .iter()
-            .map(|p| centre + (axes.x * p.x + axes.y * p.y).truncate())
-            .collect();
-        let radius = outline
-            .iter()
-            .map(|p| p.distance(centre))
-            .fold(0.0, f64::max);
+        let Some(symbol) = HeadSymbol::from_member(&l) else { continue };
+        let outline = &symbol.rings[0];
+        let radius = symbol.radius;
         let add = |lines: &mut Vec<_>, a: DVec2, b: DVec2| lines.push([a.to_array(), b.to_array()]);
-        let mut phase: f64 = 0.0;
-        let dot = (plan.scale * 0.0003).min(radius * 0.25);
-        for (&a, &b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
-            if up {
-                if !office_style || outline.len() != 4 { add(lines, a, b); }
-                continue;
-            }
-            let length = a.distance(b);
-            if length <= 1e-10 || dot <= 0.0 {
-                continue;
-            }
-            let mut at = -phase;
-            while at < length {
-                if at + dot > 0.0 {
-                    add(
-                        lines,
-                        a.lerp(b, at.max(0.0) / length),
-                        a.lerp(b, (at + dot).min(length) / length),
-                    );
+        if up {
+            symbol.draw(centre, 1.0, office_style, lines, &mut plan.symbol_fills);
+            if office_style { plan.office_symbol_lines = lines.len(); }
+        } else {
+            let dot = (plan.scale * 0.0003).min(radius * 0.25);
+            for ring in &symbol.rings {
+                let mut phase = 0.0;
+                for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                    let length = a.distance(b);
+                    if length <= 1e-10 || dot <= 0.0 { continue; }
+                    let mut at = -phase;
+                    while at < length {
+                        if at + dot > 0.0 {
+                            add(lines, centre + a.lerp(b, at.max(0.0) / length),
+                                centre + a.lerp(b, (at + dot).min(length) / length));
+                        }
+                        at += 4.0 * dot;
+                    }
+                    phase = (phase + length) % (4.0 * dot);
                 }
-                at += 4.0 * dot;
             }
-            phase = (phase + length) % (4.0 * dot);
-        }
-        // A downward plan retains the numbers of piles placed on its own level.
-        if !up && e.level.as_deref() != Some(&plan.level) {
-            continue;
-        }
-        if plan.corner_labels && outline.len() == 4 {
-            office_symbol(centre, &outline, lines, &mut plan.symbol_fills);
-            plan.office_symbol_lines = lines.len();
-        } else if up && outline.len() == 4 {
-            add(lines, outline[0], outline[2]);
-            add(lines, outline[1], outline[3]);
-        } else if up {
-            for dir in [DVec2::X, DVec2::Y] {
-                add(lines, centre - dir * radius, centre + dir * radius);
-            }
+            if e.level.as_deref() != Some(&plan.level) { continue; }
         }
         let offset = if plan.corner_labels {
-            let hi = outline.iter().copied().fold(centre, DVec2::max);
+            let hi = outline.iter().copied().fold(DVec2::ZERO, DVec2::max);
             let previous = plan.presentation.get("pile_label_offsets").and_then(|v| v.get(e.id.0.to_string()));
             previous.and_then(|v| serde_json::from_value::<[f64; 2]>(v.clone()).ok()).map(DVec2::from_array)
-                .unwrap_or(hi - centre + plan.scale * DVec2::new(0.00135, 0.00145))
+                .unwrap_or(hi + plan.scale * DVec2::new(0.00135, 0.00145))
         } else {
             plan.pile_offsets.get(&e.id.0).copied().map(DVec2::from_array)
                 .unwrap_or_else(|| DVec2::splat(radius + plan.scale * 0.001))
@@ -140,8 +113,47 @@ pub(super) fn draw(
     }
 }
 
+/// Projected profile rings relative to the head, shared by the plan and its legend.
+pub(super) struct HeadSymbol {
+    rings: Vec<Vec<DVec2>>,
+    pub(super) radius: f64,
+}
+
+impl HeadSymbol {
+    pub(super) fn from_member(member: &bim_core::LinearDef) -> Option<Self> {
+        let (axes, _) = bim_core::element::linear_axes(member).ok()?;
+        let profile = member.profile.profile().ok()?;
+        let rings: Vec<Vec<_>> = std::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
+            .map(|ring| ring.iter().map(|p| (axes.x * p.x + axes.y * p.y).truncate()).collect()).collect();
+        let radius = rings[0].iter().map(|p| p.length()).fold(0.0, f64::max);
+        (radius > 0.0).then_some(Self { rings, radius })
+    }
+
+    pub(super) fn draw(&self, centre: DVec2, scale: f64, office: bool, lines: &mut Vec<[[f64; 2]; 2]>, fills: &mut Vec<crate::document::Fill>) {
+        let outer: Vec<_> = self.rings[0].iter().map(|p| centre + *p * scale).collect();
+        if office && outer.len() == 4 && self.rings.len() == 1 {
+            office_symbol(centre, &outer, lines, fills);
+            return;
+        }
+        for ring in &self.rings {
+            for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                lines.push([(centre + a * scale).to_array(), (centre + b * scale).to_array()]);
+            }
+        }
+        if outer.len() == 4 {
+            lines.push([outer[0].to_array(), outer[2].to_array()]);
+            lines.push([outer[1].to_array(), outer[3].to_array()]);
+        } else {
+            for axis in [DVec2::X, DVec2::Y] {
+                let reach = axis * self.radius * scale;
+                lines.push([(centre - reach).to_array(), (centre + reach).to_array()]);
+            }
+        }
+    }
+}
+
 /// Square shaft, solid upper-right quarter and two axes extending half a shaft beyond each face.
-pub(super) fn office_symbol(centre: DVec2, outline: &[DVec2], lines: &mut Vec<[[f64; 2]; 2]>, fills: &mut Vec<crate::document::Fill>) {
+fn office_symbol(centre: DVec2, outline: &[DVec2], lines: &mut Vec<[[f64; 2]; 2]>, fills: &mut Vec<crate::document::Fill>) {
     for (&a, &b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
         lines.push([a.to_array(), b.to_array()]);
     }

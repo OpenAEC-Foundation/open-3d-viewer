@@ -405,9 +405,12 @@ impl App {
         let model = &self.modeller.model;
         let source = self.models.iter().position(|m| Some(m.model.id) == self.modeller.shown && m.visible).map(|i| i as u32);
         let office_style = self.house.key.eq_ignore_ascii_case("3bm");
+        let pile_types: Vec<_> = self.document.plans().iter().filter(|p| super::structure::is_pile_legend(p))
+            .flat_map(|p| p.presentation["legend"]["rows"].as_array().into_iter().flatten())
+            .filter_map(|row| row["type"].as_str().map(str::to_owned)).collect();
         self.document.set_plan_tags(|plan| {
-            if plan.drawing.as_deref() == Some("pile-schedule") {
-                return super::structure::schedule_table(model, plan, office_style);
+            if super::structure::is_pile_legend(plan) {
+                return super::structure::schedule_table(model, plan, office_style, &pile_types);
             }
             if plan.kind.structural() {
                 let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);

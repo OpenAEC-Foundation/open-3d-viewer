@@ -1440,6 +1440,15 @@ impl Document {
         self.plan(path).map_or(&[], |p| &p.symbols[..])
     }
 
+    /// Preserve old view switches when registered columns acquire their own pile layer.
+    pub fn inherit_pile_visibility(&mut self) {
+        for layers in self.plans.iter_mut().map(|p| &mut p.layers).chain(self.sections.iter_mut().map(|s| &mut s.layers)) {
+            if let Some(shown) = layers.get("IfcColumn").copied() {
+                layers.entry("IfcPile".into()).or_insert(shown);
+            }
+        }
+    }
+
     /// Gives every floor plan what it says and draws by itself: `of` makes them for a plan.
     pub fn set_plan_tags(&mut self, of: impl Fn(&mut PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>)) {
         for p in &mut self.plans {

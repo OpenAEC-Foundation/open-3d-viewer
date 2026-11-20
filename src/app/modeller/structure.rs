@@ -128,83 +128,24 @@ pub(super) fn member_tags(model: &Model, level: &str, elevation: f64, scale: f64
     notes
 }
 
-/// An on-sheet schedule reads the same issued identity and live coordinates as the schedule pane.
-pub fn schedule_table(model: &Model, plan: &mut crate::document::PlanView, office_style: bool) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
-    let (lo, hi) = plan.crop.unwrap_or(([0.0, 0.0], [22.0, 40.0]));
-    let mut entries: Vec<_> = model.iter().filter_map(|e| {
-        let n = e.pile_number?;
-        let Shape::Linear(l) = e.shape_in_project(&model.grid) else { return None };
-        Some((n, e.pile_mark.as_deref().unwrap_or(&e.name), l.start))
-    }).collect();
-    entries.sort_by_key(|(n, _, _)| *n);
-    let height = (plan.scale * NOTE_HEIGHT).max(0.001);
-    let row = height * 3.2;
-    let mut notes = Vec::new();
-    let mut lines = Vec::new();
-    let mut table_top = hi[1];
-    if office_style {
-        let mut profiles = std::collections::BTreeMap::new();
-        for e in model.iter().filter(|e| e.pile_number.is_some()) {
-            let Shape::Linear(l) = &e.shape else { continue };
-            let Ok(profile) = l.profile.profile() else { continue };
-            if profile.outer().len() == 4 {
-                profiles.entry(l.profile.name()).or_insert_with(|| profile.outer().to_vec());
-            }
-        }
-        for (label, outline) in profiles {
-            let radius = outline.iter().map(|p| p.abs().max_element()).fold(0.0, f64::max);
-            if radius <= 0.0 { continue; }
-            let centre = DVec2::new(lo[0] + plan.scale * 0.007, table_top - plan.scale * 0.006);
-            let outline: Vec<_> = outline.into_iter().map(|p| centre + p * (plan.scale * 0.002 / radius)).collect();
-            super::pile_symbols::office_symbol(centre, &outline, &mut lines, &mut plan.symbol_fills);
-            plan.office_symbol_lines = lines.len();
-            notes.push(Note { at: (centre + DVec2::X * plan.scale * 0.007).to_array(), text: label, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
-            table_top -= plan.scale * 0.012;
-        }
-    }
-    let rows = (((table_top - lo[1]) / row).floor() as usize).saturating_sub(2).max(1);
-    let groups = entries.len().div_ceil(rows).max(1);
-    let group_width = (hi[0] - lo[0]) / groups as f64;
-    for group in 0..groups {
-        let length = entries.len().saturating_sub(group * rows).min(rows);
-        let left = lo[0] + group as f64 * group_width;
-        let top = table_top - 0.3 * row;
-        let bottom = top - (1 + length) as f64 * row;
-        for col in [0.0, 0.1, 0.525, 0.765, 0.99] {
-            let x = left + col * group_width;
-            lines.push([[x, top], [x, bottom]]);
-        }
-        for i in 0..=length + 1 {
-            let y = top - i as f64 * row;
-            lines.push([[left, y], [left + group_width * 0.99, y]]);
-        }
-        let mut write = |r: usize, cols: [String; 4]| {
-            for (i, text) in cols.into_iter().enumerate() {
-                let x = lo[0] + (group as f64 + [0.015, 0.115, 0.54, 0.78][i]) * group_width;
-                notes.push(Note { at: [x, table_top - (r + 1) as f64 * row], text, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
-            }
-        };
-        write(0, ["Nr.".into(), "ID".into(), "X (m)".into(), "Y (m)".into()]);
-        for (r, (n, mark, at)) in entries.iter().skip(group * rows).take(rows).enumerate() {
-            write(r + 1, [format!("{n:02}"), mark.to_string(), format!("{:.4}", at.x), format!("{:.4}", at.y)]);
-        }
-    }
-    (notes, lines)
-}
+mod legend;
+pub(super) use legend::{is_pile_legend, schedule_table};
 
 /// What the pile schedule and its columns are called when the interface has not said.
 pub const PILE_WORDS: [&str; 10] = ["Pile schedule", "Level", "No.", "X (mm)", "Y (mm)", "Pile", "Grade", "Cut-off level", "Pile tip", "Length (mm)"];
 
 impl crate::app::App {
     pub(in crate::app) fn new_pile_schedule_view(&mut self, level: &str, name: &str) {
-        let Some(path) = self.document.add_plan_of(level, crate::document::PlanKind::Structural, name) else { return };
+        if let Some(path) = self.add_pile_legend(level, name) { self.open_plan(&path); }
+    }
+
+    pub(in crate::app) fn add_pile_legend(&mut self, level: &str, name: &str) -> Option<String> {
+        let path = self.document.add_plan_of(level, crate::document::PlanKind::Structural, name)?;
         self.document.set_view_drawing(&path, Some("pile-schedule".into()));
         let layers = self.model.iter().flat_map(|model| model.layers.iter().map(|l| (l.name.clone(), false))).collect();
         self.document.set_view_layers(&path, layers);
-        let count = self.modeller.model.iter().filter(|e| e.pile_number.is_some()).count();
-        self.document.set_crop(&path, Some(([0.0, 0.0], [22.0, 1.0 + 0.8 * (count + 1) as f64])));
         self.tag_plans();
-        self.open_plan(&path);
+        Some(path)
     }
 
     /// Issue numbers before rebuilding the native scene so the saved definitions contain them.
@@ -213,6 +154,22 @@ impl crate::app::App {
         let highest_member = model.iter().filter_map(|e| e.pile_number).max().unwrap_or(0);
         let levels: Vec<_> = self.document.levels().iter().map(|l| (l.path.clone(), l.elevation)).collect();
         let mut high = self.document.pile_high_water.max(highest_member);
+        // Older drawings register the piles in issue order on their native legend.
+        // A pile can start on its level and finish above it, outside the column heuristic.
+        for plan in self.document.plans().iter().filter(|p| legend::registered(&p.presentation)) {
+            for id in plan.presentation["legend"]["elementIds"].as_array().into_iter().flatten().filter_map(|v| v.as_u64()) {
+                let Some(e) = model.get(ElementId(id)).filter(|e| matches!(e.shape, Shape::Linear(_))) else { continue };
+                if e.pile_number.unwrap_or(0) > 0 { continue; }
+                let Some(next) = high.checked_add(1) else { continue };
+                let mut e = e.clone();
+                e.pile_number = Some(next);
+                model.insert(e);
+                high = next;
+            }
+        }
+        if self.document.plans().iter().any(|p| legend::registered(&p.presentation) && p.drawing.as_deref() != Some("pile-schedule")) {
+            self.document.inherit_pile_visibility();
+        }
         for (level, elevation) in levels {
             for pile in piles(model, &level, elevation) {
                 let Some(e) = model.get(pile.id) else { continue };
@@ -410,7 +367,9 @@ mod tests {
         let schedule = back.schedules.iter().find(|s| s.name == back.modeller.pile_schedule).unwrap();
         assert_eq!(schedule.rows.len(), count);
         let sheet_table = back.document.plans().iter().find(|p| p.drawing.as_deref() == Some("pile-schedule")).unwrap();
-        assert!(sheet_table.tags.iter().any(|n| n.text == format!("{:02}", highest + 2)));
+        let rows = sheet_table.presentation["legend"]["rows"].as_array().unwrap();
+        assert_eq!(rows.iter().filter_map(|row| row["count"].as_u64()).sum::<u64>(), count as u64);
+        assert!(!sheet_table.tags.iter().any(|n| n.text == "X (m)"));
         let baseline = open(save(&open(std::env::var_os("PILE_TEST_IFCX").unwrap().into()), "issued.ifcx"));
         assert_eq!(issued(&baseline), before);
         let mut baseline = baseline;
@@ -421,6 +380,84 @@ mod tests {
             eprintln!("exported {}: {}", index + 1, number);
         }
         eprintln!("{} issued piles; retained {}, deleted {}, next {}", before.len(), first_number, highest + 1, highest + 2);
+    }
+
+    #[test]
+    fn grouped_pile_legend_migrates_changes_members_and_reopens() {
+        use crate::app::App;
+        use crate::document::{PlanKind, PlanView};
+        use crate::loaders::{load_with, Progress, Source};
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let mut app = App::default();
+        app.new_model("Ground");
+        let level = app.document.levels()[0].path.clone();
+        let view = app.document.add_plan_of(&level, PlanKind::Structural, "Legenda").unwrap();
+        let sheet = app.document.add_sheet("Fundering");
+        app.document.place_plan(&sheet, &view).unwrap();
+        let grid = app.modeller.model.grid;
+        let pile = |x| Element::in_project(&grid, "T1 object", Some(level.clone()), Shape::Linear(LinearDef {
+            start: DVec3::new(x, 0.0, 0.5), end: DVec3::new(x, 0.0, 4.5),
+            profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0,
+        }));
+        let a = app.modeller.model.add(pile(2.0)).unwrap();
+        let b = app.modeller.model.add(pile(8.0)).unwrap();
+        app.document.set_plan_tags(|p| {
+            p.crop = Some(([1000.0, 990.0], [1010.0, 1000.0]));
+            p.presentation = json!({"origin":[0,0], "legend":{"source":"openaec::element","symbolSource":"pile profile",
+                "elementIds":[b.0,a.0], "rows":[{"type":"T1","count":2}]}});
+            p.layers.insert("IfcColumn".into(), false);
+            p.lines.push([[0.0, 0.0], [10.0, 0.0]]);
+            for (i, text) in ["Legenda", "Type", "Symbool", "Schacht [mm]", "Aantal", "Lengte [m]", "Punt [m NAP]", "Kop [m NAP]",
+                "T1", "300 × 300", "2", "4,00", "+0,50", "+4,50", "Toelichting"].into_iter().enumerate() {
+                p.notes.push(Note { at: [1000.0, 1000.0-i as f64*0.4], text: text.into(), size: NOTE_HEIGHT, angle: 0.0,
+                    align: Align::Left, level: false, face: Default::default() });
+            }
+            (vec![], vec![])
+        });
+        app.show_modelled();
+        let counts = |p: &PlanView| p.presentation["legend"]["rows"].as_array().unwrap().iter()
+            .map(|r| (r["type"].as_str().unwrap().to_owned(), r["count"].as_u64().unwrap())).collect::<std::collections::BTreeMap<_,_>>();
+        let p = app.document.plan(&view).unwrap();
+        assert_eq!(counts(p)["T1"], 2);
+        assert_eq!(p.layers["IfcPile"], false);
+        assert!(p.lines.is_empty());
+        assert_eq!(p.notes.len(), 1);
+        assert_eq!(p.notes[0].text, "Toelichting");
+        assert_eq!(app.modeller.model.get(b).unwrap().pile_number, Some(1));
+        assert_eq!(app.modeller.model.get(a).unwrap().pile_number, Some(2));
+
+        let mut changed = app.modeller.model.get(a).unwrap().clone();
+        let Shape::Linear(l) = &mut changed.shape else { unreachable!() };
+        l.profile = ProfileDef::Catalogue { designation: "Rond".into(), shape: bim_library::ProfileShape::Circle { diameter: 0.4 } };
+        app.modeller.model.replace(changed.clone()).unwrap();
+        app.show_modelled();
+        let p = app.document.plan(&view).unwrap();
+        assert_eq!((counts(p)["T1"], counts(p)["Rond"]), (1, 1));
+        assert!(p.tags.iter().any(|n| n.text == "Ø400"));
+        assert!(p.tags.iter().any(|n| n.text == "+4,50"));
+        let new = app.modeller.model.add(changed).unwrap();
+        app.show_modelled();
+        assert_eq!(counts(app.document.plan(&view).unwrap())["Rond"], 2);
+        app.modeller.model.remove(b);
+        app.show_modelled();
+        let p = app.document.plan(&view).unwrap();
+        assert_eq!(counts(p).into_values().collect::<Vec<_>>(), vec![2]);
+        let (lo, hi) = p.crop.unwrap();
+        assert_eq!((lo[0], hi[1]), (1000.0, 1000.0));
+        for n in p.notes.iter().chain(&p.tags) { assert!(n.at[0] >= lo[0] && n.at[0] <= hi[0] && n.at[1] >= lo[1] && n.at[1] <= hi[1]); }
+        let encoded = crate::export::to_bytes(app.model.as_ref().unwrap(), &app.document_now(), "piles.ifcx").unwrap();
+        let source = Source::Bytes { name: "piles.ifcx".into(), data: Arc::new(encoded) };
+        let mut back = App::default();
+        back.set_model(Arc::new(load_with(&source, &Progress::default()).unwrap()));
+        let restored = back.document.plan(&view).unwrap();
+        assert_eq!(restored.presentation, p.presentation);
+        assert_eq!(restored.tags, p.tags);
+        assert_eq!(restored.symbols, p.symbols);
+        assert_eq!(restored.notes, p.notes);
+        assert_eq!(back.document.sheet(&sheet).unwrap().views[0].plan, view);
+        assert_eq!(back.modeller.model.get(new).unwrap().pile_number, Some(3));
     }
 
     #[test]

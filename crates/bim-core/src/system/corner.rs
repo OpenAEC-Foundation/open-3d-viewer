@@ -480,7 +480,7 @@ pub(super) mod tests {
     pub(in crate::system) const BATTEN: f64 = 0.045;
 
     pub(in crate::system) fn def(a: (f64, f64), b: (f64, f64), height: f64, id: &str) -> SystemDef {
-        let s = SystemDef { start: DVec2::new(a.0, a.1), end: DVec2::new(b.0, b.1), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let s = SystemDef { start: DVec2::new(a.0, a.1), end: DVec2::new(b.0, b.1), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         s.typed_from(&Library::starter(), id).unwrap()
     }
 

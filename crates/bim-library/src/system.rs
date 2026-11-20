@@ -771,20 +771,25 @@ pub fn starter() -> Vec<SystemType> {
             ..upright(&format!("system.wide-slab-{}", (depth * 1000.0).round()), Floor, Grid::new(2.4, 7.2, Stack), Members::new(0.002, plank, "topping-concrete"), Panels::new("wide-slab", plank))
         }
     };
-    // hollow-core slabs: round cores in the thin ones, higher ones with round ends in the thick
-    // ones; indicative sections, not a maker's
-    let hollow_core = |depth: f64| SystemType {
-        lying: Some(3.0),
-        cores: Some(match (depth * 1000.0).round() as u32 {
-            0..=175 => Cores::new(9, 0.09, 0.09),
-            176..=230 => Cores::new(7, 0.135, 0.14),
-            231..=290 => Cores::new(5, 0.175, 0.19),
-            291..=360 => Cores::new(4, 0.22, 0.24),
-            _ => Cores::new(4, 0.22, 0.32),
-        }),
-        trimmer: Some(Trimmer::SLABS),
-        whole: true,
-        ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, 6.0, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))
+    // hollow-core slabs as VBI's product data sheets give them (kanaalplaatvloer 150 to 400,
+    // 2024): the number of cores, and the longest slab as the grid's row. The sheets draw the
+    // cores without sizes; theirs here leave the sheets' concrete section (126 076, 143 823,
+    // 177 829, 198 483 and 225 911 mm² of a slab 1200 wide, less its joint fill)
+    let hollow_core = |depth: f64| {
+        let (cores, longest) = match (depth * 1000.0).round() as u32 {
+            0..=175 => (Cores::new(11, 0.074, 0.074), 8.1),
+            176..=230 => (Cores::new(7, 0.11, 0.138), 9.0),
+            231..=290 => (Cores::new(7, 0.1, 0.197), 10.0),
+            291..=360 => (Cores::new(5, 0.15, 0.262), 14.7),
+            _ => (Cores::new(5, 0.16, 0.332), 18.0),
+        };
+        SystemType {
+            lying: Some(3.0),
+            cores: Some(cores),
+            trimmer: Some(Trimmer::SLABS),
+            whole: true,
+            ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, longest, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))
+        }
     };
     let mut types = vec![
         upright("system.curtain-wall-aluminium-1500", CurtainWall, Grid::new(1.5, 1.8, Stack), Members::new(0.05, 0.15, "aluminium"), glass()),
@@ -868,7 +873,7 @@ mod tests {
         assert_eq!(name("system.masonry-waal-stack", Lang::En), "Brickwork 100 220×62.5 stack bond");
         assert_eq!(name("system.masonry-dik-stretcher", Lang::De), "Mauerwerk 100 220×75 Läuferverband");
         assert_eq!(name("system.cladding-timber-boards-140", Lang::En), "Timber cladding 18 4000×140 staggered");
-        assert_eq!(name("system.hollow-core-260", Lang::Nl), "Kanaalplaat 260 1200×6000");
+        assert_eq!(name("system.hollow-core-260", Lang::Nl), "Kanaalplaat 260 1200×10000");
         assert_eq!(name("system.wide-slab-260", Lang::Nl), "Breedplaat 60 2400×7200 opstort 200");
         assert_eq!(name("system.wide-slab-200", Lang::En), "Wide-slab plank 60 2400×7200 structural topping 140");
         assert_eq!(name("system.cladding-zinc-standing-seam-430", Lang::Fr), "Zinc 0,8 430×6000");

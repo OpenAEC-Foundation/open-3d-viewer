@@ -1668,6 +1668,11 @@
     "Click the line to extend to · Esc: stop": "Uzatılacak hedef çizgiye tıklayın · Esc: durdur",
     "Click the line that is extended · Esc: start again": "Uzatılacak çizgiye tıklayın · Esc: yeniden başla",
     "Click the first line, on the side that stays · Esc: stop": "İlk çizgiye, kalacak tarafından tıklayın · Esc: durdur",
-    "Click the second line, on the side that stays · Esc: start again": "İkinci çizgiye, kalacak tarafından tıklayın · Esc: yeniden başla"
+    "Click the second line, on the side that stays · Esc: start again": "İkinci çizgiye, kalacak tarafından tıklayın · Esc: yeniden başla",
+    "Division": "Bölünme",
+    "Equal bays": "Eşit açıklıklar",
+    "Whole from the start": "Baştan itibaren tam",
+    "Whole from the end": "Sondan itibaren tam",
+    "Centred": "Ortalanmış"
   }
 }

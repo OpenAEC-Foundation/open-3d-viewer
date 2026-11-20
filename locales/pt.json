@@ -1668,6 +1668,11 @@
     "Click the line to extend to · Esc: stop": "Clique na linha até à qual se estende · Esc: parar",
     "Click the line that is extended · Esc: start again": "Clique na linha que é estendida · Esc: recomeçar",
     "Click the first line, on the side that stays · Esc: stop": "Clique na primeira linha, no lado que fica · Esc: parar",
-    "Click the second line, on the side that stays · Esc: start again": "Clique na segunda linha, no lado que fica · Esc: recomeçar"
+    "Click the second line, on the side that stays · Esc: start again": "Clique na segunda linha, no lado que fica · Esc: recomeçar",
+    "Division": "Divisão",
+    "Equal bays": "Vãos iguais",
+    "Whole from the start": "Inteiros desde o início",
+    "Whole from the end": "Inteiros desde o fim",
+    "Centred": "Centrado"
   }
 }

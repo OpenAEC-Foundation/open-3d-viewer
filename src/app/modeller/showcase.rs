@@ -37,7 +37,7 @@ fn p(x: f64, y: f64) -> DVec2 {
 
 /// A standing system of type `id` on the line `a`–`b`, or lying in the rectangle from `a` to `b`.
 fn system(app: &App, id: &str, a: DVec2, b: DVec2, height: f64, openings: Vec<Opening>) -> Option<Shape> {
-    let generic = SystemDef { start: a, end: b, base: 0.0, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new(), outline: Vec::new() };
+    let generic = SystemDef { start: a, end: b, base: 0.0, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new(), outline: Vec::new(), division: None };
     let t = app.library.system_type(id)?;
     if let Some(above) = t.lying {
         let (lo, hi) = (a.min(b), a.max(b));
@@ -332,7 +332,7 @@ fn report_overlaps(app: &App) {
 
 /// A standing system of type `id` on the line `a`–`b` from `base` up `height`.
 fn standing(app: &App, id: &str, a: DVec2, b: DVec2, base: f64, height: f64, openings: Vec<Opening>) -> Option<Shape> {
-    let generic = SystemDef { start: a, end: b, base, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new(), outline: Vec::new() };
+    let generic = SystemDef { start: a, end: b, base, height, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings, breaks: Vec::new(), outline: Vec::new(), division: None };
     generic.typed_from(&app.library, id).map(Shape::System)
 }
 
@@ -341,7 +341,7 @@ fn standing(app: &App, id: &str, a: DVec2, b: DVec2, base: f64, height: f64, ope
 fn lying(app: &App, id: &str, a: DVec2, b: DVec2, level: f64) -> Option<Shape> {
     let t = app.library.system_type(id)?;
     let (lo, hi) = (a.min(b), a.max(b));
-    let rectangle = SystemDef { start: lo, end: p(hi.x, lo.y), base: level + t.lying?, height: hi.y - lo.y, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+    let rectangle = SystemDef { start: lo, end: p(hi.x, lo.y), base: level + t.lying?, height: hi.y - lo.y, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
     rectangle.laid(t).map(Shape::System)
 }
 

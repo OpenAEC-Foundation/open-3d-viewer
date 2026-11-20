@@ -55,13 +55,15 @@ pub(super) fn bounded(s: &SystemDef) -> Result<Option<(SystemDef, Vec<DVec2>)>, 
     Ok(Some((rectangle, local.into_iter().map(|p| p - lo).collect())))
 }
 
-/// The slabs' seams either side of opening `o` in a face of `bays` bays `bay` wide with joints
-/// `w` wide: where the first slab it touches starts and the last one ends.
-fn seams(o: &Opening, bays: usize, bay: f64, w: f64, length: f64) -> (f64, f64) {
+/// The slabs' seams either side of opening `o` in a face whose bays lie between `lines`, with
+/// joints `w` wide: where the first slab it touches starts and the last one ends, and whether a
+/// slab lies beside it at either side.
+fn seams(o: &Opening, lines: &[f64], w: f64) -> (f64, f64, bool) {
     let tol = LINEAR_TOLERANCE;
-    let first = ((o.along + tol) / bay).floor().clamp(0.0, bays as f64 - 1.0);
-    let last = ((o.along + o.width - tol) / bay).ceil().clamp(first + 1.0, bays as f64);
-    (first * bay + w / 2.0, (if last >= bays as f64 { length } else { last * bay }) - w / 2.0)
+    let bays = lines.len() - 1;
+    let first = lines.iter().rposition(|u| *u <= o.along + tol).unwrap_or(0).min(bays - 1);
+    let last = lines.iter().position(|u| *u >= o.along + o.width - tol).unwrap_or(bays).max(first + 1);
+    (lines[first] + w / 2.0, lines[last] - w / 2.0, first > 0 && last < bays)
 }
 
 /// Whether opening `o` of lying system `s` takes whole slabs out and hangs their ends in
@@ -76,7 +78,7 @@ fn trimmed(s: &SystemDef, o: &Opening) -> bool {
 /// not inside the system, and a trimmed one with no slab beside it to hang its trimmer on.
 pub(super) fn cut(s: &SystemDef, f: &Face, length: f64) -> Result<Vec<Opening>, Refusal> {
     let tol = LINEAR_TOLERANCE;
-    let (bays, _, bay, _) = f.division(length, s.height);
+    let lines = f.lines(length);
     let mut made = Vec::with_capacity(s.openings.len());
     for o in &s.openings {
         let sized = o.width > tol && (round(o) || o.height > tol);
@@ -91,8 +93,8 @@ pub(super) fn cut(s: &SystemDef, f: &Face, length: f64) -> Result<Vec<Opening>, 
             made.push(*o);
             continue;
         }
-        let (a, b) = seams(o, bays, bay, f.width(), length);
-        if a < bay - tol || b + f.width() / 2.0 > length - f.width() - tol {
+        let (a, b, beside) = seams(o, &lines, f.width());
+        if !beside {
             return Err(Refusal::OpeningNotFramed);
         }
         made.push(Opening { along: a, width: b - a, ..*o });
@@ -197,7 +199,7 @@ pub(super) fn finish(s: &SystemDef, f: &Face, length: f64, top: f64, outline: Op
     let tol = LINEAR_TOLERANCE;
     let dir = (s.end - s.start).try_normalize().ok_or(Refusal::ZeroLength)?;
     let w = f.width();
-    let (bays, _, bay, _) = f.division(length, s.height);
+    let lines = f.lines(length);
     // what cuts the joints: every rectangular opening, a trimmed one with the joints beside it;
     // and what is drilled through everything
     let mut blocks: Vec<([f64; 4], Solid)> = Vec::new();
@@ -212,7 +214,7 @@ pub(super) fn finish(s: &SystemDef, f: &Face, length: f64, top: f64, outline: Op
         }
         let (v0, v1) = (o.sill, o.sill + o.height);
         let r = if trimmed(s, o) {
-            let (a, b) = seams(o, bays, bay, w, length);
+            let (a, b, _) = seams(o, &lines, w);
             trimmers.extend(hung(s, dir, [a, v0, b, v1], top)?);
             [a - w - PAST, v0, b + w + PAST, v1]
         } else {
@@ -271,8 +273,10 @@ fn cored(s: &SystemDef, f: &Face, length: f64, parts: Vec<PartSolid>) -> Result<
     let tol = LINEAR_TOLERANCE;
     let dir = (s.end - s.start).try_normalize().ok_or(Refusal::ZeroLength)?;
     let w = f.width();
-    let (_, _, bay, _) = f.division(length, s.height);
-    let pitch = (bay - w - 2.0 * EDGE) / f64::from(cores.count);
+    let lines = f.lines(length);
+    // a whole slab: the grid's bay less a joint, or the bays as they are where they are equal
+    let whole = lines.windows(2).map(|u| u[1] - u[0]).fold(f.spacing.x, f64::max);
+    let pitch = (whole - w - 2.0 * EDGE) / f64::from(cores.count);
     let (r, straight) = (cores.width / 2.0, (cores.height - cores.width) / 2.0);
     if cores.height + 2.0 * COVER > s.panel + tol || pitch - cores.width < tol {
         return Ok(parts);
@@ -289,8 +293,12 @@ fn cored(s: &SystemDef, f: &Face, length: f64, parts: Vec<PartSolid>) -> Result<
             let [u0, v0, u1, v1] = footprint(s, dir, &part.solid);
             let (lo, hi) = part.solid.bounds();
             let depth = hi.z - lo.z;
-            // the whole slab it is (a piece of): from the joint before it
-            let first = (((u0 + u1) / 2.0) / bay).floor() * bay + w / 2.0 + EDGE;
+            // the whole slab it is (a piece of): from the joint before it, or, a fitting slab at
+            // the system's start, up to the joint after it
+            let mid = (u0 + u1) / 2.0;
+            let bay = lines.iter().rposition(|u| *u <= mid).unwrap_or(0).min(lines.len() - 2);
+            let from = if bay == 0 && lines[1] - lines[0] < whole - tol { lines[1] - whole } else { lines[bay] };
+            let first = from + w / 2.0 + EDGE;
             let holes: Vec<Vec<DVec2>> = (0..cores.count)
                 .map(|k| first + (f64::from(k) + 0.5) * pitch)
                 .filter(|c| c - r >= u0 + COVER - tol && c + r <= u1 - COVER + tol)
@@ -353,7 +361,7 @@ mod tests {
 
     /// A floor of type `id`, `length` along x from the origin and `width` to its left, its top at 3.0.
     fn floor(length: f64, width: f64, id: &str) -> SystemDef {
-        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 3.0, height: width, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let generic = SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 3.0, height: width, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let mut s = generic.laid(Library::starter().system_type(id).unwrap()).unwrap();
         // solid slabs, so volumes say what was cut; [`hollow`] is the slabs as they are
         s.system_type.as_mut().unwrap().cores = None;
@@ -369,8 +377,8 @@ mod tests {
 
     #[test]
     fn hollow_core_slabs_have_their_cores() {
-        // 200 deep: seven cores 135 wide and 140 high in a whole slab, from end to end
-        let (r, straight) = (0.0675, 0.0025);
+        // 200 deep: seven cores 110 wide and 138 high in a whole slab, from end to end
+        let (r, straight) = (0.055, 0.014);
         let n = 16.0_f64;
         let core = n / 2.0 * r * r * (std::f64::consts::TAU / n).sin() + 2.0 * r * 2.0 * straight;
         let made = parts(&hollow(4.8, 6.0, "system.hollow-core-200")).unwrap();
@@ -403,7 +411,7 @@ mod tests {
             let id = format!("system.hollow-core-{depth}");
             let solid = volume(&of(&parts(&floor(2.4, 6.0, &id)).unwrap(), "hollow-core-concrete"));
             let cored = volume(&of(&parts(&hollow(2.4, 6.0, &id)).unwrap(), "hollow-core-concrete"));
-            assert!(cored < 0.75 * solid && cored > 0.45 * solid, "{id}: {}", cored / solid);
+            assert!(cored < 0.8 * solid && cored > 0.4 * solid, "{id}: {}", cored / solid);
         }
     }
 

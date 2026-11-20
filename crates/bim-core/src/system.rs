@@ -47,7 +47,7 @@
 //! stretch, each with its own end members, and the frame behind it gets a stud either side of
 //! the stretch its boards leave open.
 
-use crate::element::{Opening, PartSolid, SystemDef};
+use crate::element::{Division, Opening, PartSolid, SystemDef};
 use crate::join::{self, JoinKind, Member, MemberEnd};
 use crate::profile::Profile;
 use crate::solid::{Axes, Plane, Solid};
@@ -175,8 +175,10 @@ struct Face<'a> {
     member: Option<(DVec2, Option<&'a str>)>,
     framing: Option<Framing>,
     gauge: Option<Gauge>,
-    /// Whole bays from its start, the last one cut to fit.
+    /// A face of slabs: no joint round its edge, and no row longer than the grid's.
     whole: bool,
+    /// How its bays are divided along it.
+    division: Division,
     panel: (f64, Option<&'a str>),
 }
 
@@ -196,14 +198,49 @@ impl Face<'_> {
             let whole = |extent: f64, pitch: f64| count(((extent - LINEAR_TOLERANCE) / pitch).ceil());
             return (whole(length, self.spacing.x), whole(height, self.spacing.y), self.spacing.x, self.spacing.y);
         }
-        let rows = count((height / self.spacing.y).round());
-        if self.whole {
-            // what is left for the last bay is wider than a member, or it goes with the one before
-            let bays = count(((length - self.width() - LINEAR_TOLERANCE) / self.spacing.x).ceil());
-            return (bays, rows, self.spacing.x, height / rows as f64);
+        // slabs are no longer than the grid's row: that is the longest they are made
+        let rows = if self.whole { count(((height - LINEAR_TOLERANCE) / self.spacing.y).ceil()) } else { count((height / self.spacing.y).round()) };
+        if self.divided() != Division::Equal {
+            // (one more than fit whole: a cut one at either end at most)
+            let bays = count(((length - LINEAR_TOLERANCE) / self.spacing.x).ceil() + 1.0);
+            return (bays, rows, self.spacing.x.min(length), height / rows as f64);
         }
         let bays = count((length / self.spacing.x).round());
         (bays, rows, length / bays as f64, height / rows as f64)
+    }
+
+    /// How its bays are divided: as it is asked, but a bond's rows always in equal ones.
+    fn divided(&self) -> Division {
+        if self.member.is_some() && self.framing.is_none() && self.pattern == Pattern::Stack { self.division } else { Division::Equal }
+    }
+
+    /// The lines between its bays along a face `length` long, from 0 to `length`. What is left
+    /// beside the whole bays is wider than a member, or it goes with the bay next to it.
+    fn lines(&self, length: f64) -> Vec<f64> {
+        let (tol, p, w) = (LINEAR_TOLERANCE, self.spacing.x, self.width());
+        let from_start = || -> Vec<f64> {
+            let whole = (((length - w - tol) / p).ceil().clamp(1.0, 1e9)) as usize;
+            (0..whole).map(|i| i as f64 * p).chain(once(length)).collect()
+        };
+        match self.divided() {
+            Division::Equal => {
+                let (bays, _, bay, _) = self.division(length, 1.0);
+                (0..bays).map(|i| i as f64 * bay).chain(once(length)).collect()
+            }
+            Division::FromStart => from_start(),
+            Division::FromEnd => from_start().into_iter().rev().map(|u| length - u).collect(),
+            Division::Centred => {
+                let whole = ((length + tol) / p).floor();
+                let left = length - whole * p;
+                if left <= tol || whole < 1.0 {
+                    return from_start();
+                }
+                // halves no wider than a member go with a whole bay each
+                let (whole, side) = if left / 2.0 > w + tol { (whole, left / 2.0) } else { (whole - 1.0, (left + p) / 2.0) };
+                let inner = (0..=whole.clamp(0.0, 1e9) as usize).map(|i| side + i as f64 * p);
+                once(0.0).chain(inner.filter(|u| *u < length - tol)).chain(once(length)).collect()
+            }
+        }
     }
 
     /// At most how many parts it is generated as, with `openings` openings.
@@ -309,6 +346,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         framing: t.and_then(|t| t.framing),
         gauge: t.and_then(|t| t.gauge),
         whole: t.is_some_and(|t| t.whole),
+        division: s.division.unwrap_or(if t.is_some_and(|t| t.whole) { Division::FromStart } else { Division::Equal }),
         panel: (s.panel, t.map(|t| t.panel_material.as_str())),
     };
     let layers = t.into_iter().flat_map(|t| &t.layers).map(|l| Face {
@@ -320,6 +358,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         framing: l.members.as_ref().and_then(|m| m.framing),
         gauge: l.members.as_ref().and_then(|m| m.gauge),
         whole: false,
+        division: Division::Equal,
         panel: (l.panels.thickness, Some(l.panels.material.as_str())),
     });
     std::iter::once(own).chain(layers).collect()
@@ -918,10 +957,12 @@ impl Line {
     /// Face `f` on a grid: its members on the grid's lines, joined, and its panels (or boards) in
     /// its bays, cut around `openings` and at the prefab units' `joints`.
     fn grid(&self, f: &Face, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
-        let (bays, rows, bay, row) = f.division(self.length, self.height);
+        let (_, rows, bay, row) = f.division(self.length, self.height);
         let w = f.width();
-        // where division `i` along is: the last one at the face's end, also after a fitting bay
-        let line = |i: usize| if i == bays { self.length } else { i as f64 * bay };
+        // where division `i` along is
+        let lines = f.lines(self.length);
+        let bays = lines.len() - 1;
+        let line = |i: usize| lines[i];
         // a panel between the lines `w` apart, up to the face's end and head (where boards are
         // cut), cut around the openings and left out of the face's gaps
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
@@ -1293,7 +1334,7 @@ mod tests {
     use super::*;
 
     fn system(length: f64, height: f64) -> SystemDef {
-        SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() }
+        SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None }
     }
 
     fn typed(length: f64, height: f64, id: &str) -> SystemDef {
@@ -1865,6 +1906,36 @@ mod tests {
     }
 
     #[test]
+    fn a_system_divides_its_bays_as_it_is_asked() {
+        let library = Library::starter();
+        let floor = SystemDef { base: 3.0, ..system(8.8, 6.0) }.laid(library.system_type("system.hollow-core-200").unwrap()).unwrap();
+        // the widths of the slabs along the line, in millimetres
+        let widths = |division: Option<Division>| -> Vec<i64> {
+            let made = parts(&SystemDef { division, ..floor.clone() }).unwrap();
+            let mut at: Vec<(f64, f64)> = of(&made, "hollow-core-concrete").iter().map(|p| (p.solid.bounds().0.x, p.solid.bounds().1.x)).collect();
+            at.sort_by(|a, b| a.0.total_cmp(&b.0));
+            at.iter().map(|(a, b)| ((b - a) * 1000.0).round() as i64).collect()
+        };
+        // slabs: whole ones from the start unless it is asked otherwise (joints of 20, none at the edges)
+        assert_eq!(widths(None), [1190, 1180, 1180, 1180, 1180, 1180, 1180, 390]);
+        assert_eq!(widths(Some(Division::FromStart)), widths(None));
+        assert_eq!(widths(Some(Division::FromEnd)), [390, 1180, 1180, 1180, 1180, 1180, 1180, 1190]);
+        assert_eq!(widths(Some(Division::Centred)), [190, 1180, 1180, 1180, 1180, 1180, 1180, 1180, 190]);
+        assert_eq!(widths(Some(Division::Equal)), [1247, 1237, 1237, 1237, 1237, 1237, 1247]);
+        // a curtain wall: equal bays unless it is asked otherwise
+        let wall = system(5.0, 3.0);
+        let lines = |division: Option<Division>| faces(&SystemDef { division, ..wall.clone() })[0].lines(5.0).iter().map(|u| (u * 1000.0).round() as i64).collect::<Vec<_>>();
+        assert_eq!(lines(None), [0, 1667, 3333, 5000]);
+        assert_eq!(lines(Some(Division::FromStart)), [0, 1500, 3000, 4500, 5000]);
+        assert_eq!(lines(Some(Division::FromEnd)), [0, 500, 2000, 3500, 5000]);
+        assert_eq!(lines(Some(Division::Centred)), [0, 250, 1750, 3250, 4750, 5000]);
+        assert!(parts(&SystemDef { division: Some(Division::Centred), ..wall.clone() }).is_ok());
+        // a row of slabs is no longer than the type's longest: 9 m for these
+        let deep = SystemDef { height: 13.0, ..floor };
+        assert!(of(&parts(&deep).unwrap(), "hollow-core-concrete").iter().all(|p| p.solid.bounds().1.y - p.solid.bounds().0.y < 6.5 + 1e-9));
+    }
+
+    #[test]
     fn a_lying_system_is_laid_level_to_the_left_of_its_line_under_its_base() {
         let library = Library::starter();
         // 3.6 m of line, 6 m wide, its top at 3.0: three hollow-core slabs 1200 wide spanning 6 m
@@ -1880,8 +1951,8 @@ mod tests {
         // slabs run to its edges: no joint round it
         assert!((lo - DVec3::new(0.0, 0.0, 2.8)).length() < 1e-6 && (hi - DVec3::new(3.6, 6.0, 3.0)).length() < 1e-6, "{lo} {hi}");
         let volume: f64 = parts.iter().map(|p| p.solid.volume()).sum();
-        // three slabs with seven cores each, 135 wide and 140 high, from end to end
-        let cores = 3.0 * 7.0 * (8.0 * 0.0675 * 0.0675 * (std::f64::consts::TAU / 16.0).sin() + 0.135 * 0.005) * 6.0;
+        // three slabs with seven cores each, 110 wide and 138 high, from end to end
+        let cores = 3.0 * 7.0 * (8.0 * 0.055 * 0.055 * (std::f64::consts::TAU / 16.0).sin() + 0.11 * 0.028) * 6.0;
         assert!((volume + cores - 3.6 * 6.0 * 0.2).abs() < 1e-6, "slabs and grout fill it but for the cores: {volume}");
         // a ceiling: tiles 600 square in a grid of profiles
         let ceiling = SystemDef { base: 2.6, ..system(3.0, 2.4) }.laid(library.system_type("system.ceiling-600x600").unwrap()).unwrap();

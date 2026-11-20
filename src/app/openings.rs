@@ -245,7 +245,7 @@ mod tests {
         app.camera.ortho = true;
         app.camera.target = Vec3::ZERO;
         app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         let framed = |app: &App| app.modeller.model.openings_of(id);
         // a curtain wall is no wall to put a door in: the door placed there stands free
@@ -283,7 +283,7 @@ mod tests {
         app.camera.ortho = true;
         app.camera.target = Vec3::ZERO;
         app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         for (kind, boards) in [("system.metal-stud-75-1", 2), ("system.metal-stud-100-2", 4)] {

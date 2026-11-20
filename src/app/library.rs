@@ -610,7 +610,7 @@ fn elevation(t: &SystemType, lib: &Library, line: Color) -> Elevation {
     let rows = (0.9 / t.grid.row).ceil().clamp(1.0, 8.0);
     let (length, height) = (bays * t.grid.bay, rows * t.grid.row);
     let upright = SystemType { lying: None, layers: Vec::new(), ..t.clone() };
-    let face = SystemDef { start: glam::DVec2::ZERO, end: glam::DVec2::new(length, 0.0), base: 0.0, height, spacing: glam::DVec2::ONE, member: glam::DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+    let face = SystemDef { start: glam::DVec2::ZERO, end: glam::DVec2::new(length, 0.0), base: 0.0, height, spacing: glam::DVec2::ONE, member: glam::DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
     let typed = face.typed(&upright);
     let window = bim_core::Opening { along: (length - 1.2) / 2.0, sill: 0.9, width: 1.2, height: 1.2, framing: None };
     let with_window = typed.clone().filter(|_| t.members.framing.is_some()).map(|s| SystemDef { openings: vec![window], ..s });
@@ -1104,7 +1104,7 @@ mod tests {
         use glam::DVec2;
         let mut app = App::default();
         app.new_model("Level 0");
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(2.4, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(2.4, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         assert_eq!(app.assignable_systems("system.timber-frame-140"), vec![id]);

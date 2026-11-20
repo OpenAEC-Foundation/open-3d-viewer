@@ -391,7 +391,7 @@ mod tests {
     }
 
     fn typed(length: f64, openings: Vec<Opening>, id: &str) -> (Model, bim_core::ElementId) {
-        let generic = SystemDef { start: DVec2::new(2.0, 1.0), end: DVec2::new(2.0, 1.0 + length), base: 0.5, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings, breaks: Vec::new(), outline: Vec::new() };
+        let generic = SystemDef { start: DVec2::new(2.0, 1.0), end: DVec2::new(2.0, 1.0 + length), base: 0.5, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings, breaks: Vec::new(), outline: Vec::new(), division: None };
         let s = generic.typed_from(&Library::starter(), id).unwrap();
         let mut m = Model::new(TileGrid::default());
         let grid = m.grid;
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_frame_has_no_element_drawing() {
-        let curtain = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let curtain = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let mut m = Model::new(TileGrid::default());
         let grid = m.grid;
         let id = m.add(Element::in_project(&grid, "Curtain wall", None, Shape::System(curtain))).unwrap();
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn a_floor_system_gets_a_laying_plan() {
         use bim_core::OpeningFraming;
-        let generic = SystemDef { start: DVec2::new(1.0, 1.0), end: DVec2::new(5.8, 1.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let generic = SystemDef { start: DVec2::new(1.0, 1.0), end: DVec2::new(5.8, 1.0), base: 3.0, height: 6.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let mut s = generic.laid(Library::starter().system_type("system.hollow-core-200").unwrap()).unwrap();
         // an opening that takes the second slab out over a metre, and a core through the fourth
         s.openings = vec![Opening { along: 1.5, sill: 2.0, width: 0.8, height: 1.0, framing: None }, Opening { along: 4.0, sill: 1.0, width: 0.2, height: 0.2, framing: Some(OpeningFraming { round: true, ..Default::default() }) }];

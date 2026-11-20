@@ -1711,6 +1711,18 @@
     "round a duct or a pipe": "um einen Kanal oder ein Rohr",
     "inside a duct": "im Inneren eines Kanals",
     "Ducts and pipes": "Kanäle und Leitungen",
-    "insulation and lining": "Dämmung und Auskleidung"
+    "insulation and lining": "Dämmung und Auskleidung",
+    "+ Standard": "+ Norm",
+    "Hatch by standard": "Schraffur nach Norm",
+    "Name of the standard": "Name der Norm",
+    "Face seen": "Ansicht",
+    "no hatch": "keine Schraffur",
+    "Hatched from scale 1 :": "Schraffiert ab Maßstab 1 :",
+    "always": "immer",
+    "On a smaller drawing": "Auf einer kleineren Zeichnung",
+    "fill": "Füllung",
+    "nothing": "nichts",
+    "By the material's sign": "Nach dem Zeichen des Materials",
+    "A face seen is not hatched on a drawing yet.": "Eine Ansicht wird auf einer Zeichnung noch nicht schraffiert."
   }
 }

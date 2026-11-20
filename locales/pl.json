@@ -1711,6 +1711,18 @@
     "round a duct or a pipe": "wokół kanału lub rury",
     "inside a duct": "wewnątrz kanału",
     "Ducts and pipes": "Kanały i rury",
-    "insulation and lining": "izolacja i wykładzina"
+    "insulation and lining": "izolacja i wykładzina",
+    "+ Standard": "+ Norma",
+    "Hatch by standard": "Kreskowanie według normy",
+    "Name of the standard": "Nazwa normy",
+    "Face seen": "Widok",
+    "no hatch": "bez kreskowania",
+    "Hatched from scale 1 :": "Kreskowane od skali 1 :",
+    "always": "zawsze",
+    "On a smaller drawing": "Na mniejszym rysunku",
+    "fill": "wypełnienie",
+    "nothing": "nic",
+    "By the material's sign": "Według znaku materiału",
+    "A face seen is not hatched on a drawing yet.": "Widok nie jest jeszcze kreskowany na rysunku."
   }
 }

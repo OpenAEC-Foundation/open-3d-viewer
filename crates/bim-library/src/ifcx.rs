@@ -171,6 +171,7 @@ pub fn nodes(library: &Library) -> Vec<Value> {
     nodes.extend(library.connection_types.iter().map(crate::connection::node));
     nodes.extend(library.service_types.iter().map(crate::service::node));
     nodes.extend(library.cover_types.iter().map(|c| crate::service::cover_node(c, &library.materials)));
+    nodes.extend(library.hatch_standards.iter().map(crate::standard::node));
     nodes.extend(library.codes.iter().map(nlsfb::code_node));
     nodes.extend(library.drawing_sets.iter().map(crate::annotate::node));
     nodes.extend(library.view_templates.iter().map(crate::template::node));
@@ -295,6 +296,15 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
             }
             service_types.push(service);
         }
+        if let Some(own) = attributes.get(crate::standard::HATCH_STANDARD) {
+            let standard: crate::standard::HatchStandard = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("hatch standard {path}: {e}")))?;
+            // (as written: the chosen one stays chosen)
+            standard.check()?;
+            if library.hatch_standards.iter().any(|s| s.key == standard.key) {
+                return Err(LibraryError::Duplicate(standard.key));
+            }
+            library.hatch_standards.push(standard);
+        }
         if let Some(own) = attributes.get(crate::service::COVER_TYPE) {
             cover_types.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
         }
@@ -381,7 +391,7 @@ mod tests {
         assert_eq!(masonry["attributes"][SYSTEM_TYPE]["grid"]["pattern"], "running_bond");
         let ceiling = nodes.iter().find(|n| n["path"] == system_type_path("system.ceiling-600x600")).unwrap();
         assert_eq!(ceiling["attributes"]["bsi::ifc::prop::PredefinedType"], "CEILING");
-        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len() + library.view_templates.len() + library.object_types.len() + library.connection_types.len() + library.service_types.len() + library.cover_types.len());
+        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len() + library.view_templates.len() + library.object_types.len() + library.connection_types.len() + library.service_types.len() + library.cover_types.len() + library.hatch_standards.len());
         // paths are stable
         assert_eq!(nodes, self::nodes(&Library::starter()));
     }

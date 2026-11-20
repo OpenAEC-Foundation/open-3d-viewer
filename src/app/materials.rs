@@ -6,6 +6,10 @@
 //! hatch a cut through it is drawn with, picked from the hatches drawn. Its key stays what it is:
 //! layers, types and files refer to it. A material is `IfcMaterial` in a file.
 //!
+//! The editor also chooses the hatch standard the project hatches by, adds one as a copy of the
+//! chosen one, and sets the material's hatch under it: of a cut, of a face seen, the scale it is
+//! drawn from and what a smaller drawing shows (`bim_library::standard`).
+//!
 //! A material that a build-up, a linear type or a system type is made of is not removed. A
 //! material of another library is edited as a copy in the project, under the key it had.
 //!
@@ -15,7 +19,7 @@
 use super::libraries::{Category, Editor, Shelf};
 use super::{App, Message, FONT_BOLD};
 use crate::theme::Palette;
-use bim_library::{DrawingStandard, HatchKind, Lang, Library, LibraryError, Material, Names};
+use bim_library::{Below, DrawingStandard, HatchKind, HatchStandard, Lang, Library, LibraryError, Material, Names};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, pick_list, row, slider, text, text_input, Column, Space};
 use iced::{Center, Color, Element, Fill, Length, Task};
@@ -45,6 +49,23 @@ pub enum MaterialMessage {
     Sign(Option<String>),
     /// Edit a material of another library: a copy of it in the project, under its key.
     Copy(Shelf, String),
+    /// The hatch standard the project hatches by, by its key.
+    Standard(String),
+    /// A standard more: a copy of the chosen one, to be named, and chosen.
+    AddStandard,
+    /// Typed as the name of the chosen standard.
+    StandardNamed(String),
+    /// Under the chosen standard: the hatch of a cut through the material, by its key; none:
+    /// by its hatch kind.
+    Cut(Option<String>),
+    /// Under the chosen standard: the hatch of a face of it that is seen; none: no hatch.
+    Face(Option<String>),
+    /// Typed as the scale from which its hatch is drawn ("100" for 1 : 100); empty: always.
+    From(String),
+    /// What a smaller drawing shows.
+    Below(Below),
+    /// Under the chosen standard it names no hatch of its own any more: its sign gives it.
+    Usual,
 }
 
 /// Which material is edited, what is being typed, and how many types held a removal back.
@@ -57,6 +78,10 @@ pub struct MaterialView {
     pub hex: Option<String>,
     /// How many types are made of the material a removal was asked of.
     pub in_use: Option<usize>,
+    /// The scale its hatch is drawn from, as it is being typed.
+    pub from: Option<String>,
+    /// The name of the chosen hatch standard, as it is being typed.
+    pub standard: Option<String>,
 }
 
 /// A colour as it is typed: "#b9b9b9".
@@ -168,6 +193,35 @@ pub fn remove(library: &mut Library, key: &str) -> Result<(), usize> {
     Ok(())
 }
 
+/// The names a standard more starts with.
+fn own_standard() -> Names {
+    Names::new("Eigen standaard", "Own standard", "Eigener Standard", "Norme propre")
+}
+
+/// Whether a standard is one a library starts with: those keep their names.
+fn given(standard: &HatchStandard) -> bool {
+    bim_library::standard::starter().iter().any(|s| s.key == standard.key)
+}
+
+/// Changes the hatch of material `key` under the chosen standard of `library`: what it has
+/// there now (its own, else what its sign gives) as `change` leaves it. False when the library
+/// lacks the material or a standard, or the result does not hold together.
+fn rehatch(library: &mut Library, key: &str, change: impl FnOnce(&mut bim_library::MaterialHatch)) -> bool {
+    let Some((standard, mut own)) = library.hatch_standard().and_then(|s| Some((s.key.clone(), s.of(library.material(key)?)))) else { return false };
+    change(&mut own);
+    library.set_material_hatch(key, &standard, Some(own)).is_ok()
+}
+
+/// A scale as it is typed: "100", "1:100" or "1 : 100"; empty: 0, at every scale.
+pub fn scale_of(typed: &str) -> Option<f64> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Some(0.0);
+    }
+    let number = typed.strip_prefix('1').map(str::trim_start).and_then(|rest| rest.strip_prefix(':')).unwrap_or(typed).trim().replace(',', ".");
+    number.parse::<f64>().ok().filter(|scale| scale.is_finite() && *scale >= 0.0)
+}
+
 /// A field of the right pane: its label, and beside it what sets it.
 fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, MaterialMessage>) -> Element<'a, MaterialMessage> {
     row![text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)), container(control).width(Length::FillPortion(3))].spacing(8).align_y(Center).into()
@@ -178,6 +232,19 @@ fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, MaterialMe
 struct SignChoice {
     key: Option<String>,
     label: String,
+}
+
+/// A hatch standard to choose.
+#[derive(Debug, Clone, PartialEq)]
+struct StandardChoice {
+    key: String,
+    label: String,
+}
+
+impl std::fmt::Display for StandardChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
 }
 
 impl std::fmt::Display for SignChoice {
@@ -262,6 +329,59 @@ impl App {
                     changed = change(&mut self.library, key, |m| m.hatch = hatch);
                     // air is a cavity in a wall: the walls and slabs made of it follow
                     self.follow_material(key);
+                }
+            }
+            MaterialMessage::Standard(key) => {
+                changed = self.library.hatch_standard().is_some_and(|s| s.key != key) && self.library.choose_hatch_standard(&key);
+                (self.material_view.from, self.material_view.standard) = (None, None);
+            }
+            MaterialMessage::AddStandard => {
+                if self.library.hatch_standards.is_empty() {
+                    self.library.hatch_standards = bim_library::standard::starter();
+                }
+                let from = self.library.hatch_standard().map(|s| s.key.clone()).unwrap_or_default();
+                if let Ok(key) = self.library.copy_hatch_standard(&from, own_standard()) {
+                    changed = self.library.choose_hatch_standard(&key);
+                    (self.material_view.from, self.material_view.standard) = (None, None);
+                }
+            }
+            MaterialMessage::StandardNamed(typed) => {
+                let name = typed.trim().to_string();
+                if let Some(s) = self.library.hatch_standards.iter_mut().find(|s| s.chosen).filter(|s| !given(s) && !name.is_empty()) {
+                    s.names = Names::same(&name);
+                    changed = true;
+                    // (a name changes no drawing)
+                    show = false;
+                }
+                self.material_view.standard = Some(typed);
+            }
+            MaterialMessage::Cut(cut) => {
+                if let Some(key) = &picked {
+                    changed = rehatch(&mut self.library, key, |own| own.cut = cut);
+                }
+            }
+            MaterialMessage::Face(face) => {
+                if let Some(key) = &picked {
+                    changed = rehatch(&mut self.library, key, |own| own.face = face);
+                    // (a face seen is not hatched on a drawing yet)
+                    show = false;
+                }
+            }
+            MaterialMessage::From(typed) => {
+                if let (Some(key), Some(scale)) = (&picked, scale_of(&typed)) {
+                    changed = rehatch(&mut self.library, key, |own| own.from = scale);
+                }
+                self.material_view.from = Some(typed);
+            }
+            MaterialMessage::Below(below) => {
+                if let Some(key) = &picked {
+                    changed = rehatch(&mut self.library, key, |own| own.below = below);
+                }
+            }
+            MaterialMessage::Usual => {
+                if let (Some(key), Some(standard)) = (&picked, self.library.hatch_standard().map(|s| s.key.clone())) {
+                    changed = self.library.material(key).is_some_and(|m| m.hatches.contains_key(&standard)) && self.library.set_material_hatch(key, &standard, None).is_ok();
+                    self.material_view.from = None;
                 }
             }
             MaterialMessage::Copy(shelf, key) => {
@@ -363,6 +483,60 @@ impl App {
         if let Some(hatch) = m.catalogue_hatch() {
             fields = fields.push(super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE));
         }
+        // the hatch standard the project hatches by, and the material's hatch under it
+        let standards: Vec<StandardChoice> = library.hatch_standards.iter().map(|s| StandardChoice { key: s.key.clone(), label: s.name(lang).to_string() }).collect();
+        let chosen = library.hatch_standard();
+        let standard_name = l.text("Standaard", "Standard");
+        let now = chosen.and_then(|s| standards.iter().find(|c| c.key == s.key).cloned());
+        let pick = pick_list(standards, now, |c: StandardChoice| MaterialMessage::Standard(c.key)).text_size(12).padding([2, 6]).width(Fill);
+        let more_label = l.text("+ Standaard", "+ Standard");
+        let more = a11y::named(button(text(more_label).size(12).color(p.text_secondary)).padding([3, 8]).style(move |_, s| p.row_button(s)).on_press(MaterialMessage::AddStandard), Aria::Button, more_label);
+        fields = fields.push(caption(l.text("Arcering volgens standaard", "Hatch by standard"))).push(labelled(p, standard_name, a11y::named(pick, Aria::ComboBox, standard_name))).push(row![Space::new().width(Fill), more]);
+        if let Some(standard) = chosen {
+            if !given(standard) {
+                let name = l.text("Naam van de standaard", "Name of the standard");
+                let typed = view.standard.clone().unwrap_or_else(|| standard.name(lang).to_string());
+                fields = fields.push(labelled(p, name, a11y::named(text_input("", &typed).on_input(MaterialMessage::StandardNamed).size(12).padding([2, 6]), Aria::TextField, name)));
+            }
+            let own = standard.of(m);
+            let choices = |none: &'static str| -> Vec<SignChoice> {
+                std::iter::once(SignChoice { key: None, label: none.to_string() })
+                    .chain(bim_library::hatch::catalogue().iter().map(|h| SignChoice { key: Some(h.key.clone()), label: format!("{} · {} · {}", h.set.name(), h.sign, h.name(lang)) }))
+                    .collect()
+            };
+            let cut_name = l.text("Doorsnede", "Section");
+            let cuts = choices(l.text("volgens soort", "by its kind"));
+            let now = cuts.iter().find(|c| c.key == own.cut).cloned();
+            let pick = pick_list(cuts, now, |c: SignChoice| MaterialMessage::Cut(c.key)).text_size(12).padding([2, 6]).width(Fill);
+            fields = fields.push(labelled(p, cut_name, a11y::named(pick, Aria::ComboBox, cut_name)));
+            if let Some(hatch) = own.cut_hatch() {
+                fields = fields.push(super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE));
+            }
+            let face_name = l.text("Aanzicht", "Face seen");
+            let faces = choices(l.text("geen arcering", "no hatch"));
+            let now = faces.iter().find(|c| c.key == own.face).cloned();
+            let pick = pick_list(faces, now, |c: SignChoice| MaterialMessage::Face(c.key)).text_size(12).padding([2, 6]).width(Fill);
+            fields = fields.push(labelled(p, face_name, a11y::named(pick, Aria::ComboBox, face_name)));
+            if let Some(hatch) = own.face_hatch() {
+                fields = fields.push(super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE));
+            }
+            let from_name = l.text("Arceren vanaf schaal 1 :", "Hatched from scale 1 :");
+            let typed = view.from.clone().unwrap_or_else(|| if own.from > 0.0 { own.from.to_string() } else { String::new() });
+            let always = l.text("altijd", "always");
+            fields = fields.push(labelled(p, from_name, a11y::named(text_input(always, &typed).on_input(MaterialMessage::From).size(12).padding([2, 6]), Aria::TextField, from_name)));
+            let below_name = l.text("Op een kleinere tekening", "On a smaller drawing");
+            let below = row([(Below::Fill, l.text("vulling", "fill")), (Below::Nothing, l.text("niets", "nothing"))].map(|(below, label)| {
+                let on = own.below == below;
+                a11y::named(button(text(label).size(12).color(if on { p.text } else { p.text_secondary })).padding([3, 8]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(MaterialMessage::Below(below)), Aria::Button, label)
+            }))
+            .spacing(2);
+            fields = fields.push(labelled(p, below_name, below.into()));
+            if m.hatches.contains_key(&standard.key) {
+                let usual = l.text("Volgens het teken van het materiaal", "By the material's sign");
+                fields = fields.push(a11y::named(button(text(usual).size(12).color(p.text_secondary)).padding([3, 8]).style(move |_, s| p.row_button(s)).on_press(MaterialMessage::Usual), Aria::Button, usual));
+            }
+            fields = fields.push(text(l.text("Een aanzicht wordt nog niet gearceerd op een tekening.", "A face seen is not hatched on a drawing yet.")).size(11).color(p.text_muted).wrapping(Wrapping::Word));
+        }
         // what is made of it
         let [buildups, linear, systems] = users(library, &m.key);
         let made: Vec<String> = [(l.text("Opbouwen", "Build-ups"), buildups), (l.text("Staaftypen", "Linear types"), linear), (l.text("Systemen", "Systems"), systems)]
@@ -410,6 +584,71 @@ mod tests {
         // the pane offers the hatches of the catalogue
         let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 1100.0), app.material_pane(app.theme.palette(), Language::English));
         assert!(pane.find("Hatch of its own").is_ok());
+    }
+
+    #[test]
+    fn a_material_is_hatched_by_the_chosen_standard() {
+        use bim_library::MaterialHatch;
+        let mut app = App::default();
+        let _ = app.material_update(MaterialMessage::Pick("timber".into()));
+        let pattern = |app: &App| crate::hatching::cut_pattern(&app.library, app.library.material("timber").unwrap()).expect("timber has a hatch");
+        let coloured = pattern(&app);
+        assert_eq!(coloured.fill, bim_library::hatch::hatch("openaec-12").unwrap().fill, "the suite's own standard is the chosen one");
+        // NEN 47 chosen: the same sign, in black on the paper
+        let _ = app.material_update(MaterialMessage::Standard("nen47".into()));
+        assert_eq!(app.library.hatch_standard().map(|s| s.key.as_str()), Some("nen47"));
+        let black = pattern(&app);
+        assert_eq!((black.fill, black.grids.clone()), (None, coloured.grids.clone()));
+        assert!(app.library.material("timber").unwrap().hatches.is_empty(), "choosing a standard names nothing");
+        // its own hatch under it, drawn from 1 : 100, and nothing on a smaller drawing
+        let _ = app.material_update(MaterialMessage::Cut(Some("nen47-13".into())));
+        let _ = app.material_update(MaterialMessage::Face(Some("nen47-14".into())));
+        let _ = app.material_update(MaterialMessage::From("1 : 100".into()));
+        assert_eq!(app.library.material_hatch("timber"), Some(MaterialHatch { cut: Some("nen47-13".into()), face: Some("nen47-14".into()), from: 100.0, below: Below::Fill }));
+        let own = pattern(&app);
+        assert_eq!((own.from, own.below), (100.0, Some(app.library.material("timber").unwrap().colour)), "a hatch without a colour leaves the material's");
+        assert_eq!((own.clone().at(100.0), own.clone().at(200.0).grids.len(), own.clone().at(200.0).fill), (own.clone(), 0, own.below));
+        let _ = app.material_update(MaterialMessage::Below(Below::Nothing));
+        assert_eq!(pattern(&app).at(200.0).look().0, [255; 3], "the paper");
+        // what is no scale or no hatch is not taken; what was typed stays in its field
+        let _ = app.material_update(MaterialMessage::From("often".into()));
+        let _ = app.material_update(MaterialMessage::Cut(Some("nen47-999".into())));
+        assert_eq!((app.library.material_hatch("timber").map(|h| (h.cut, h.from)), app.material_view.from.as_deref()), (Some((Some("nen47-13".into()), 100.0)), Some("often")));
+        {
+            let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 1500.0), app.material_pane(app.theme.palette(), Language::English));
+            assert!(pane.find("Hatch by standard").is_ok() && pane.find("Face seen").is_ok() && pane.find("Hatched from scale 1 :").is_ok() && pane.find("On a smaller drawing").is_ok() && pane.find("By the material's sign").is_ok());
+            assert!(pane.find("Name of the standard").is_err(), "NEN 47 keeps its name");
+        }
+        // the other standard still has what the sign gives
+        let _ = app.material_update(MaterialMessage::Standard("openaec".into()));
+        assert_eq!((pattern(&app), app.material_view.from.clone()), (coloured.clone(), None));
+        // a standard of the project: a copy of the chosen one, chosen and named
+        let _ = app.material_update(MaterialMessage::Standard("nen47".into()));
+        let _ = app.material_update(MaterialMessage::AddStandard);
+        assert_eq!(app.library.hatch_standards.iter().map(|s| (s.key.as_str(), s.chosen)).collect::<Vec<_>>(), [("openaec", false), ("nen47", false), ("own-standard", true)]);
+        assert_eq!(app.library.material_hatch("timber").and_then(|h| h.cut).as_deref(), Some("nen47-13"), "what the materials name comes along");
+        let _ = app.material_update(MaterialMessage::StandardNamed("Bureau ".into()));
+        assert_eq!(app.library.hatch_standard().map(|s| s.name(Lang::Nl)), Some("Bureau"));
+        {
+            let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 1500.0), app.material_pane(app.theme.palette(), Language::English));
+            assert!(pane.find("Name of the standard").is_ok());
+        }
+        // by the material's sign again under the project's standard; NEN 47 keeps its own
+        let _ = app.material_update(MaterialMessage::Usual);
+        assert_eq!(app.library.material_hatch("timber"), Some(MaterialHatch { cut: Some("nen47-12".into()), ..MaterialHatch::default() }));
+        let _ = app.material_update(MaterialMessage::Standard("nen47".into()));
+        let _ = app.material_update(MaterialMessage::StandardNamed("Other".into()));
+        assert_eq!((app.library.material_hatch("timber").and_then(|h| h.cut).as_deref(), app.library.hatch_standard().map(|s| s.name(Lang::En))), (Some("nen47-13"), Some("NEN 47")));
+        // the model's parts take the hatch of the chosen standard
+        let parts = crate::hatching::part_materials(&app.library);
+        let timber = parts.iter().find(|part| part.name == "timber").expect("timber");
+        assert_eq!(timber.pattern.as_ref().map(|p| p.from), Some(100.0));
+    }
+
+    #[test]
+    fn a_scale_is_typed_with_or_without_its_one() {
+        assert_eq!((scale_of("100"), scale_of("1:50"), scale_of(" 1 : 200 "), scale_of(""), scale_of("12,5")), (Some(100.0), Some(50.0), Some(200.0), Some(0.0), Some(12.5)));
+        assert_eq!((scale_of("-5"), scale_of("x"), scale_of("1:")), (None, None, None));
     }
 
     #[test]

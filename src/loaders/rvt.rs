@@ -1025,7 +1025,7 @@ pub(super) fn grid(g: rvt_read::materials::Grid) -> crate::hatching::Grid {
 
 /// The reader's cut pattern of a material as the app's.
 fn pattern(p: rvt_read::materials::CutPattern) -> crate::hatching::Pattern {
-    crate::hatching::Pattern { fill: p.fill, line: p.line, solid: p.solid, grids: p.grids.into_iter().map(grid).collect(), on_paper: p.on_paper }
+    crate::hatching::Pattern { fill: p.fill, line: p.line, solid: p.solid, grids: p.grids.into_iter().map(grid).collect(), on_paper: p.on_paper, from: 0.0, below: None }
 }
 
 /// The properties of an element (a JSON object) with `LoadBearing` added: what a structural plan

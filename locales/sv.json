@@ -1711,6 +1711,18 @@
     "round a duct or a pipe": "runt en kanal eller ett rör",
     "inside a duct": "inuti en kanal",
     "Ducts and pipes": "Kanaler och rör",
-    "insulation and lining": "isolering och beklädnad"
+    "insulation and lining": "isolering och beklädnad",
+    "+ Standard": "+ Standard",
+    "Hatch by standard": "Skraffering enligt standard",
+    "Name of the standard": "Standardens namn",
+    "Face seen": "Vy",
+    "no hatch": "ingen skraffering",
+    "Hatched from scale 1 :": "Skrafferas från skala 1 :",
+    "always": "alltid",
+    "On a smaller drawing": "På en mindre ritning",
+    "fill": "fyllning",
+    "nothing": "inget",
+    "By the material's sign": "Enligt materialets tecken",
+    "A face seen is not hatched on a drawing yet.": "En vy skrafferas ännu inte på en ritning."
   }
 }

@@ -162,6 +162,10 @@ pub struct Material {
     /// Its grade or strength class, as its standard writes it ("C24", "S355", "C20/25").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// Its hatch under a hatch standard, by the standard's key, where it names one of its own
+    /// ([`crate::standard`]); under the others its sign gives it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hatches: std::collections::BTreeMap<String, crate::standard::MaterialHatch>,
 }
 
 impl Material {
@@ -171,7 +175,7 @@ impl Material {
 
     /// A material drawn by its hatch kind.
     pub fn new(key: &str, names: Names, hatch: HatchKind, colour: [u8; 3]) -> Self {
-        Self { key: key.into(), names, hatch, colour, sign: None, grade: None }
+        Self { key: key.into(), names, hatch, colour, sign: None, grade: None, hatches: Default::default() }
     }
 
     /// Its own hatch of the hatch catalogue, when it names one the catalogue has.

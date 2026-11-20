@@ -1711,6 +1711,18 @@
     "round a duct or a pipe": "bir kanalın veya borunun çevresinde",
     "inside a duct": "bir kanalın içinde",
     "Ducts and pipes": "Kanallar ve borular",
-    "insulation and lining": "yalıtım ve kaplama"
+    "insulation and lining": "yalıtım ve kaplama",
+    "+ Standard": "+ Standart",
+    "Hatch by standard": "Standarda göre tarama",
+    "Name of the standard": "Standardın adı",
+    "Face seen": "Görünüş",
+    "no hatch": "tarama yok",
+    "Hatched from scale 1 :": "Şu ölçekten itibaren taranır 1 :",
+    "always": "her zaman",
+    "On a smaller drawing": "Daha küçük bir çizimde",
+    "fill": "dolgu",
+    "nothing": "hiçbir şey",
+    "By the material's sign": "Malzemenin işaretine göre",
+    "A face seen is not hatched on a drawing yet.": "Görünüş henüz çizimde taranmıyor."
   }
 }

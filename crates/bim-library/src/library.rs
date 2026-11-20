@@ -9,6 +9,7 @@ use crate::connection::{self, ConnectionType, Family};
 use crate::object::{self, ObjectGroup, ObjectType};
 use crate::profile::{self, LinearRole, LinearType};
 use crate::service::{self, Carrier, CoverType, ServiceType};
+use crate::standard::{self, HatchStandard, MaterialHatch};
 use crate::system::{self, SystemGroup, SystemType};
 use crate::template::{self, ViewTemplate};
 use crate::{Lang, LibraryError};
@@ -52,6 +53,10 @@ pub struct Library {
     /// Its cover types: the insulation round a run and the lining inside it.
     #[serde(default)]
     pub cover_types: Vec<CoverType>,
+    /// Its hatch standards, one of them chosen: how its materials are hatched
+    /// ([`crate::standard`]).
+    #[serde(default)]
+    pub hatch_standards: Vec<HatchStandard>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -99,7 +104,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), connection_types: connection::starter(), service_types: service::starter(), cover_types: service::covers(), drawing_sets: annotate::starter(), view_templates: template::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), connection_types: connection::starter(), service_types: service::starter(), cover_types: service::covers(), hatch_standards: standard::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -329,6 +334,80 @@ impl Library {
         Ok(())
     }
 
+    /// The hatch standard a drawing hatches by: the chosen one, else the first.
+    pub fn hatch_standard(&self) -> Option<&HatchStandard> {
+        self.hatch_standards.iter().find(|s| s.chosen).or_else(|| self.hatch_standards.first())
+    }
+
+    /// Chooses the standard with `key`; false when the library has none such.
+    pub fn choose_hatch_standard(&mut self, key: &str) -> bool {
+        if !self.hatch_standards.iter().any(|s| s.key == key) {
+            return false;
+        }
+        for s in &mut self.hatch_standards {
+            s.chosen = s.key == key;
+        }
+        true
+    }
+
+    /// Adds a hatch standard. Refused without a key or a name, or when its key is taken; where
+    /// the library has a chosen one already, it comes unchosen.
+    pub fn add_hatch_standard(&mut self, mut standard: HatchStandard) -> Result<(), LibraryError> {
+        standard.check()?;
+        if self.hatch_standards.iter().any(|s| s.key == standard.key) {
+            return Err(LibraryError::Duplicate(standard.key));
+        }
+        standard.chosen &= !self.hatch_standards.iter().any(|s| s.chosen);
+        self.hatch_standards.push(standard);
+        Ok(())
+    }
+
+    /// Adds a standard named `names` as a copy of the one with key `from`: the same set, and
+    /// what the materials name under `from` they name under the copy too. Its key is made of
+    /// its English name, numbered where that is taken; it is returned.
+    pub fn copy_hatch_standard(&mut self, from: &str, names: crate::material::Names) -> Result<String, LibraryError> {
+        let set = self.hatch_standards.iter().find(|s| s.key == from).ok_or_else(|| LibraryError::BadHatch(format!("a standard of the library, not \"{from}\"")))?.set;
+        let slug: String = names.en.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        let slug = slug.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+        let slug = if slug.is_empty() { "standard".to_string() } else { slug };
+        let key = std::iter::once(slug.clone()).chain((2..).map(|n| format!("{slug}-{n}"))).find(|key| !self.hatch_standards.iter().any(|s| &s.key == key)).expect("a free key");
+        self.add_hatch_standard(HatchStandard::new(&key, names, set))?;
+        for m in &mut self.materials {
+            if let Some(own) = m.hatches.get(from).cloned() {
+                m.hatches.insert(key.clone(), own);
+            }
+        }
+        Ok(key)
+    }
+
+    /// The hatch of the material with `key` under the chosen standard; a library without
+    /// standards gives the material's own sign.
+    pub fn material_hatch(&self, key: &str) -> Option<MaterialHatch> {
+        let material = self.material(key)?;
+        Some(match self.hatch_standard() {
+            Some(standard) => standard.of(material),
+            None => MaterialHatch { cut: material.catalogue_hatch().map(|h| h.key.clone()), ..MaterialHatch::default() },
+        })
+    }
+
+    /// Gives the material with key `material` its own hatch under the standard with key
+    /// `standard`, or takes it away (`None`: its sign gives it again). Refused when the
+    /// library lacks either, or the hatch does not hold together.
+    pub fn set_material_hatch(&mut self, material: &str, standard: &str, hatch: Option<MaterialHatch>) -> Result<(), LibraryError> {
+        if !self.hatch_standards.iter().any(|s| s.key == standard) {
+            return Err(LibraryError::BadHatch(format!("a standard of the library, not \"{standard}\"")));
+        }
+        if let Some(hatch) = &hatch {
+            hatch.check()?;
+        }
+        let m = self.materials.iter_mut().find(|m| m.key == material).ok_or_else(|| LibraryError::UnknownMaterial(material.into()))?;
+        match hatch {
+            Some(hatch) => m.hatches.insert(standard.into(), hatch),
+            None => m.hatches.remove(standard),
+        };
+        Ok(())
+    }
+
     /// The object types of `group`, in the order they were added.
     pub fn object_types_of(&self, group: ObjectGroup) -> impl Iterator<Item = &ObjectType> {
         self.object_types.iter().filter(move |o| o.group == group)
@@ -496,6 +575,11 @@ impl Library {
                 added += 1;
             }
         }
+        for s in &other.hatch_standards {
+            if self.add_hatch_standard(s.clone()).is_ok() {
+                added += 1;
+            }
+        }
         added
     }
 }
@@ -509,7 +593,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), connection_types: lib.connection_types.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), hatch_standards: lib.hatch_standards.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), connection_types: lib.connection_types.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }

@@ -559,7 +559,7 @@ impl App {
     pub(super) fn settle_library_editors(&mut self) {
         let library = &self.library;
         let material = &mut self.material_view;
-        (material.name, material.hex, material.in_use) = (None, None, None);
+        (material.name, material.hex, material.in_use, material.from, material.standard) = (None, None, None, None, None);
         material.picked = material.picked.take().filter(|key| library.material(key).is_some());
         let buildup = &mut self.buildup_view;
         (buildup.draft, buildup.refused) = (None, None);

@@ -1711,6 +1711,18 @@
     "round a duct or a pipe": "alrededor de un conducto o una tubería",
     "inside a duct": "dentro de un conducto",
     "Ducts and pipes": "Conductos y tuberías",
-    "insulation and lining": "aislamiento y revestimiento"
+    "insulation and lining": "aislamiento y revestimiento",
+    "+ Standard": "+ Norma",
+    "Hatch by standard": "Rayado según la norma",
+    "Name of the standard": "Nombre de la norma",
+    "Face seen": "Cara vista",
+    "no hatch": "sin rayado",
+    "Hatched from scale 1 :": "Rayado desde la escala 1 :",
+    "always": "siempre",
+    "On a smaller drawing": "En un dibujo más pequeño",
+    "fill": "relleno",
+    "nothing": "nada",
+    "By the material's sign": "Según el signo del material",
+    "A face seen is not hatched on a drawing yet.": "Una cara vista aún no se raya en un dibujo."
   }
 }

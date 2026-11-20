@@ -241,7 +241,13 @@ fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::S
             if matches!(label, "Controle:" | "Revisie:") && value.is_empty() {
                 continue;
             }
-            text(label, column, y, 3.53, value_x - column - 1., purple, l);
+            if label == "1e datum:" {
+                text("1", column, y, 3.53, 2., purple, l);
+                text("e", column + 1.92, y + 1.06, 2.35, 2., purple, l);
+                text(" datum:", column + 3.11, y, 3.53, 18., purple, l);
+            } else {
+                text(label, column, y, 3.53, value_x - column - 1., purple, l);
+            }
             text(value, value_x, y, 3.53, if column < -150. { 52. } else { 38. }, purple, l);
         }
     }
@@ -251,7 +257,7 @@ fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::S
         text(&revision.date, -208.5, y, 3.53, 64., purple, Align::Right);
         text(&revision.description, -208.5, y - 4.70, 3.53, 64., purple, Align::Right);
     }
-    out.logo = fitted_logo(style.logo.as_deref(), [at(-191.8, 8.6), at(-153.1, 24.55)]);
+    out.logo = fitted_logo(style.logo.as_deref(), [at(-192.08, 8.82), at(-152.58, 25.10)]);
 }
 
 /// Six chords per quadrant match the plotted 5 mm corners and remain vector lines at every zoom.

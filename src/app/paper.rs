@@ -1391,6 +1391,7 @@ mod tests {
     fn the_office_stamp_keeps_its_physical_size_on_a_landscape_a1_at_one_to_one_hundred() {
         let (mut app, path, _, _) = sheet_with_plan(false);
         app.house.key = "3bm".into();
+        app.scale_placed_view(&path, 0, 100.0);
         let stamp = |app: &App| crate::title_block::title_block(&app.document, app.document.sheet(&path).unwrap(), &app.house);
         let _ = app.update(Message::SetPaper(path.clone(), [1.189, 0.841]));
         let a0 = stamp(&app);

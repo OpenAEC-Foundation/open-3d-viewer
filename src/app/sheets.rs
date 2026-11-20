@@ -790,7 +790,7 @@ impl canvas::Program<Message> for SheetDrawing {
                                 let (a, b) = (on(d.from), on(d.to));
                                 let style = self.styles.get(d.style).or(self.styles.first());
                                 let Some(style) = style.filter(|_| seen(a, b)) else { continue };
-                                let look = super::marks::DimensionLook { offset: paper * super::marks::OFFSET as f32, paper, size: (paper * style.size as f32).max(SMALLEST), style };
+                                let look = super::marks::DimensionLook { offset: paper * super::marks::OFFSET as f32, paper, size: if style.label_family().is_some() { paper * style.paper_font_size() as f32 } else { (paper * style.size as f32).max(SMALLEST) }, style };
                                 super::marks::draw_dimension_px(&mut frame, a, b, d.length(), ink, look);
                             }
                             for note in notes.iter().filter(|n| here(n.at)) {

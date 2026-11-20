@@ -1339,7 +1339,7 @@ fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], le
 
 fn dimension_look<'a>(fit: &Fit, style: &'a crate::document::DimensionStyle) -> super::marks::DimensionLook<'a> {
     let px = |m: f64| (m * fit.scale) as f32;
-    super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.size), style }
+    super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.paper_font_size()), style }
 }
 
 /// The sheets of the document in the explorer's Views tab: each opens in its tab; New sheet.

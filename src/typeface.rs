@@ -281,6 +281,13 @@ pub(crate) fn swiss_condensed() -> Option<&'static [u8]> {
     FILE.get_or_init(|| installed_ttf("swissc.ttf", SWISS_POSTSCRIPT)).as_deref()
 }
 
+pub const ARIAL_NARROW: &str = "Arial Narrow";
+
+pub(crate) fn arial_narrow() -> Option<&'static [u8]> {
+    static REGULAR: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    REGULAR.get_or_init(|| installed_ttf("arialn.ttf", "ArialNarrow")).as_deref()
+}
+
 pub(crate) fn segoe_ui(bold: bool) -> Option<&'static [u8]> {
     static REGULAR: OnceLock<Option<Vec<u8>>> = OnceLock::new();
     static BOLD: OnceLock<Option<Vec<u8>>> = OnceLock::new();
@@ -313,6 +320,9 @@ fn family(name: &str) -> Option<&'static str> {
         let mut fonts = iced::advanced::graphics::text::font_system().write().ok()?;
         if name.eq_ignore_ascii_case(SWISS_CONDENSED) {
             if let Some(bytes) = swiss_condensed() { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
+        }
+        if name.eq_ignore_ascii_case(ARIAL_NARROW) {
+            if let Some(bytes) = arial_narrow() { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
         }
         if name.eq_ignore_ascii_case("Segoe UI") {
             for bold in [false, true] {

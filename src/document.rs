@@ -403,6 +403,9 @@ pub struct DimensionStyle {
     pub name: String,
     /// The height of the figure's letters.
     pub size: f64,
+    /// Explicit typeface and nominal em size in typographic points on paper.
+    pub font_family: Option<Arc<str>>,
+    pub font_size_pt: Option<f64>,
     pub tick: Tick,
     /// Half the length of a slash, the length of an arrow, the diameter of a dot.
     pub tick_size: f64,
@@ -421,7 +424,15 @@ impl DimensionStyle {
 
     /// The style of a dimension that names none.
     pub fn standard() -> Self {
-        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
+        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, font_family: None, font_size_pt: None, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
+    }
+
+    pub fn paper_font_size(&self) -> f64 {
+        self.font_size_pt.map_or(self.size, |pt| pt * 0.0254 / 72.0)
+    }
+
+    pub fn label_family(&self) -> Option<Arc<str>> {
+        self.font_family.clone().or_else(|| self.font_size_pt.map(|_| Arc::from("Inter")))
     }
 
     /// The figure of a length (metres) in this style.
@@ -434,7 +445,10 @@ impl DimensionStyle {
     }
 
     fn to_ifcx(&self) -> Value {
-        json!({"name": self.name, "size": self.size, "tick": self.tick.key(), "tick_size": self.tick_size, "extension": self.extension, "gap": self.gap, "unit": self.unit.key(), "decimals": self.decimals})
+        let mut value = json!({"name": self.name, "size": self.size, "tick": self.tick.key(), "tick_size": self.tick_size, "extension": self.extension, "gap": self.gap, "unit": self.unit.key(), "decimals": self.decimals});
+        if let Some(family) = &self.font_family { value["font_family"] = family.as_ref().into(); }
+        if let Some(pt) = self.font_size_pt { value["font_size_pt"] = pt.into(); }
+        value
     }
 
     /// A style of an IFCX file; a missing or senseless value is the standard style's.
@@ -442,9 +456,16 @@ impl DimensionStyle {
         let standard = Self::standard();
         let name = v.get("name")?.as_str()?.trim();
         let size = |key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|s| s.is_finite() && (0.0..=0.1).contains(s)).unwrap_or(or);
+        let office = name == "3BM ronde stip";
+        let legacy_size = Some(size("size", standard.size)).filter(|s| *s > 0.0).unwrap_or(standard.size);
+        let font_family = v.get("font_family").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+            .or_else(|| office.then_some(crate::typeface::ARIAL_NARROW)).map(Arc::from);
+        let font_size_pt = v.get("font_size_pt").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0 && *s <= 288.0)
+            .or_else(|| (office && (legacy_size-standard.size).abs()<1e-12).then_some(6.8));
         (!name.is_empty()).then(|| Self {
             name: name.to_string(),
-            size: Some(size("size", standard.size)).filter(|s| *s > 0.0).unwrap_or(standard.size),
+            size: legacy_size,
+            font_family, font_size_pt,
             tick: v.get("tick").and_then(Value::as_str).and_then(Tick::from_key).unwrap_or_default(),
             tick_size: size("tick_size", standard.tick_size),
             extension: size("extension", standard.extension),
@@ -2212,6 +2233,23 @@ mod tests {
 
     fn names(document: &Document) -> Vec<&str> {
         document.levels().iter().map(|l| l.name.as_str()).collect()
+    }
+
+    #[test]
+    fn office_dimension_typography_preserves_explicit_preferences() {
+        let read = |v: Value| DimensionStyle::from_ifcx(&v).unwrap();
+        let legacy = read(json!({"name":"3BM ronde stip","size":0.0025}));
+        assert_eq!(legacy.font_family.as_deref(), Some("Arial Narrow"));
+        assert_eq!(legacy.font_size_pt, Some(6.8));
+        assert_eq!(read(legacy.to_ifcx()), legacy);
+        let edited = read(json!({"name":"3BM ronde stip","font_family":"Segoe UI","font_size_pt":8.2}));
+        assert_eq!(edited.font_family.as_deref(), Some("Segoe UI"));
+        assert_eq!(edited.font_size_pt, Some(8.2));
+        assert_eq!(read(edited.to_ifcx()), edited);
+        assert_eq!(read(json!({"name":"3BM ronde stip","size":0.004})).paper_font_size(), 0.004);
+        let plain = read(json!({"name":"Other","size":0.004}));
+        assert_eq!(plain.label_family(), None);
+        assert!(plain.to_ifcx().get("font_size_pt").is_none());
     }
 
     #[test]

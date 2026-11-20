@@ -256,7 +256,7 @@ impl Dim2d {
         let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.offset * 0.25;
         let middle = [(self.from[0] + self.to[0]) / 2.0, (self.from[1] + self.to[1]) / 2.0];
         let centre = add(middle, n, self.offset + clear);
-        Text2d { family: None, bold: false, color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
+        Text2d { family: self.style.label_family(), bold: false, color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
     }
 }
 
@@ -547,10 +547,12 @@ impl Drawing2d {
         }
         let (dimensions, notes) = marks;
         for d in dimensions {
+            let style = doc.dimension_style(d.style);
+            let height = if style.label_family().is_some() { style.paper_font_size() } else { rules.text };
             for (actual, [a,b]) in d.intervals() {
                 self.dimensions.push(Dim2d { from: to(a), to: to(b), witnesses: actual.map(to), units_per_paper_metre: unit,
                     value: (b[0] - a[0]).hypot(b[1] - a[1]), offset: d.paper_offset() * unit,
-                    style: doc.dimension_style(d.style).clone(), text_height: rules.text * unit });
+                    style: style.clone(), text_height: height * unit });
             }
         }
         for n in notes {

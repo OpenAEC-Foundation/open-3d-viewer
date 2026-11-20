@@ -96,11 +96,16 @@ pub fn png(d: &Drawing2d, dpi: f64) -> Result<Vec<u8>, String> {
     for bytes in openaec_ui::fonts::FILES {
         fonts.load_font_data(bytes.to_vec());
     }
-    if d.texts.iter().any(|t| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED)) {
+    let used = |family: &str, bold: bool| d.texts.iter().any(|t| t.family.as_deref() == Some(family) && t.bold == bold)
+        || (!bold && d.dimensions.iter().any(|dim| dim.style.label_family().as_deref() == Some(family)));
+    if used(crate::typeface::ARIAL_NARROW, false) {
+        if let Some(font) = crate::typeface::arial_narrow() { fonts.load_font_data(font.to_vec()); }
+    }
+    if used(crate::typeface::SWISS_CONDENSED, false) {
         if let Some(font) = crate::typeface::swiss_condensed() { fonts.load_font_data(font.to_vec()); }
     }
     for bold in [false, true] {
-        if d.texts.iter().any(|t| t.family.as_deref() == Some("Segoe UI") && t.bold == bold) {
+        if used("Segoe UI", bold) {
             if let Some(font) = crate::typeface::segoe_ui(bold) { fonts.load_font_data(font.to_vec()); }
         }
     }

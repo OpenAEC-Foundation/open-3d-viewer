@@ -170,13 +170,15 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
     let (lo, hi) = d.page();
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let (w, h) = (num_to((hi[0] - lo[0]) * k, 2), num_to((hi[1] - lo[1]) * k, 2));
-    let choices: [(&str, bool, &str, &str, fn() -> Option<&'static [u8]>); 3] = [
+    let choices: [(&str, bool, &str, &str, fn() -> Option<&'static [u8]>); 4] = [
         (crate::typeface::SWISS_CONDENSED, false, "F3", crate::typeface::SWISS_POSTSCRIPT, crate::typeface::swiss_condensed),
+        (crate::typeface::ARIAL_NARROW, false, "F6", "ArialNarrow", crate::typeface::arial_narrow),
         ("Segoe UI", false, "F4", "SegoeUI", || crate::typeface::segoe_ui(false)),
         ("Segoe UI", true, "F5", "SegoeUI-Bold", || crate::typeface::segoe_ui(true)),
     ];
     let embedded: Vec<_> = choices.into_iter().filter_map(|(family, bold, resource, name, load)| {
-        if !d.texts.iter().any(|t| t.family.as_deref() == Some(family) && t.bold == bold) { return None; }
+        if !d.texts.iter().any(|t| t.family.as_deref() == Some(family) && t.bold == bold)
+            && (bold || !d.dimensions.iter().any(|dim| dim.style.label_family().as_deref() == Some(family))) { return None; }
         let bytes = load()?;
         use ttf_parser::Permissions::{Editable, Installable, PreviewAndPrint};
         let face = ttf_parser::Face::parse(bytes, 0).ok()?;
@@ -256,6 +258,28 @@ mod tests {
 
     fn text(bytes: &[u8]) -> String {
         bytes.iter().map(|&b| b as char).collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn office_dimension_embeds_arial_narrow_at_nominal_point_size() {
+        if crate::typeface::arial_narrow().is_none() { return; }
+        let style = crate::document::DimensionStyle::from_ifcx(&serde_json::json!({"name":"3BM ronde stip","size":0.0025})).unwrap();
+        let doc = &mut crate::document::Document::default();
+        let level = doc.add_level("Ground", 0.0).unwrap();
+        let plan = doc.add_plan(&doc.levels()[level].path.clone()).unwrap();
+        let style_index = doc.set_dimension_style(style);
+        doc.add_dimension(&plan,[0.,0.],[4.,0.]);
+        assert!(doc.set_dimension_style_of(&plan,0,style_index));
+        let sheet = doc.add_sheet("Foundation");
+        doc.place_plan(&sheet,&plan);
+        let drawing = crate::drawing2d::sheet_drawing(doc,&sheet,&|_| None,&|_| vec![],&|_| Default::default()).unwrap();
+        let label = drawing.dimensions[0].label();
+        assert_eq!(label.family.as_deref(), Some("Arial Narrow"));
+        assert!((label.height*72./0.0254-6.8).abs()<1e-9);
+        let rendered = text(&pdf(&drawing));
+        assert!(rendered.contains("/BaseFont /ArialNarrow"));
+        assert!(rendered.contains("BT /F6 6.8 Tf"));
     }
 
     #[cfg(windows)]

@@ -238,6 +238,7 @@ pub enum LookEdit {
     NextTick,
     /// Its style writes the figure in the other unit.
     NextUnit,
+    NextFont,
     /// Its style's figures half a millimetre smaller, or larger.
     Smaller,
     Larger,
@@ -406,6 +407,8 @@ impl App {
                 let named = |label: String, edit: LookEdit| -> Element<'static, Message> {
                     button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::DimensionLook(edit)).into()
                 };
+                let family = style.font_family.as_deref().unwrap_or(l.text("Standaard", "Default"));
+                rows = rows.push(named(format!("{}: {family}", l.text("Lettertype", "Typeface")), LookEdit::NextFont));
                 let tick = match style.tick {
                     Tick::Slash => l.text("Streepje", "Slash"),
                     Tick::Arrow => l.text("Pijl", "Arrow"),
@@ -422,7 +425,7 @@ impl App {
                         .spacing(6)
                         .align_y(Center)
                         .push(named("A−".to_string(), LookEdit::Smaller))
-                        .push(text(format!("{:.1} mm", style.size * 1000.0)).size(12).color(p.text_secondary))
+                        .push(text(style.font_size_pt.map_or_else(|| format!("{:.1} mm", style.size * 1000.0), |pt| format!("{pt:.1} pt"))).size(12).color(p.text_secondary))
                         .push(named("A+".to_string(), LookEdit::Larger)),
                 );
                 rows = rows.push(self.dimension_value_field(view, k)).push(self.reference_controls(view, k, l));
@@ -633,6 +636,15 @@ impl App {
                 let next = (style + 1) % self.document.dimension_styles().len().max(1);
                 self.document.set_dimension_style_of(&view, k, next);
             }
+            LookEdit::NextFont => {
+                self.document.edit_dimension_style(style, |s| {
+                    s.font_family = Some(Arc::from(match s.font_family.as_deref() {
+                        Some(crate::typeface::ARIAL_NARROW) => "Segoe UI",
+                        Some("Segoe UI") => "Inter",
+                        _ => crate::typeface::ARIAL_NARROW,
+                    }));
+                });
+            }
             LookEdit::NextTick => {
                 self.document.edit_dimension_style(style, |s| {
                     let at = Tick::ALL.iter().position(|t| *t == s.tick).unwrap_or(0);
@@ -648,8 +660,14 @@ impl App {
                 });
             }
             LookEdit::Smaller | LookEdit::Larger => {
-                let step = if edit == LookEdit::Larger { 0.0005 } else { -0.0005 };
-                self.document.edit_dimension_style(style, |s| s.size = ((s.size + step) * 2000.0).round().clamp(2.0, 40.0) / 2000.0);
+                let step: f64 = if edit == LookEdit::Larger { 0.0005 } else { -0.0005 };
+                self.document.edit_dimension_style(style, |s| {
+                    if let Some(pt) = s.font_size_pt.as_mut() {
+                        *pt = ((*pt + step.signum() * 0.1) * 10.).round().clamp(1., 2880.) / 10.;
+                    } else {
+                        s.size = ((s.size + step) * 2000.0).round().clamp(2.0, 40.0) / 2000.0;
+                    }
+                });
             }
         }
     }
@@ -801,7 +819,7 @@ impl ViewMarks {
     fn look(&self, screen: &Screen, q: [f64; 2], style: usize) -> DimensionLook<'_> {
         let paper = self.paper(screen, q);
         let style = self.styles.get(style).unwrap_or(&self.styles[0]);
-        DimensionLook { offset: paper * OFFSET as f32, paper, size: (paper * style.size as f32).max(SMALLEST), style }
+        DimensionLook { offset: paper * OFFSET as f32, paper, size: if style.label_family().is_some() { paper * style.paper_font_size() as f32 } else { (paper * style.size as f32).max(SMALLEST) }, style }
     }
 
     /// The ends of dimension `k`'s line on screen, [`OFFSET`] on paper to the left of what it
@@ -1353,7 +1371,7 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
         align_y: alignment::Vertical::Center,
         size: iced::Pixels(look.size),
         color,
-        font: openaec_ui::fonts::MEDIUM,
+        font: style.label_family().as_deref().map_or(openaec_ui::fonts::MEDIUM, |name| crate::typeface::Face::of(name).font()),
         ..canvas::Text::default()
     });
 }

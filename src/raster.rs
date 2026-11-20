@@ -25,6 +25,12 @@ impl PartialEq for PlacedImage {
 }
 
 impl PlacedImage {
+    pub(crate) fn sheet_background(presentation: &Value, paper: [f64; 2]) -> Option<Self> {
+        let source = presentation.get("image")?.as_str()?;
+        if source.len() > 45_000_000 { return None; }
+        Self::new(STANDARD.decode(source).ok()?, [[0.,0.],paper]).ok()
+    }
+
     pub fn new(bytes: Vec<u8>, bounds: [[f64; 2]; 2]) -> Result<Self, String> {
         if !valid(bounds) || bytes.len() > 32 * 1024 * 1024 {
             return Err("Invalid drawing image bounds or byte count".into());

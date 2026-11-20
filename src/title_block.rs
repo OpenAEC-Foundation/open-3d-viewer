@@ -25,6 +25,15 @@ pub(crate) fn title_block(doc: &Document, sheet: &crate::document::Sheet, style:
         logo: None,
         polygons: Vec::new(),
     };
+    if let Some(background) = &sheet.background {
+        out.owns_frame = true;
+        let [w,h] = background.bounds[1];
+        out.logo = background.placed(None, |[x,y]| [x*sheet.paper[0]/w, y*sheet.paper[1]/h]);
+        if style.key.eq_ignore_ascii_case("3bm") {
+            edited_office_fields(&mut out, doc, sheet, style);
+        }
+        return out;
+    }
     if style.key.eq_ignore_ascii_case("3bm") {
         office_stamp(&mut out, doc, sheet, style);
         return out;
@@ -108,6 +117,44 @@ fn fitted_logo(uri: Option<&str>, [lo, hi]: [[f64; 2]; 2]) -> Option<crate::rast
         let (x, y) = ((lo[0] + hi[0] - w) / 2.0, (lo[1] + hi[1] - h) / 2.0);
         image.placed(None, |q| [x + q[0] * w, y + q[1] * h])
     })
+}
+
+/// Replace only edited value cells on the supplied 3BM stationery.
+fn edited_office_fields(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::Sheet, style: &bim_library::house::HouseStyle) {
+    use bim_library::house::Field;
+    let unit = office_unit(sheet.paper, style);
+    let at = |x: f64, y: f64| [sheet.paper[0] + x*unit, y*unit];
+    let purple = style.colour("primary").unwrap_or([53,19,54]);
+    for field in sheet.edited_stamp_fields() {
+        let (x,y,width,height) = match field {
+            Field::Title => (-190.78,87.63,126.,7.23),
+            Field::Project => (-190.78,72.68,127.,4.94),
+            Field::Address => (-190.78,66.07,127.,4.94),
+            Field::Client => (-164.32,54.35,100.,3.53),
+            Field::ProjectNumber => (-170.78,41.77,50.,3.53),
+            Field::Phase => (-170.78,37.74,50.,3.53),
+            Field::DrawnBy => (-170.78,33.45,50.,3.53),
+            Field::Date => (-91.52,33.53,35.,3.53),
+            Field::Status => (-91.52,29.27,35.,3.53),
+            Field::Number => (-91.52,25.06,35.,3.53),
+            _ => continue,
+        };
+        let banner = field == Field::Title;
+        let white = [255,255,255];
+        let (left,right,bottom,top) = (x-0.4,x+width,y-height*0.25,y+height*0.87);
+        out.polygons.push(crate::drawing2d::Polygon2d {
+            points: vec![at(left,bottom),at(right,bottom),at(right,top),at(left,top)],
+            color: if banner { purple } else { white },
+        });
+        let value = if field == Field::Address { &doc.project_address } else { doc.title_value(sheet,field) };
+        if !value.is_empty() {
+            let face = crate::typeface::Face { bold: banner, ..crate::typeface::Face::of("Segoe UI") };
+            let measured = f64::from(face.measure(value,100.))/100.;
+            out.texts.push(Text2d { pen: Pen::Text, text: value.into(), at: at(x,y),
+                height: height.min(width/measured.max(0.01))*unit, family: Some(face.family), bold: banner,
+                color: Some(if banner { white } else { purple }), align: Align::Left, angle: 0. });
+        }
+    }
 }
 
 fn office_unit(paper: [f64; 2], style: &bim_library::house::HouseStyle) -> f64 {

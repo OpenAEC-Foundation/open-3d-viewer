@@ -60,6 +60,11 @@ icons! {
 /// The SVG text of an icon, unpacked once. Panics for an id that is not in the list, like
 /// `openaec_icons::Icon::from_id(..).unwrap()` does in the Blueprint.
 pub fn svg(id: &str, size: Size) -> &'static str {
+    match id {
+        "modeller.axis" => return include_str!("../assets/icons/modeller-axis.svg"),
+        "modeller.level" => return include_str!("../assets/icons/modeller-level.svg"),
+        _ => {}
+    }
     static CACHE: OnceLock<Mutex<HashMap<(String, Size), &'static str>>> = OnceLock::new();
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     if let Some(svg) = cache.get(&(id.to_string(), size)) {

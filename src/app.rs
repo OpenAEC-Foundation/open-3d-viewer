@@ -382,6 +382,7 @@ pub struct App {
     pub mark_pick: Option<marks::MarkPick>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
+    collapsed_view_groups: HashSet<&'static str>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
     pub open_sheets: Vec<usize>,
     pub active_sheet: Option<usize>,
@@ -609,6 +610,7 @@ pub enum Message {
     ToggleGrids,
     /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules, 4 sheets).
     ToggleExplorer(usize),
+    ToggleViewGroup(&'static str),
     /// Show a tab of the explorer.
     ExplorerTab(ExplorerTab),
     /// The Library tab.
@@ -1160,6 +1162,7 @@ impl Default for App {
             note_text: String::new(),
             mark_pick: None,
             open_layer_groups: HashSet::new(),
+            collapsed_view_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
             open_drafts: Vec::new(),
@@ -2601,6 +2604,9 @@ impl App {
                     self.picked_grid = None;
                 }
             }
+            Message::ToggleViewGroup(group) => {
+                if !self.collapsed_view_groups.remove(group) { self.collapsed_view_groups.insert(group); }
+            }
             Message::ToggleExplorer(i) => {
                 if let Some(open) = self.explorer_open.get_mut(i) {
                     *open = !*open;
@@ -2658,7 +2664,8 @@ impl App {
             }
             Message::PickLevelFor(kind) => {
                 // the levels to pick from are listed in the Views tab
-                if kind.is_some() {
+                if let Some(kind) = kind {
+                    self.collapsed_view_groups.remove(kind.key());
                     self.explorer_tab = ExplorerTab::Views;
                 }
                 self.views_picker = kind;
@@ -2894,7 +2901,7 @@ impl App {
             Message::SetScale(sheet, i, scale) => {
                 self.scale_placed_view(&sheet, i, scale);
             }
-            Message::ProjectAddress(value) => self.document.project_address = value,
+            Message::ProjectAddress(value) => self.document.set_project_address(value),
             Message::SheetRevision(sheet, row, date, value) => self.document.set_revision(&sheet, row, date, value),
             Message::SheetField(sheet, field, value) => self.document.set_title_value(&sheet, field, value),
             Message::SetPaper(sheet, paper) => {
@@ -4120,7 +4127,7 @@ impl App {
             // (the sheets are listed at once; the header alone stands in for a file without any yet)
             if self.reads_drawings(own) && sheets.is_empty() {
                 let tag = l.text("leest…", "reading…");
-                inner = inner.push(group_header(p, l.text("Tekeningen", "Drawings"), Some(tag), 0, false, Message::ToggleExplorer(4)));
+                inner = inner.push(group_header(p, l.text("Tekenbladen", "Sheets"), Some(tag), 0, false, Message::ToggleExplorer(4)));
             }
             inner = self.sheets_group(p, l, &query, sheets, inner);
             inner = self.drafts_groups(p, l, &query, drafts, inner);

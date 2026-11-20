@@ -123,9 +123,6 @@ impl App {
                 .style(move |_| p.panel_header())
                 .into()
         };
-        let subheader = |label: &str| -> Element<'static, Message> {
-            container(text(label.to_uppercase()).size(10).font(FONT_BOLD).color(p.group_label)).padding(Padding { top: 8.0, right: 0.0, bottom: 2.0, left: 8.0 }).into()
-        };
         // a row: its name, what stands beside it, whether it is the one shown or picked
         let item = |name: String, beside: String, active: bool, message: Message| -> Element<'static, Message> {
             let name = text(name).size(12).color(if active { p.accent } else { p.text }).wrapping(Wrapping::WordOrGlyph).width(Fill);
@@ -145,52 +142,55 @@ impl App {
         let mut body = Column::new().spacing(1);
 
         // the views: plans per kind by level from high to low, sections, 3D views, sheets
-        let views = document.plans().len() + document.sections().len() + document.views_3d().len() + document.sheets().len();
-        body = body.push(header(l.text("Weergaven", "Views"), views));
-        for kind in PlanKind::ALL {
-            let mut plans: Vec<_> = document.plans().iter().filter(|plan| plan.kind == kind).collect();
-            if plans.is_empty() && kind != PlanKind::Floor {
-                continue;
+        body = body.push(self.view_group_header(p, "view-root", l.text("Weergaven", "Views")));
+        if !self.collapsed_view_groups.contains("view-root") {
+            for kind in PlanKind::ALL {
+                let mut plans: Vec<_> = document.plans().iter().filter(|plan| plan.kind == kind).collect();
+                if plans.is_empty() && kind != PlanKind::Floor {
+                    continue;
+                }
+                plans.sort_by(|a, b| elevation(&b.level).total_cmp(&elevation(&a.level)));
+                body = body.push(self.view_group_header(p, kind.key(), match kind {
+                    PlanKind::Floor => l.text("Plattegronden", "Floor plans"),
+                    PlanKind::Structural => l.text("Constructieve plattegronden", "Structural plans"),
+                    PlanKind::Ceiling => l.text("Plafondplannen", "Ceiling plans"),
+                    PlanKind::StructuralUp => l.text("Constructieve plattegronden, omhoog gezien", "Structural plans, looking up"),
+                }));
+                if self.collapsed_view_groups.contains(kind.key()) { continue; }
+                if plans.is_empty() {
+                    body = body.push(none(l.text("Nog geen plattegrond", "No floor plan yet")));
+                }
+                for plan in plans {
+                    body = body.push(item(plan.name.clone(), String::new(), shown == Some(plan.path.as_str()), open(&plan.path)));
+                }
             }
-            plans.sort_by(|a, b| elevation(&b.level).total_cmp(&elevation(&a.level)));
-            body = body.push(subheader(match kind {
-                PlanKind::Floor => l.text("Plattegronden", "Floor plans"),
-                PlanKind::Structural => l.text("Constructieve plattegronden", "Structural plans"),
-                PlanKind::Ceiling => l.text("Plafondplannen", "Ceiling plans"),
-                PlanKind::StructuralUp => l.text("Constructieve plattegronden, omhoog gezien", "Structural plans, looking up"),
-            }));
-            if plans.is_empty() {
-                body = body.push(none(l.text("Nog geen plattegrond", "No floor plan yet")));
+            if !document.views_3d().is_empty() {
+                body = body.push(self.view_group_header(p, "3d", l.text("3D-weergaven", "3D views")));
+                for view in document.views_3d().iter().filter(|_| !self.collapsed_view_groups.contains("3d")) {
+                    body = body.push(item(view.name.clone(), String::new(), shown == Some(view.path.as_str()), open(&view.path)));
+                }
             }
-            for plan in plans {
-                body = body.push(item(plan.name.clone(), String::new(), shown == Some(plan.path.as_str()), open(&plan.path)));
+            // the elevations, then the sections, each in the order they were made
+            for (kind, label) in [(SectionKind::Elevation, l.text("Aanzichten", "Elevations")), (SectionKind::Section, l.text("Doorsneden", "Sections"))] {
+                let of_kind: Vec<_> = document.sections().iter().filter(|s| s.kind == kind).collect();
+                if of_kind.is_empty() {
+                    continue;
+                }
+                body = body.push(self.view_group_header(p, kind.key(), label));
+                if self.collapsed_view_groups.contains(kind.key()) { continue; }
+                for section in of_kind {
+                    body = body.push(item(section.name.clone(), String::new(), shown == Some(section.path.as_str()), open(&section.path)));
+                }
             }
-        }
-        if !document.views_3d().is_empty() {
-            body = body.push(subheader(l.text("3D-weergaven", "3D views")));
-            for view in document.views_3d() {
-                body = body.push(item(view.name.clone(), String::new(), shown == Some(view.path.as_str()), open(&view.path)));
+            if !document.sheets().is_empty() {
+                body = body.push(self.view_group_header(p, "sheets", l.text("Tekenbladen", "Sheets")));
+                for sheet in document.sheets().iter().filter(|_| !self.collapsed_view_groups.contains("sheets")) {
+                    let active = self.active_doc_sheet.as_deref() == Some(sheet.path.as_str());
+                    body = body.push(item(format!("{}  {}", sheet.number, sheet.name), String::new(), active, Message::OpenDocSheet(Arc::from(sheet.path.as_str()))));
+                }
             }
-        }
-        // the elevations, then the sections, each in the order they were made
-        for (kind, label) in [(SectionKind::Elevation, l.text("Aanzichten", "Elevations")), (SectionKind::Section, l.text("Doorsneden", "Sections"))] {
-            let of_kind: Vec<_> = document.sections().iter().filter(|s| s.kind == kind).collect();
-            if of_kind.is_empty() {
-                continue;
-            }
-            body = body.push(subheader(label));
-            for section in of_kind {
-                body = body.push(item(section.name.clone(), String::new(), shown == Some(section.path.as_str()), open(&section.path)));
-            }
-        }
-        if !document.sheets().is_empty() {
-            body = body.push(subheader(l.text("Tekeningen", "Drawings")));
-            for sheet in document.sheets() {
-                let active = self.active_doc_sheet.as_deref() == Some(sheet.path.as_str());
-                body = body.push(item(sheet.name.clone(), String::new(), active, Message::OpenDocSheet(Arc::from(sheet.path.as_str()))));
-            }
-        }
 
+        }
         // the building components per kind
         let counts = self.component_counts();
         body = body.push(header(l.text("Bouwdelen", "Building components"), counts.iter().map(|c| c.1).sum()));

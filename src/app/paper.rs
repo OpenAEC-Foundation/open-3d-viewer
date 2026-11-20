@@ -33,6 +33,7 @@ const PICK: f32 = 5.0;
 /// What can be picked on a sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SheetPick {
+    Paper,
     /// A placed view (its index on the sheet).
     View(usize),
     /// A dimension: the placed view it shows on, its index in the floor plan.
@@ -80,6 +81,9 @@ impl App {
     pub(super) fn pick_on_sheet(&mut self, pick: Option<SheetPick>) {
         self.reference_target = None;
         self.sheet_pick = pick;
+        if pick == Some(SheetPick::Paper) {
+            self.side_tab = super::SideTab::Properties;
+        }
         self.cut_edit = match pick {
             Some(SheetPick::View(i)) => self.placed_plan(i).and_then(|plan| {
                 let cut = self.document.plan(&plan)?.cut;
@@ -111,7 +115,7 @@ impl App {
                     self.document.remove_note(&view, k);
                 }
             }
-            None => return,
+            None | Some(SheetPick::Paper) => return,
         }
         self.pick_on_sheet(None);
     }
@@ -515,10 +519,13 @@ impl App {
     pub(super) fn doc_sheet_workspace(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let path = self.active_doc_sheet.as_ref()?;
         self.document.sheet(path)?;
-        let drawing = self.paper_drawing(p, l)?;
-        let images: Vec<_> = drawing.placed.iter().enumerate().filter_map(|(i, placed)| {
+        let mut drawing = self.paper_drawing(p, l)?;
+        let mut images: Vec<_> = drawing.placed.iter().enumerate().filter_map(|(i, placed)| {
             placed.image.as_ref()?.placed(None, |q| drawing.to_paper(i, q))
         }).collect();
+        if drawing.sheet.background.is_some() {
+            if let Some(background) = drawing.block.logo.take() { images.insert(0, background); }
+        }
         let fit_button = || container(button(text(l.text("Passend", "Fit sheet")).size(11)).padding([3, 7]).on_press(Message::Fit))
             .padding(8).align_right(Fill).align_top(Fill);
         if images.is_empty() {
@@ -628,8 +635,7 @@ impl App {
                     rows = rows.push(row![container(label(l.text(nl, en))).width(92), input].align_y(Center).spacing(4));
                 }
             }
-            if self.house.key.eq_ignore_ascii_case("3bm") {
-                rows = rows.push(row![container(label(l.text("Projectadres", "Project address"))).width(92),
+            rows = rows.push(row![container(label(l.text("Projectadres", "Project address"))).width(92),
                     iced::widget::text_input("", &self.document.project_address).on_input(Message::ProjectAddress).size(12).padding([3,6])].align_y(Center).spacing(4));
                 rows = rows.push(label(l.text("Revisies", "Revisions")));
                 for (i, revision) in sheet.revisions.iter().enumerate() {
@@ -652,6 +658,7 @@ impl App {
                 rows = rows.push(small(name.into(), false, Message::PlacePileLegend(key.clone(), name)));
             }
             if self.document.plans().is_empty() {
+            if self.house.key.eq_ignore_ascii_case("3bm") {
                 rows = rows.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
             }
             let views = self.document.plans().iter().map(|v| (&v.name, &v.path)).chain(self.document.sections().iter().map(|s| (&s.name, &s.path)));
@@ -1056,7 +1063,9 @@ impl canvas::Program<Message> for PaperDrawing {
                     return Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::Dimension(i, k)))).and_capture());
                 }
                 let Some(i) = self.view_at(at) else {
-                    return self.pick.is_some().then(|| canvas::Action::publish(Message::PickOnSheet(None)));
+                    let inside = at[0] >= 0. && at[1] >= 0. && at[0] <= self.sheet.paper[0] && at[1] <= self.sheet.paper[1];
+                    let pick = inside.then_some(SheetPick::Paper);
+                    return (pick != self.pick).then(|| canvas::Action::publish(Message::PickOnSheet(pick)).and_capture());
                 };
                 let middle = self.sheet.views[i].at;
                 state.drag = Some((i, [middle[0] - at[0], middle[1] - at[1]]));
@@ -1112,16 +1121,17 @@ impl canvas::Program<Message> for PaperDrawing {
         // the paper and its frame (10 mm, 20 mm on the binding side), the title at the lower right
         let [w, h] = self.sheet.paper;
         let (at, size) = rect([0.0, 0.0], [w, h]);
-        if self.placed.iter().all(|v| v.image.is_none()) {
+        if self.sheet.background.is_none() && self.placed.iter().all(|v| v.image.is_none()) {
             frame.fill_rectangle(Point::new(at.x + 3.0, at.y + 3.0), size, Color { a: 0.12, ..Color::BLACK });
             frame.fill_rectangle(at, size, paper);
         }
-        frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
+        let border = if self.pick == Some(SheetPick::Paper) { p.accent } else { faint };
+        frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(border).with_width(1.0));
         let (inner, inner_size) = rect([0.02, 0.01], [w - 0.01, h - 0.01]);
         if !self.block.owns_frame {
             frame.stroke(&Path::rectangle(inner, inner_size), Stroke::default().with_color(ink).with_width(1.4));
         }
-        if !self.block.polygons.is_empty() {
+        if self.sheet.background.is_none() && !self.block.polygons.is_empty() {
             let [a,b] = self.block.bounds;
             let (at, size) = rect(a,b);
             frame.fill_rectangle(at,size,Color::WHITE);
@@ -1415,7 +1425,7 @@ pub(super) fn sheets_list<'a>(app: &'a App, p: Palette, l: Language, mut body: i
             .padding([4, 8])
             .width(Fill)
             .style(move |_, s| p.row_button(s))
-            .on_press(Message::NewSheet(l.text("Tekening", "Drawing"))),
+            .on_press(Message::NewSheet(l.text("Tekenblad", "Sheet"))),
     );
     // the views on no sheet yet, on new sheets
     let (plans, sections) = app.unplaced_views();
@@ -1531,7 +1541,7 @@ mod tests {
         for placement in &sheet.views {
             let name = app.document.view_name(&placement.plan).unwrap_or_default();
             if name.starts_with("P1 ·") || name.starts_with("P2 ·") {
-                assert_eq!(placement.scale, if name.starts_with("P1") { 5.0 } else { 10.0 });
+                assert_eq!(Some(placement.scale), app.document.view_scale(&placement.plan));
                 assert!(app.document.view_notes(&placement.plan).unwrap().iter().any(|n| n.text.contains("constructief te bepalen")));
             }
         }
@@ -1684,6 +1694,51 @@ mod tests {
             assert!(drawing.texts.iter().any(|t| t.text == value), "missing {value}: {:?}", drawing.texts.iter().map(|t| &t.text).collect::<Vec<_>>());
             assert!(String::from_utf8_lossy(&pdf).contains(&format!("({value}) Tj")));
         }
+    }
+
+    #[test]
+    fn supplied_sheet_frame_is_used_in_exports_and_survives_ifcx_serialization() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let (mut app, key, _, _) = sheet_with_plan(false);
+        app.house.key = "3bm".into();
+        let bytes = include_bytes!("../../assets/icons/128x128.png");
+        let presentation = serde_json::json!({"image": STANDARD.encode(bytes)});
+        let mut nodes = app.document.ifcx_drawing_nodes();
+        let source = nodes.iter_mut().find(|n| n["path"].as_str() == Some(key.as_ref())).unwrap();
+        source["attributes"]["o3v::sheet"]["presentation"] = presentation.clone();
+        let attrs = nodes.iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        app.document = crate::document::Document::from_model(app.model.as_ref().unwrap());
+        app.document.adopt_ifcx(&attrs);
+        let drawing = app.drawing_to_export().unwrap();
+        assert!(drawing.images.iter().any(|i| i.bytes.as_ref() == bytes));
+        assert!(!drawing.texts.iter().any(|t| t.text == "Opdrachtgever:"));
+        let nodes = app.document.ifcx_drawing_nodes();
+        let saved = nodes.iter().find(|n| n["path"].as_str() == Some(key.as_ref())).unwrap();
+        assert_eq!(saved["attributes"]["o3v::sheet"]["presentation"], presentation);
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        let mut state = PaperState::default();
+        let picked = press_at(&drawing, &mut state, fit.point([0.005,0.005])).unwrap();
+        assert!(matches!(picked, Message::PickOnSheet(Some(SheetPick::Paper))));
+        let _ = app.update(picked);
+        use bim_library::house::Field;
+        let fields = [(Field::ProjectNumber,"3345"),(Field::Project,"Testproject"),(Field::Client,"Opdrachtgever"),
+                      (Field::Phase,"UO"),(Field::Status,"CONCEPT"),(Field::Date,"20-11-2026"),(Field::Number,"CP-21")];
+        for (f, value) in fields {
+            let _ = app.update(Message::SheetField(key.clone(),f,value.into()));
+        }
+        let _ = app.update(Message::ProjectAddress("Projectadres".into()));
+        let nodes = app.document.ifcx_drawing_nodes();
+        let attrs = nodes.into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut restored = crate::document::Document::from_model(app.model.as_ref().unwrap());
+        restored.adopt_ifcx(&attrs);
+        let sheet = restored.sheet(&key).unwrap();
+        assert_eq!(restored.project_address, "Projectadres");
+        for (f,value) in fields { assert_eq!(restored.title_value(sheet,f),value); }
+        let block = crate::title_block::title_block(&restored,sheet,&app.house);
+        assert!(block.logo.is_some());
+        assert!(block.texts.iter().any(|t| t.text == "Projectadres"));
+        assert!(block.texts.iter().any(|t| t.text == "CONCEPT"));
     }
 
     #[test]

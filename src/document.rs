@@ -866,7 +866,27 @@ pub struct Sheet {
     pub title: String,
     /// Width and height (metres).
     pub paper: [f64; 2],
+    pub(crate) background: Option<crate::raster::PlacedImage>,
+    presentation: Option<Arc<Value>>,
     pub views: Vec<PlacedView>,
+}
+
+impl Sheet {
+    fn mark_stamp_field(&mut self, field: Field) {
+        if self.background.is_none() { return; }
+        let Some(presentation) = self.presentation.as_mut() else { return };
+        let fields = &mut Arc::make_mut(presentation)["edited_stamp_fields"];
+        if !fields.is_array() { *fields = json!([]); }
+        if let Some(list) = fields.as_array_mut() {
+            let key = json!(field);
+            if !list.contains(&key) { list.push(key); }
+        }
+    }
+
+    pub(crate) fn edited_stamp_fields(&self) -> impl Iterator<Item=Field> + '_ {
+        self.presentation.as_ref().and_then(|p| p["edited_stamp_fields"].as_array()).into_iter().flatten()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+    }
 }
 
 /// One dated change in the sheet revision column.
@@ -1079,7 +1099,9 @@ impl Document {
                 if let Some(show) = v.show_title { placement["showTitle"] = show.into(); }
                 placement
             }).collect();
-            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "fields": s.fields, "revisions": s.revisions, "paper": s.paper, "views": views}}}));
+            let mut sheet = json!({"number": s.number, "name": s.name, "fields": s.fields, "revisions": s.revisions, "paper": s.paper, "views": views});
+            if let Some(presentation) = &s.presentation { sheet["presentation"] = presentation.as_ref().clone(); }
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": sheet}}));
         }
         if !nodes.is_empty() || self.pile_high_water > 0 || !self.project_fields.is_empty() || !self.project_address.is_empty() {
             nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "pile_high_water": self.pile_high_water, "project_fields": self.project_fields, "project_address": self.project_address, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
@@ -1281,7 +1303,8 @@ impl Document {
             let views: Vec<PlacedView> = views.collect();
             let (number, name) = (text(s, "number"), text(s, "name"));
             let paper = s.get("paper").and_then(pair).unwrap_or(A3_LANDSCAPE);
-            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, revisions: s.get("revisions").and_then(Value::as_array).map(|rows| std::array::from_fn(|i| rows.get(i).and_then(|r| serde_json::from_value(r.clone()).ok()).unwrap_or_default())).unwrap_or_default(), fields: s.get("fields").and_then(|f| serde_json::from_value(f.clone()).ok()).unwrap_or_default(), paper, views });
+            let background = crate::raster::PlacedImage::sheet_background(&s["presentation"], paper);
+            self.sheets.push(Sheet { background, presentation: s.get("presentation").cloned().map(Arc::new), path: path.clone(), title: format!("{number} {name}"), number, name, revisions: s.get("revisions").and_then(Value::as_array).map(|rows| std::array::from_fn(|i| rows.get(i).and_then(|r| serde_json::from_value(r.clone()).ok()).unwrap_or_default())).unwrap_or_default(), fields: s.get("fields").and_then(|f| serde_json::from_value(f.clone()).ok()).unwrap_or_default(), paper, views });
         }
     }
 
@@ -2103,6 +2126,13 @@ impl Document {
         }
     }
 
+    pub fn set_project_address(&mut self, address: String) {
+        if self.project_address != address {
+            for sheet in &mut self.sheets { sheet.mark_stamp_field(Field::Address); }
+            self.project_address = address;
+        }
+    }
+
     pub fn title_value<'a>(&'a self, sheet: &'a Sheet, field: Field) -> &'a str {
         match field {
             Field::Number => &sheet.number,
@@ -2113,6 +2143,12 @@ impl Document {
     }
 
     pub fn set_title_value(&mut self, path: &str, field: Field, value: String) {
+        let Some(current) = self.sheet(path) else { return };
+        if self.title_value(current, field) == value { return; }
+        let shared = matches!(field, Field::Project | Field::ProjectNumber | Field::Client);
+        for sheet in self.sheets.iter_mut().filter(|s| shared || s.path == path) {
+            sheet.mark_stamp_field(field);
+        }
         let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == path) else { return };
         match field {
             Field::Number => sheet.number = value,
@@ -2141,7 +2177,7 @@ impl Document {
         let path = uuid(&format!("sheet/{}/{n}", self.added));
         let number = format!("A{n:02}");
         let title = format!("{number} {name}");
-        self.sheets.push(Sheet { path: path.clone(), number, revisions: Default::default(), fields: TitleFields::new(), name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
+        self.sheets.push(Sheet { background: None, presentation: None, path: path.clone(), number, revisions: Default::default(), fields: TitleFields::new(), name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
         path
     }
 

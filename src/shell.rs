@@ -1518,13 +1518,13 @@ impl Studio {
                     .enabled(loaded),
             );
         }
-        list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
+        list.push(Command::new("project.level", l.text("Bouwlaagpeil", "Level datum"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("modeller.level"), large("modeller.level")).enabled(loaded));
         // a grid line of the modelled project: two clicks on the work plane
-        list.push(Command::new("project.grid", l.text("Stramien", "Grid"), go(Message::GridTool)).icon(small("view.grid"), large("view.grid")).mode(app.modeller.grid_tool).enabled(app.modeller.shown.is_some()));
+        list.push(Command::new("project.grid", l.text("Stramienas", "Grid axis"), go(Message::GridTool)).icon(small("modeller.axis"), large("modeller.axis")).mode(app.modeller.grid_tool).enabled(app.modeller.shown.is_some()));
         list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
         list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
         list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
-        list.push(Command::new("project.sheet", l.text("Tekening", "Drawing"), go(Message::NewSheet(l.text("Tekening", "Drawing")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
+        list.push(Command::new("project.sheet", l.text("Tekenblad", "Sheet"), go(Message::NewSheet(l.text("Tekenblad", "Sheet")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
         list.push(
             Command::new("project.library", l.text("Bibliotheek", "Library"), go(Message::ExplorerTab(crate::app::ExplorerTab::Library)))
                 .icon(small("construction.library"), large("construction.library"))
@@ -2609,7 +2609,7 @@ impl Studio {
             RibbonPage::Model => vec![
                 (l.text("Selecteren", "Select"), vec![large("model.select")]),
                 // what the building is set out on: its grid lines and its levels
-                (l.text("Stramien", "Grid"), vec![large("project.grid"), large("project.level")]),
+                (l.text("Referenties", "Datums"), vec![large("project.grid"), large("project.level")]),
                 (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 (l.text("Systeem", "System"), vec![large("model.system")]),
@@ -2628,7 +2628,7 @@ impl Studio {
                 (l.text("Niveaus", "Levels"), vec![large("project.level")]),
                 (l.text("Stramien", "Grid"), vec![large("project.grid")]),
                 (l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
-                (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
+                (l.text("Tekenbladen", "Sheets"), vec![large("project.sheet")]),
                 (l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
             // drawing in the floor plan, section or sheet shown, in the order of a drawing program's
@@ -3003,7 +3003,7 @@ impl Studio {
         if self.product() == Product::Library {
             return Self::pane(app.library_side(p, l));
         }
-        if self.product() != Product::Modeller {
+        if self.product() != Product::Modeller || (app.active_doc_sheet.is_some() && app.sheet_pick.is_some()) {
             return Self::pane(app.properties_body_for(p, l, geo));
         }
         column![

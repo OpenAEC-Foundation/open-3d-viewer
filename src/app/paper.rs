@@ -1203,7 +1203,7 @@ impl canvas::Program<Message> for PaperDrawing {
                     let mut look = dimension_look(&fit, style);
                     look.offset = (fit.scale * d.paper_offset()) as f32;
                     super::marks::draw_interval_px(&mut frame, screen(a), screen(b), actual.map(screen), interval == 0,
-                        (b[0] - a[0]).hypot(b[1] - a[1]), color, look);
+                        d.interval_value(a,b,style), color, look);
                 }
             }
             super::marks::draw_detail_lines(&mut frame, &placed.lines, &placed.pens, placed.crop, ink, &|q| Some(fit.point(self.to_paper(i, q))), (fit.scale / 1000.0) as f32);

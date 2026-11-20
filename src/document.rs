@@ -412,6 +412,8 @@ pub struct DimensionStyle {
     pub font_size_pt: Option<f64>,
     /// Read the figure along its measurement line from the foot or right side of the page.
     pub aligned_text: bool,
+    /// Give a chain intervals that add up to its rounded reference stations.
+    pub round_stations: bool,
     pub tick: Tick,
     /// Half the length of a slash, the length of an arrow, the diameter of a dot.
     pub tick_size: f64,
@@ -430,7 +432,7 @@ impl DimensionStyle {
 
     /// The style of a dimension that names none.
     pub fn standard() -> Self {
-        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, font_family: None, font_size_pt: None, aligned_text: false, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
+        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, font_family: None, font_size_pt: None, aligned_text: false, round_stations: false, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
     }
 
     pub fn paper_font_size(&self) -> f64 {
@@ -467,6 +469,7 @@ impl DimensionStyle {
         let mut value = json!({"name": self.name, "size": self.size, "tick": self.tick.key(), "tick_size": self.tick_size, "extension": self.extension, "gap": self.gap, "unit": self.unit.key(), "decimals": self.decimals});
         if let Some(family) = &self.font_family { value["font_family"] = family.as_ref().into(); }
         if let Some(pt) = self.font_size_pt { value["font_size_pt"] = pt.into(); }
+        if self.round_stations || self.name == "3BM ronde stip" { value["round_stations"] = self.round_stations.into(); }
         if self.aligned_text || self.name == "3BM ronde stip" { value["aligned_text"] = self.aligned_text.into(); }
         value
     }
@@ -486,6 +489,7 @@ impl DimensionStyle {
             name: name.to_string(),
             size: legacy_size,
             font_family, font_size_pt, aligned_text: v["aligned_text"].as_bool().unwrap_or(office),
+            round_stations: v["round_stations"].as_bool().unwrap_or(office),
             tick: v.get("tick").and_then(Value::as_str).and_then(Tick::from_key).unwrap_or_default(),
             tick_size: size("tick_size", standard.tick_size),
             extension: size("extension", standard.extension),
@@ -611,6 +615,16 @@ impl Dimension {
         std::iter::once((self.from, self.anchors[0]))
             .chain(self.chain.iter().flat_map(|c| c.inner.iter().copied()))
             .chain(std::iter::once((self.to, self.anchors[1])))
+    }
+
+    pub(crate) fn interval_value(&self, from: [f64; 2], to: [f64; 2], style: &DimensionStyle) -> f64 {
+        let Some(chain) = self.chain.as_ref().filter(|_| style.round_stations) else {
+            return (to[0]-from[0]).hypot(to[1]-from[1]);
+        };
+        let units = match style.unit { DimensionUnit::Millimetres => 1000., DimensionUnit::Metres => 1. };
+        let precision = units * 10.0_f64.powi(i32::from(style.decimals.min(6)));
+        let station = |q: [f64; 2]| ((q[0]*chain.axis[0] + q[1]*chain.axis[1]) * precision).round();
+        (station(to)-station(from)).abs() / precision
     }
 
     pub fn paper_offset(&self) -> f64 { self.chain.as_ref().map_or(0.006, |c| c.offset) }
@@ -2737,6 +2751,20 @@ mod tests {
         let mut again = Document::from_model(&model);
         again.adopt_ifcx(&nodes);
         assert_eq!(again.plan("layout").unwrap().dimensions, plan.dimensions);
+    }
+
+    #[test]
+    fn station_rounding_keeps_published_intervals_consistent_with_their_references() {
+        let model = model_with(&[("00",0.)]);
+        let mut doc = Document::from_model(&model);
+        let plan = doc.add_plan(&doc.levels()[0].path.clone()).unwrap();
+        assert!(doc.add_dimension_chain(&plan, &[[-44.,1.2],[-42.7308,1.2],[-41.0385,1.2]]));
+        let d = &doc.plan(&plan).unwrap().dimensions[0];
+        let office = DimensionStyle::from_ifcx(&json!({"name":"3BM ronde stip"})).unwrap();
+        let values = |style: &DimensionStyle| d.intervals().map(|(_, [a,b])| style.figure(d.interval_value(a,b,style))).collect::<Vec<_>>();
+        assert_eq!(values(&office), ["1269","1693"]);
+        assert_eq!(values(&DimensionStyle::standard()), ["1269","1692"]);
+        assert!((d.length()-2.9615).abs()<1e-9);
     }
 
     #[test]

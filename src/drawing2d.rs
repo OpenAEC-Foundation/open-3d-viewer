@@ -560,7 +560,7 @@ impl Drawing2d {
             let height = if style.label_family().is_some() { style.paper_font_size() } else { rules.text };
             for (i, (actual, [a,b])) in d.intervals().enumerate() {
                 self.dimensions.push(Dim2d { first_witness: i == 0, from: to(a), to: to(b), witnesses: actual.map(to), units_per_paper_metre: unit,
-                    value: (b[0] - a[0]).hypot(b[1] - a[1]), offset: d.paper_offset() * unit,
+                    value: d.interval_value(a,b,doc.dimension_style(d.style)), offset: d.paper_offset() * unit,
                     style: style.clone(), text_height: height * unit });
             }
         }

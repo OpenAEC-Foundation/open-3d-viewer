@@ -1165,7 +1165,7 @@ impl canvas::Program<Message> for ViewMarks {
                 let [Some(first), Some(last)] = actual.map(|q| self.px(&screen, q)) else { continue };
                 let mut look = self.look(&screen, from, d.style);
                 look.offset = look.paper * d.paper_offset() as f32;
-                draw_interval_px(&mut frame, a, b, [first, last], i == 0, (to[0]-from[0]).hypot(to[1]-from[1]), color, look);
+                draw_interval_px(&mut frame, a, b, [first, last], i == 0, d.interval_value(from,to,look.style), color, look);
             }
         }
         // the regions filled in one colour, under the lines: black is the ink of the drawing

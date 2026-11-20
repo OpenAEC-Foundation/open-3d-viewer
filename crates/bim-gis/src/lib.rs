@@ -21,3 +21,5 @@ pub mod pdok;
 pub mod rd;
 
 pub use rd::{Frame, LatLon, Rd};
+
+pub mod sounding;

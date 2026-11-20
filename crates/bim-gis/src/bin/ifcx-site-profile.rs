@@ -29,6 +29,7 @@ struct Settings {
     model_origin_rd: Pt,
     rotation_degrees: f64,
     wall_points: Vec<Point>,
+    soundings: Option<Vec<bim_gis::sounding::Sounding>>,
     section_marks: [String; 2],
     section_local: [Pt; 2],
     /// Section coordinates are station from the first mark and elevation in metres NAP.
@@ -178,6 +179,14 @@ fn draw(
     p["crs"] = json!("EPSG:28992");
     p["rd_unit"] = json!("metre");
     p["source"] = json!(s.source);
+    p["rd_rotation_degrees"] = json!(0.0); // This plan has north up.
+    if let Some(soundings) = &s.soundings {
+        for sounding in soundings {
+            let at = sounding.local(Frame::at(rd(sw))).ok_or("Invalid sounding identification, source or RD coordinates")?;
+            if !inside(at) { return Err(format!("Sounding {} falls outside the orthophoto extent", sounding.id).into()); }
+        }
+        p["soundings"] = json!(soundings);
+    }
     let runs = grid.profile(a, b);
     let crest = runs
         .iter()

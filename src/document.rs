@@ -5,6 +5,8 @@
 //!
 //! Headless: no GUI or GPU, so the MCP server and a later BIM kernel crate can use it as it is.
 
+mod soundings;
+
 use crate::model::Model;
 use bim_library::house::Field;
 use std::collections::HashMap;
@@ -899,7 +901,7 @@ impl Document {
                 let Some(level) = self.levels.iter().find(|l| same_name(&l.name, &text(p, "level"))).map(|l| l.path.clone()) else { continue };
                 let kind = PlanKind::from_key(&text(p, "kind"));
                 let (cut, depth) = self.plan_defaults(&level, kind);
-                self.plans.push(PlanView {
+                let mut plan = PlanView {
                     orthophoto: p.get("presentation").and_then(crate::raster::OrthoPhoto::read),
                     path: path.clone(),
                     name: text(p, "name"),
@@ -924,7 +926,9 @@ impl Document {
                     crop: rect(p.get("crop")),
                     layers: layers(p.get("layers")),
                     hidden: hidden(p),
-                });
+                };
+                plan.append_sounding_marks();
+                self.plans.push(plan);
             } else if let Some(s) = attributes.get("o3v::view::section") {
                 let (Some(from), Some(to)) = (s.get("from").and_then(pair), s.get("to").and_then(pair)) else { continue };
                 self.sections.push(SectionView {
@@ -1444,6 +1448,7 @@ impl Document {
             p.corner_labels = false;
             p.office_symbol_lines = 0;
             (p.tags, p.symbols) = of(p);
+            p.append_sounding_marks();
         }
     }
 
@@ -2390,6 +2395,40 @@ mod tests {
         assert!(document.remove_view_line(&plan, 2));
         assert!(document.view_shapes(&plan).is_empty() && document.view_lines(&plan).len() == 1);
         assert!(!document.remove_view_line(&plan, 4));
+    }
+
+    #[test]
+    fn used_sounding_is_projected_once_on_reopen_and_export() {
+        let model = model_with(&[("00", 0.0)]);
+        let mut doc = Document::from_model(&model);
+        let plan = doc.add_plan(&doc.levels()[0].path.clone()).unwrap();
+        // Delivered RD position of the public BRO fixture in bim-civil.
+        let id = "CPT000000000785";
+        doc.plans[0].presentation = json!({"rd_origin":[155000.,463000.], "crs":"EPSG:28992", "rd_unit":"metre",
+            "rd_rotation_degrees":90.0, "soundings":[{"id":id,"rd":[154652.,463125.],"crs":"EPSG:28992","source":"BRO"}]});
+        let nodes = |doc: &Document| doc.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut reopened = Document::from_model(&model);
+        reopened.adopt_ifcx(&nodes(&doc));
+        for _ in 0..2 {
+            let symbol = reopened.view_symbols(&plan);
+            assert_eq!(symbol.len(), 34);
+            let [a,b] = symbol[32];
+            assert!(((a[0]+b[0])/2.0-125.).abs()<1e-8 && (a[1]-348.).abs()<1e-8);
+            assert_eq!(reopened.view_tags(&plan).iter().filter(|n| n.text==id).count(),1);
+            reopened.set_plan_tags(|_| (vec![],vec![]));
+        }
+        let drawing = crate::drawing2d::view_drawing(&reopened,&plan,&Default::default(),&Default::default()).unwrap();
+        assert!(drawing.texts.iter().any(|t| t.text == id));
+        assert!(drawing.lines.len() >= 34);
+        // Documents with a manually drawn and labelled cross keep one marker.
+        let arms = reopened.view_symbols(&plan)[32..].to_vec();
+        reopened.add_view_lines(&plan,&arms);
+        reopened.add_note(&plan,[126.,348.],id);
+        let mut legacy = Document::from_model(&model);
+        legacy.adopt_ifcx(&nodes(&reopened));
+        assert!(legacy.view_tags(&plan).is_empty() && legacy.view_symbols(&plan).is_empty());
+        assert_eq!(legacy.view_lines(&plan).len(),2);
+        assert_eq!(legacy.view_notes(&plan).unwrap()[0].text,id);
     }
 
     #[test]

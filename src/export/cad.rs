@@ -147,7 +147,7 @@ mod tests {
                 Line2d::new(Pen::Beyond, [1.0, 1.0], [7.0, 1.0]),
             ],
             texts: vec![Text2d { pen: Pen::Text, at: [1.0, 2.0], height: 0.25, text: "Kamer ë".into(), align: Align::Left, angle: 0.0 }],
-            dimensions: vec![Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25 }],
+            dimensions: vec![Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25, style: crate::document::DimensionStyle::standard() }],
         }
     }
 
@@ -197,7 +197,7 @@ mod tests {
             paper: Some([0.42, 0.297]),
             lines: Vec::new(),
             texts: Vec::new(),
-            dimensions: vec![Dim2d { from: [0.1, 0.1], to: [0.18, 0.1], value: 8.0, offset: 0.006, text_height: 0.0025 }],
+            dimensions: vec![Dim2d { from: [0.1, 0.1], to: [0.18, 0.1], value: 8.0, offset: 0.006, text_height: 0.0025, style: crate::document::DimensionStyle::standard() }],
         };
         for (bytes, format) in [(dwg(&d).unwrap(), &opencaddocument::Dwg as &dyn Format), (dxf(&d).unwrap(), &opencaddocument::Dxf)] {
             let (read, _) = format.read(&bytes).unwrap();

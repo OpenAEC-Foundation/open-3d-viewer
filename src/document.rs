@@ -182,6 +182,12 @@ pub struct PlanView {
     /// What the modelled project says on it by itself, made again after every change of the
     /// model and not kept in the file: the names and areas of its spaces.
     pub tags: Vec<Note>,
+    /// Generate plan symbols from the actual piles. Existing authored plans opt in explicitly.
+    pub pile_symbols: bool,
+    /// Per-element tag offset in model metres, relative to the pile head.
+    pub pile_offsets: std::collections::BTreeMap<u64, [f64; 2]>,
+    /// Regenerated tag index, element identity, and head used by drag editing.
+    pub pile_tags: Vec<(usize, u64, [f64; 2])>,
     /// And the lines it draws by itself: the swings of its doors.
     pub symbols: Vec<[[f64; 2]; 2]>,
     /// The regions drawn on it in one colour that are no model, under its lines.
@@ -752,6 +758,8 @@ impl Document {
             });
             let mut view = shaped(view, &p.path, &p.shapes);
             if let Some(photo) = &p.orthophoto { photo.write(&mut view["presentation"]); }
+            if p.pile_symbols { view["pile_symbols"] = true.into(); }
+            if !p.pile_offsets.is_empty() { view["pile_offsets"] = json!(p.pile_offsets); }
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(with_drawing(view, &p.drawing), &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
@@ -884,6 +892,9 @@ impl Document {
                     scale: scale(p),
                     drawing: p.get("drawing").and_then(Value::as_str).map(String::from),
                     tags: Vec::new(),
+                    pile_symbols: p.get("pile_symbols").and_then(Value::as_bool).unwrap_or(false),
+                    pile_offsets: p.get("pile_offsets").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
+                    pile_tags: Vec::new(),
                     symbols: Vec::new(),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
@@ -1042,7 +1053,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), pile_symbols: kind.structural(), pile_offsets: Default::default(), pile_tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1405,8 +1416,9 @@ impl Document {
     }
 
     /// Gives every floor plan what it says and draws by itself: `of` makes them for a plan.
-    pub fn set_plan_tags(&mut self, of: impl Fn(&PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>)) {
+    pub fn set_plan_tags(&mut self, of: impl Fn(&mut PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>)) {
         for p in &mut self.plans {
+            p.pile_tags.clear();
             (p.tags, p.symbols) = of(p);
         }
     }
@@ -1560,6 +1572,15 @@ impl Document {
         }
         let Some(section) = self.sections.iter_mut().find(|s| s.path == view) else { return false };
         section.notes.push(Note { at, text: level_text(at[1]), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: true });
+        true
+    }
+
+    pub fn move_pile_tag(&mut self, view: &str, index: usize, at: [f64; 2]) -> bool {
+        if !at.iter().all(|x| x.is_finite()) { return false; }
+        let Some(p) = self.plans.iter_mut().find(|p| p.path == view) else { return false };
+        let Some(index) = index.checked_sub(p.notes.len()) else { return false };
+        let Some(&(_, id, head)) = p.pile_tags.iter().find(|(k, _, _)| *k == index) else { return false };
+        p.pile_offsets.insert(id, [at[0] - head[0], at[1] - head[1]]);
         true
     }
 

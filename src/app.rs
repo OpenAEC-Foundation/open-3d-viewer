@@ -2718,7 +2718,11 @@ impl App {
                 self.document.add_note(&view, at, &wording);
             }
             Message::MoveNote(view, k, at) => {
-                self.document.move_note(&view, k, at);
+                if self.document.move_pile_tag(&view, k, at) {
+                    self.tag_plans();
+                } else {
+                    self.document.move_note(&view, k, at);
+                }
             }
             Message::PickMark(pick) => self.pick_mark(pick),
             Message::RemoveMark => self.remove_mark(),
@@ -4561,7 +4565,8 @@ impl App {
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them
-        let datums = if clean { Vec::new() } else { self.datums() };
+        let paper_view = self.drawing_on_paper && self.shown_view().is_some();
+        let datums = if clean || paper_view { Vec::new() } else { self.datums() };
         let segments = Arc::new(datums.iter().map(|d| [d.line.a, d.line.b]).collect::<Vec<_>>());
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),

@@ -382,6 +382,7 @@ impl App {
             rows = rows.push(text_input("100", &e.size).on_input(Message::PairSize).size(12).padding([3, 6]));
         }
         match self.mark_pick.filter(|_| self.annotates) {
+            Some(MarkPick::Note(k)) if k >= self.document.view_notes(view).map_or(0, |n| n.len()) => {}
             Some(MarkPick::Note(_)) => {
                 rows = rows.push(text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
                 rows = rows.push(tool(l.text("Tekst verwijderen", "Remove text"), false, Message::RemoveMark));
@@ -554,6 +555,7 @@ impl App {
         for d in made {
             let has = self.document.view_marks(view).is_some_and(|(own, _)| own.iter().any(|o| same(o, &d)));
             if !has && self.document.add_dimension(view, d.from, d.to) {
+                self.anchor_last_dimension(view);
                 added += 1;
             }
         }

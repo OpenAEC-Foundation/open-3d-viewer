@@ -3,7 +3,7 @@
 //! format (Revit, Tekla, Archicad). A structural plan shows the elements that carry load.
 
 /// IFC classes of the building's structure: what carries load, down to the foundations.
-const STRUCTURAL: [&str; 18] = [
+const STRUCTURAL: [&str; 19] = [
     "IFCWALL",
     "IFCSLAB",
     "IFCCOLUMN",
@@ -21,6 +21,7 @@ const STRUCTURAL: [&str; 18] = [
     "IFCRAMPFLIGHT",
     "IFCBEARING",
     "IFCTENDON",
+    "IFCREINFORCINGBAR",
     "IFCCHIMNEY",
 ];
 

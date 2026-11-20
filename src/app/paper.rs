@@ -270,8 +270,27 @@ impl App {
             let (low, high) = self.document.plan_range(view)?;
             CutKind::Plan { kind: view.kind, low, high }
         };
+        let mut axes = Vec::new();
+        if let (Some(source), Some(index)) = (self.modeller.shown, self.explode_index.as_ref()) {
+            units.resize(index.len().max(units.len()), false);
+            for (layer_index, layer) in model.layers.iter().enumerate().filter(|(i, l)| layers[*i] && l.name.ends_with("IfcReinforcingBar")) {
+                for &(id, first, _) in &layer.elements {
+                    let Some(&vertex) = layer.indices.get(first as usize) else { continue };
+                    let unit = index.unit(layer_index, vertex);
+                    if units[unit] { continue; }
+                    let key = model.keys.get(&id);
+                    let slot = key.map_or(0, |k| k.model as usize);
+                    if self.models.get(slot).is_none_or(|entry| entry.model.id != source) { continue; }
+                    let Some(element) = self.modeller.model.get(bim_core::ElementId(key.map_or(id, |k| k.source))) else { continue };
+                    let bim_core::Shape::Linear(bar) = element.shape_in_project(&self.modeller.model.grid) else { continue };
+                    let shift = model.origins.get(slot).map_or(glam::DVec3::ZERO, |o| o.shift);
+                    axes.push([bar.start + shift, bar.end + shift]);
+                    units[unit] = true;
+                }
+            }
+        }
         let scale = self.document.view_scale(path).unwrap_or(crate::document::SHEET_SCALE);
-        Some(CutJob { model, layers, units, halftone, index: self.explode_index.clone(), kind, scale, looks })
+        Some(CutJob { axes, model, layers, units, halftone, index: self.explode_index.clone(), kind, scale, looks })
     }
 
     /// The drawings of views as the sheet layout takes them (`crate::sheet_layout`): the crop, or

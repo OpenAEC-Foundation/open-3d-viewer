@@ -933,7 +933,7 @@ pub fn drawn(cut: &Cut) -> impl Iterator<Item = &Segment> {
 }
 
 /// Lower left and upper right of segments.
-fn extent<'a>(segments: impl Iterator<Item = &'a Segment>) -> Option<([f32; 2], [f32; 2])> {
+pub(crate) fn extent<'a>(segments: impl Iterator<Item = &'a Segment>) -> Option<([f32; 2], [f32; 2])> {
     segments.flatten().fold(None, |e: Option<([f32; 2], [f32; 2])>, q| {
         Some(match e {
             None => (*q, *q),

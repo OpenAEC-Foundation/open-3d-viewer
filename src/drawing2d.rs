@@ -188,6 +188,8 @@ pub struct Dim2d {
     pub value: f64,
     pub offset: f64,
     pub text_height: f64,
+    /// End marks and witness line spacing in paper metres.
+    pub style: crate::document::DimensionStyle,
 }
 
 impl Dim2d {
@@ -208,18 +210,42 @@ impl Dim2d {
     /// and its two slashes, as a sheet draws them.
     pub fn lines(&self) -> Vec<[[f64; 2]; 2]> {
         let (Some((u, n)), Some((a, b))) = (self.axes(), self.line()) else { return Vec::new() };
-        let (gap, tick) = (self.offset * 0.25, self.offset * 0.2);
-        let slash = |q: [f64; 2]| {
-            let s = [(u[0] + n[0]) * tick, (u[1] + n[1]) * tick];
-            [[q[0] - s[0], q[1] - s[1]], [q[0] + s[0], q[1] + s[1]]]
-        };
-        vec![[add(self.from, n, gap), add(a, n, gap)], [add(self.to, n, gap), add(b, n, gap)], [a, b], slash(a), slash(b)]
+        let paper = self.offset / DIMENSION_OFFSET;
+        let tick = self.style.tick_size * paper;
+        let gap = self.style.gap * paper;
+        let extension = self.style.extension * paper;
+        let mut lines = vec![[add(self.from, n, gap), add(a, n, extension)], [add(self.to, n, gap), add(b, n, extension)], [a, b]];
+        use crate::document::Tick;
+        for (q, inward) in [(a, 1.0), (b, -1.0)] {
+            match self.style.tick {
+                Tick::Slash => {
+                    let diagonal = [u[0] + n[0], u[1] + n[1]];
+                    lines.push([add(q, diagonal, -tick), add(q, diagonal, tick)]);
+                }
+                Tick::Dot => {
+                    let point = |k: usize| {
+                        let t = std::f64::consts::TAU * k as f64 / 16.0;
+                        add(q, [t.cos(), t.sin()], tick * 0.5)
+                    };
+                    for k in 0..16 {
+                        lines.push([point(k), point(k + 1)]);
+                    }
+                }
+                Tick::Arrow => {
+                    let back = add(q, u, inward * tick);
+                    let (l, r) = (add(back, n, tick * 0.27), add(back, n, -tick * 0.27));
+                    lines.extend([[q, l], [l, r], [r, q]]);
+                }
+                Tick::None => {}
+            }
+        }
+        lines
     }
 
     /// Its text: the value in whole millimetres, level and centred beside the line, clear of it
     /// whichever way the line runs.
     pub fn label(&self) -> Text2d {
-        let text = format!("{}", (self.value * 1000.0).round());
+        let text = self.style.figure(self.value);
         let n = self.axes().map_or([0.0, 1.0], |(_, n)| n);
         let h = self.text_height;
         let w = text.chars().count() as f64 * h * CHARACTER;
@@ -266,8 +292,17 @@ impl Drawing2d {
             if run <= 0.0 {
                 continue;
             }
-            self.line(Pen::Grids, d.a, d.b);
             let u = [dx / run, dy / run];
+            // A chain line uses the same paper pattern at every view scale.
+            let mut at = 0.0;
+            for (i, mm) in [8.0, 1.5, 0.35, 1.5].into_iter().cycle().enumerate() {
+                let end = (at + mm * unit / 1000.0).min(run);
+                if i % 2 == 0 {
+                    self.line(Pen::Grids, add(d.a, u, at), add(d.a, u, end));
+                }
+                at = end;
+                if at >= run { break; }
+            }
             match d.level {
                 None => {
                     for (end, out) in [(d.a, [-u[0], -u[1]]), (d.b, u)] {
@@ -391,7 +426,7 @@ impl Drawing2d {
     /// view's drawing to this drawing), `unit` drawing metres per paper metre, `per_metre` metres
     /// of the view's drawing per paper metre (its scale), drawn as `rules` say.
     #[allow(clippy::too_many_arguments)]
-    fn view(&mut self, cut: Option<&Cut>, crop: Option<([f64; 2], [f64; 2])>, marks: (&[Dimension], &[Note]), to: &dyn Fn([f64; 2]) -> [f64; 2], unit: f64, per_metre: f64, rules: &Rules) {
+    fn view(&mut self, cut: Option<&Cut>, crop: Option<([f64; 2], [f64; 2])>, marks: (&[Dimension], &[Note]), doc: &Document, to: &dyn Fn([f64; 2]) -> [f64; 2], unit: f64, per_metre: f64, rules: &Rules) {
         if let Some(cut) = cut {
             // the hatch lines of the cut faces, at least 0.7 mm apart on paper, where the view's
             // kind of drawing hatches what is cut
@@ -466,7 +501,7 @@ impl Drawing2d {
         }
         let (dimensions, notes) = marks;
         for d in dimensions {
-            self.dimensions.push(Dim2d { from: to(d.from), to: to(d.to), value: d.length(), offset: DIMENSION_OFFSET * unit, text_height: rules.text * unit });
+            self.dimensions.push(Dim2d { from: to(d.from), to: to(d.to), value: d.length(), offset: DIMENSION_OFFSET * unit, style: doc.dimension_style(d.style).clone(), text_height: rules.text * unit });
         }
         for n in notes {
             let align = match n.align {
@@ -530,7 +565,7 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut, rules: &Rules) -> Opt
     let (dimensions, notes, crop) = marks(doc, path);
     let mut d = Drawing2d { images: Vec::new(), name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     if let Some(photo) = doc.plan(path).and_then(|p| p.orthophoto.as_ref()) { d.images.extend(photo.image.placed(crop, |q| q)); }
-    d.view(Some(cut), crop, (dimensions, &notes), &|q| q, scale, scale, rules);
+    d.view(Some(cut), crop, (dimensions, &notes), doc, &|q| q, scale, scale, rules);
     d.detail(doc.view_lines(path), &|q| q);
     d.detail(doc.view_symbols(path), &|q| q);
     Some(d)
@@ -568,7 +603,7 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
             (None, None) => ([v.at[0] - 0.02, v.at[1] - 0.015], [v.at[0] + 0.02, v.at[1] + 0.015]),
         };
         let drawn = c.as_ref().is_some_and(|c| crate::drawing::drawn(c).next().is_some());
-        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, &notes), &to, 1.0, v.scale, &rules(&v.plan));
+        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, &notes), doc, &to, 1.0, v.scale, &rules(&v.plan));
         // the lines drawn on the view that are no model, and those the model draws by itself
         d.detail(doc.view_lines(&v.plan), &to);
         d.detail(doc.view_symbols(&v.plan), &to);
@@ -639,7 +674,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
             [at[0] + (dx * cx + dy * cy) * ratio, at[1] + (dy * cx - dx * cy) * ratio]
         };
         let per_metre = if ratio > 0.0 { 1.0 / ratio } else { SHEET_SCALE };
-        d.view(c.as_deref(), crop, (dimensions, &notes), &to, 1.0, per_metre, &Rules::default());
+        d.view(c.as_deref(), crop, (dimensions, &notes), doc, &to, 1.0, per_metre, &Rules::default());
         d.detail(doc.view_lines(path), &to);
         d.detail(doc.view_symbols(path), &to);
         // its title, where the sheet has it
@@ -737,7 +772,7 @@ mod tests {
 
     #[test]
     fn a_dimension_has_its_line_to_the_left_with_slashes_and_its_text_beside_it() {
-        let dim = Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25 };
+        let dim = Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25, style: crate::document::DimensionStyle::standard() };
         let lines = dim.lines();
         // two extension lines, the dimension line, two slashes
         assert_eq!(lines.len(), 5);

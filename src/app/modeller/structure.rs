@@ -87,6 +87,10 @@ pub fn to_level(height: f64) -> String {
 /// What a structural plan of `level` (at `elevation`, drawn at 1 : `scale`) says by itself;
 /// `top_word` is what the top of a beam is called (`b.k.`).
 pub fn tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &str) -> Vec<Note> {
+    member_tags(model, level, elevation, scale, top_word, true)
+}
+
+pub(super) fn member_tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &str, include_piles: bool) -> Vec<Note> {
     // a millimetre on paper between a label and what it labels
     let gap = scale * 0.001;
     let note = |at: DVec2, text: String, align: Align, angle: f64| Note { at: at.to_array(), text, size: NOTE_HEIGHT, align, angle, level: false, face: crate::typeface::Face::default() };
@@ -113,6 +117,7 @@ pub fn tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &s
                 let at = l.start.truncate() + DVec2::splat(side + gap);
                 match piles.iter().find(|p| p.id == e.id) {
                     // to its lower right, clear of the label of a beam that lies over it
+                    Some(_) if !include_piles => {}
                     Some(pile) => notes.push(note(l.start.truncate() + DVec2::new(side + gap, -(side + gap) - scale * NOTE_HEIGHT), pile.number.to_string(), Align::Left, 0.0)),
                     None => notes.push(note(at, what, Align::Left, 0.0)),
                 }

@@ -32,6 +32,7 @@ pub(super) mod shape_handles;
 pub mod slab_handles;
 pub mod snaps;
 pub mod spaces;
+mod pile_symbols;
 pub mod structure;
 pub mod temp_dims;
 pub mod sketch;
@@ -1023,7 +1024,7 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
         let k = match layers.iter().position(|l| l.name == class) {
             Some(k) => k,
             None => {
-                layers.push(Layer { name: class.into(), color: class_colour(class), ..Layer::default() });
+                layers.push(Layer { name: class.into(), hidden: class == "IfcReinforcingBar", color: class_colour(class), ..Layer::default() });
                 layers.len() - 1
             }
         };

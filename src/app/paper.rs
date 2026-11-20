@@ -1363,6 +1363,7 @@ mod tests {
     fn edited_title_fields_survive_reopening_and_match_the_export() {
         use bim_library::house::Field;
         let (mut app, sheet, _, _) = sheet_with_plan(false);
+        app.scale_placed_view(&sheet, 0, 100.0);
         let second = app.document.add_sheet("Details");
         for (field, value) in [(Field::ProjectNumber, "42"), (Field::Title, "Fundering"), (Field::Number, "CP-21"), (Field::Revision, "B")] {
             let _ = app.update(Message::SheetField(sheet.clone(), field, value.into()));
@@ -1377,7 +1378,7 @@ mod tests {
         let drawing = app.drawing_to_export().unwrap();
         let pdf = crate::export::pdf::pdf(&drawing);
         for value in ["42", "Fundering", "CP-21", "B", "1:100"] {
-            assert!(drawing.texts.iter().any(|t| t.text == value));
+            assert!(drawing.texts.iter().any(|t| t.text == value), "missing {value}: {:?}", drawing.texts.iter().map(|t| &t.text).collect::<Vec<_>>());
             assert!(String::from_utf8_lossy(&pdf).contains(&format!("({value}) Tj")));
         }
     }

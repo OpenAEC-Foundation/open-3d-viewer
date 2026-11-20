@@ -330,7 +330,7 @@ impl App {
 
     fn placement_area(&self, paper: [f64; 2]) -> ([f64; 2], [f64; 2]) {
         let (mut lo, hi) = sheet_layout::area(paper);
-        lo[1] = lo[1].max(0.015 + self.house.title_block.height() / 1000.0);
+        lo[1] = lo[1].max(crate::title_block::reserved_bottom(paper, &self.house));
         (lo, hi)
     }
 
@@ -1385,6 +1385,30 @@ mod tests {
         let nodes = app.document.ifcx_drawing_nodes();
         let v = nodes.iter().find(|n| n["path"] == &*plan).unwrap();
         assert_eq!(v["attributes"]["o3v::view::plan"]["presentation"]["origin"], serde_json::json!([0.0,0.0]));
+    }
+
+    #[test]
+    fn the_office_stamp_keeps_its_physical_size_on_a_landscape_a1_at_one_to_one_hundred() {
+        let (mut app, path, _, _) = sheet_with_plan(false);
+        app.house.key = "3bm".into();
+        let stamp = |app: &App| crate::title_block::title_block(&app.document, app.document.sheet(&path).unwrap(), &app.house);
+        let _ = app.update(Message::SetPaper(path.clone(), [1.189, 0.841]));
+        let a0 = stamp(&app);
+        let _ = app.update(Message::SetPaper(path.clone(), [0.841, 0.594]));
+        let a1 = stamp(&app);
+        assert!(a1.texts.iter().any(|t| t.text == "A1"));
+        assert!(a1.texts.iter().any(|t| t.text == "1:100"));
+        for (small, large) in a1.polygons.iter().zip(&a0.polygons) {
+            for (p,q) in small.points.iter().zip(&large.points) {
+                assert!((p[0] + 0.348 - q[0]).abs()<1e-9 && (p[1]-q[1]).abs()<1e-9);
+            }
+        }
+        for name in ["Sheet", "Tekeningnr:", "A.", "F."] {
+            let positions = [&a1,&a0].map(|s| s.texts.iter().find(|t| t.text == name).unwrap());
+            assert_eq!(positions[0].height, positions[1].height);
+            assert!((positions[0].at[0]+0.348-positions[1].at[0]).abs()<1e-9);
+            assert_eq!(positions[0].at[1],positions[1].at[1]);
+        }
     }
 
     #[test]

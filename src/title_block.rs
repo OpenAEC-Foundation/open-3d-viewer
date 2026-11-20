@@ -110,14 +110,27 @@ fn fitted_logo(uri: Option<&str>, [lo, hi]: [[f64; 2]; 2]) -> Option<crate::rast
     })
 }
 
+fn office_unit(paper: [f64; 2], style: &bim_library::house::HouseStyle) -> f64 {
+    (style.title_block.width / 180_000.0)
+        .min((paper[0] - 0.02) / 280.0)
+        .min((paper[1] - 0.03) / 110.0)
+}
+
+/// Bottom band reserved by automatic placement, including clearance above the stamp.
+pub(crate) fn reserved_bottom(paper: [f64; 2], style: &bim_library::house::HouseStyle) -> f64 {
+    if style.key.eq_ignore_ascii_case("3bm") {
+        98.0 * office_unit(paper, style) + 0.005
+    } else {
+        0.015 + style.title_block.height() / 1000.0
+    }
+}
+
 /// Office stamp in its house colours and dimensions. All lettering remains drawing text.
 fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::Sheet, style: &bim_library::house::HouseStyle) {
     use bim_library::house::Field;
     // Physical dimensions, in mm from the lower right paper corner. The house width is
     // the straight 180 mm edge above the stamp, between its two 5 mm corner radii.
-    let unit = (style.title_block.width / 180_000.0)
-        .min((sheet.paper[0] - 0.02) / 280.0)
-        .min((sheet.paper[1] - 0.03) / 110.0);
+    let unit = office_unit(sheet.paper, style);
     let at = |x: f64, y: f64| [sheet.paper[0] + x * unit, y * unit];
     let purple = style.colour("primary").unwrap_or([53, 14, 53]);
     let accent = style.colour("accent").unwrap_or([69, 182, 168]);

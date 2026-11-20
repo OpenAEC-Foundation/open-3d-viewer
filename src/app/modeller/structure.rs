@@ -489,6 +489,39 @@ mod tests {
     }
 
     #[test]
+    fn pile_legend_renvooi_edits_print_and_survive_ifcx_reopening() {
+        use crate::app::{App, Message};
+        use crate::document::PileLegendField;
+        use crate::loaders::{load_with, Progress, Source};
+        use std::sync::Arc;
+        let mut app = App::default();
+        app.new_model("Foundation");
+        let level = app.document.levels()[0].path.clone();
+        let grid = app.modeller.model.grid;
+        let mut e = Element::in_project(&grid, "Paal", Some(level.clone()), Shape::Linear(LinearDef {
+            start: DVec3::new(0.0,0.0,-3.0), end: DVec3::new(0.0,0.0,1.0),
+            profile: ProfileDef::Rectangle { width: 0.29,height: 0.29 }, roll: 0.0,
+        }));
+        e.pile_number = Some(0);
+        app.modeller.model.add(e).unwrap();
+        app.show_modelled();
+        let path = app.add_pile_legend(&level,"Renvooi").unwrap();
+        let plan = app.document.plan(&path).unwrap();
+        let key = plan.presentation["legend"]["rows"][0]["key"].as_str().unwrap().to_string();
+        assert!(plan.tags.iter().any(|n| n.text == "Rapport: —"));
+        for (field,value) in [(PileLegendField::Report,"Advies R-12"),(PileLegendField::Datum,"+0,20 m"),(PileLegendField::Cutoff(key),"+0,85 m NAP")] {
+            let _ = app.update(Message::PileLegendField(path.as_str().into(),field,value.into()));
+        }
+        let bytes = crate::export::to_bytes(app.model.as_ref().unwrap(),&app.document_now(),"fundering.ifcx").unwrap();
+        let mut back = App::default();
+        back.set_model(Arc::new(load_with(&Source::Bytes{name:"fundering.ifcx".into(),data:Arc::new(bytes)},&Progress::default()).unwrap()));
+        let plan = back.document.plan(&path).unwrap();
+        for expected in ["290 × 290","Rapport: Advies R-12","Peil t.o.v. NAP: +0,20 m","+0,85 m NAP","-3,00","+1,00"] {
+            assert!(plan.tags.iter().any(|n| n.text == expected), "{expected}");
+        }
+    }
+
+    #[test]
     fn the_pile_schedule_follows_the_model() {
         use crate::app::modeller::ModelTool;
         use crate::app::placement::{PlaceField, PlaceMessage};

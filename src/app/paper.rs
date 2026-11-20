@@ -147,8 +147,7 @@ impl App {
     }
 
     pub(super) fn place_pile_legend(&mut self, sheet: &str, name: &str) {
-        let Some(target) = self.document.sheet(sheet) else { return };
-        let centre = target.paper.map(|side| side / 2.0);
+        if self.document.sheet(sheet).is_none() { return; }
         // The legend covers the whole project, so its placed views can share one definition.
         let existing = self.document.plans().iter()
             .find(|v| v.drawing.as_deref() == Some("pile-schedule"))
@@ -157,9 +156,19 @@ impl App {
             let level = self.document.levels().first()?.path.clone();
             self.add_pile_legend(&level, name)
         });
-        if let Some(index) = path.and_then(|path| self.place_view_at(sheet, &path, centre)) {
+        let Some(path) = path else { return };
+        let Some(centre) = self.pile_legend_centre(sheet, &path) else { return };
+        if let Some(index) = self.place_view_at(sheet, &path, centre) {
             self.pick_on_sheet(Some(SheetPick::View(index)));
         }
+    }
+
+    /// Centre for placing a legend with 15 mm between its actual crop and the upper and right sheet edges.
+    pub(super) fn pile_legend_centre(&self, sheet: &str, legend: &str) -> Option<[f64; 2]> {
+        let paper = self.document.sheet(sheet)?.paper;
+        let plan = self.document.plan(legend)?;
+        let (lo, hi) = plan.crop?;
+        Some(std::array::from_fn(|i| paper[i] - 0.015 - (hi[i] - lo[i]) / (2.0 * plan.scale)))
     }
 
     /// The offset of a cropped drawing's visible centre from its placement anchor, in model metres.

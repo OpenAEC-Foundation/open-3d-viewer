@@ -94,6 +94,28 @@ impl App {
         let field = |k: &str, f: ViewField| field_row(p, k, self.view_field_text(&path, f), f);
         let mut rows = column![field(l.text("Naam", "Name"), ViewField::Name)].spacing(5);
         if let Some(plan) = self.document.plan(&path) {
+            if plan.drawing.as_deref() == Some("pile-schedule") {
+                use crate::document::PileLegendField;
+                let legend = &plan.presentation["legend"];
+                let edit = |name: String, value: &str, field: PileLegendField| -> Element<'static, Message> {
+                    let key: std::sync::Arc<str> = path.as_str().into();
+                    iced::widget::row![
+                        text(name).size(12).color(p.text_secondary).width(Length::FillPortion(2)),
+                        text_input("", value).size(12).padding([2,6]).width(Length::FillPortion(3))
+                            .on_input(move |s| Message::PileLegendField(key.clone(), field.clone(), s))
+                    ].align_y(Center).spacing(8).into()
+                };
+                rows = rows.push(edit(l.text("Rapport", "Report").into(), legend["report"].as_str().unwrap_or(""), PileLegendField::Report))
+                    .push(edit(l.text("Peil t.o.v. NAP", "Datum relative to NAP").into(), legend["datum"].as_str().unwrap_or(""), PileLegendField::Datum));
+                for entry in legend["rows"].as_array().into_iter().flatten() {
+                    let Some(key) = entry["key"].as_str() else { continue };
+                    let kind = entry["type"].as_str().unwrap_or("");
+                    let toe = entry["toe"].as_f64().unwrap_or_default();
+                    let caption = format!("{} · {} ({:+.2} m)", l.text("Afhakhoogte", "Cut-off level"), kind, toe);
+                    rows = rows.push(edit(caption, legend["cutoffs"][key].as_str().unwrap_or(""), PileLegendField::Cutoff(key.to_owned())));
+                }
+                return Some(rows.into());
+            }
             let level = self.document.level(&plan.level).map(|lv| lv.name.clone()).unwrap_or_default();
             let kind = match plan.kind {
                 crate::document::PlanKind::Floor => l.text("Plattegrond", "Floor plan"),

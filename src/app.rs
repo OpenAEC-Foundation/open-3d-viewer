@@ -589,6 +589,7 @@ pub enum Message {
     LayersQuery(String),
     /// Typed in a field of the right pane's View section.
     ViewField(ViewField, String),
+    PileLegendField(Arc<str>, crate::document::PileLegendField, String),
     /// Enter in a field of the View section: it shows the value in use again.
     ViewFieldDone,
     /// The kind of drawing picked for the view the right pane shows: a key of the drawing
@@ -2488,6 +2489,9 @@ impl App {
             Message::SideTab(tab) => self.side_tab = tab,
             Message::LayersQuery(q) => self.layers_query = q,
             Message::ViewField(field, typed) => self.type_view_field(field, typed),
+            Message::PileLegendField(path, field, value) => {
+                if self.document.set_pile_legend_field(&path, &field, value) { self.tag_plans(); }
+            }
             Message::ViewFieldDone => self.view_typing = None,
             Message::ViewKind(key) => self.set_view_kind(&key),
             Message::ViewScale(scale) => self.set_view_scale(scale),

@@ -220,8 +220,9 @@ pub(in crate::app::modeller) fn schedule_table(
         "Lengte [m]",
         if nap { "Punt [m NAP]" } else { "Punt [m]" },
         if nap { "Kop [m NAP]" } else { "Kop [m]" },
+        "Afhakhoogte",
     ];
-    let mut width = [20.0_f64, 17.0, 25.0, 17.0, 23.0, 25.0, 25.0];
+    let mut width = [20.0_f64, 15.0, 22.0, 12.0, 17.0, 22.0, 22.0, 25.0];
     let mut cells = Vec::new();
     let mut rows = Vec::new();
     for (g, r) in &groups {
@@ -229,6 +230,14 @@ pub(in crate::app::modeller) fn schedule_table(
             g.kind.clone()
         } else {
             format!("{} {}", g.kind, g.grade)
+        };
+        // Occurrence IDs and counts can change while the specification for this group stays valid.
+        let key = json!([g.kind, g.profile, g.grade, g.length, g.toe, g.head]).to_string();
+        let value = |v: &Value| {
+            v.as_str()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("—")
+                .to_owned()
         };
         let values = [
             kind,
@@ -238,12 +247,13 @@ pub(in crate::app::modeller) fn schedule_table(
             metres(g.length, false),
             metres(g.toe, true),
             metres(g.head, true),
+            value(&legend["cutoffs"][key.as_str()]),
         ];
         for (col, value) in values.iter().enumerate() {
             width[col] = width[col].max(f64::from(face.measure(value, 25.0)) / 10.0 + 4.0);
         }
         cells.push(values);
-        rows.push(json!({"type":g.kind, "width":r.size[0], "height":r.size[1], "count":r.count,
+        rows.push(json!({"type":g.kind, "key":key, "width":r.size[0], "height":r.size[1], "count":r.count,
             "length":g.length as f64/1000.0, "toe":g.toe as f64/1000.0, "head":g.head as f64/1000.0}));
     }
     let mut x = vec![0.0];
@@ -251,12 +261,29 @@ pub(in crate::app::modeller) fn schedule_table(
         x.push(x.last().unwrap() + w);
     }
     let table_width = *x.last().unwrap();
-    notes.push(note(1.0, 9.0, title.to_owned(), 0.004));
+    // The top-right corner stays free for a diagonal sheet status mark.
+    let title_width = if office {
+        table_width - 45.0
+    } else {
+        table_width
+    };
+    let title_size = if office { 0.0048 } else { 0.004 };
+    let title_lines = face.wrap(
+        title,
+        (title_size * 10000.0) as f32,
+        (title_width * 10.0) as f32,
+    );
+    for (i, text) in title_lines.lines().enumerate() {
+        notes.push(note(1.0, 9.0 + 6.5 * i as f64, text.into(), title_size));
+    }
+    let header_top = if office { 24.0_f64 } else { 13.5_f64 }
+        .max(9.0 + 6.5 * title_lines.lines().count() as f64);
+    let offset = header_top - 13.5;
     for (i, text) in headers.iter().enumerate() {
-        notes.push(note(x[i] + 1.5, 19.0, (*text).into(), NOTE_HEIGHT));
+        notes.push(note(x[i] + 1.5, offset + 19.0, (*text).into(), NOTE_HEIGHT));
     }
     for (i, (r, values)) in groups.values().zip(cells).enumerate() {
-        let y = 27.5 + 8.5 * i as f64;
+        let y = offset + 27.5 + 8.5 * i as f64;
         let centre = DVec2::new(
             left + (x[1] + width[1] / 2.0) * unit,
             top - (y - 1.0) * unit,
@@ -275,18 +302,34 @@ pub(in crate::app::modeller) fn schedule_table(
     if office {
         plan.office_symbol_lines = lines.len();
     }
-    let table_bottom = 22.0 + groups.len() as f64 * 8.5;
+    let table_bottom = offset + 22.0 + groups.len() as f64 * 8.5;
     let at = |x: f64, y: f64| [left + x * unit, top - y * unit];
     for column in x {
-        lines.push([at(column, 13.5), at(column, table_bottom)]);
+        lines.push([at(column, header_top), at(column, table_bottom)]);
     }
-    lines.push([at(0.0, 13.5), at(table_width, 13.5)]);
+    lines.push([at(0.0, header_top), at(table_width, header_top)]);
     for r in 0..=groups.len() {
-        let y = 22.0 + r as f64 * 8.5;
+        let y = offset + 22.0 + r as f64 * 8.5;
         lines.push([at(0.0, y), at(table_width, y)]);
     }
 
-    let bottom = top - table_bottom * unit;
+    let mut last_line = table_bottom + 1.0;
+    for (label, key) in [("Rapport", "report"), ("Peil t.o.v. NAP", "datum")] {
+        let value = legend[key]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("—");
+        let wrapped = face.wrap(
+            &format!("{label}: {value}"),
+            25.0,
+            (table_width * 10.0 - 20.0) as f32,
+        );
+        for text in wrapped.lines() {
+            last_line += 4.2;
+            notes.push(note(1.0, last_line, text.into(), NOTE_HEIGHT));
+        }
+    }
+    let bottom = top - last_line * unit;
     if let Some(previous) = legend["bodyBottom"].as_f64() {
         for n in &mut plan.notes {
             n.at[1] += bottom - previous;

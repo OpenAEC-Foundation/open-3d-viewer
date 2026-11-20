@@ -346,18 +346,41 @@ mod tests {
         let before = issued(&app);
         let (&highest, _) = before.last_key_value().unwrap();
         let (&first_number, &first_id) = before.first_key_value().unwrap();
+        let placements = |app: &App, id: ElementId| -> Vec<[f64; 2]> {
+            let mut positions = Vec::new();
+            for p in app.document.plans() {
+                for &(i, owner, _) in &p.pile_tags {
+                    if owner == id.0 { positions.push(p.tags[i].at); }
+                }
+                for d in &p.dimensions {
+                    for (anchor, point) in d.anchors.iter().zip([d.from, d.to]) {
+                        if anchor.is_some_and(|a| a.element == id.0) { positions.push(point); }
+                    }
+                }
+            }
+            positions
+        };
+        let placed = placements(&app, first_id);
+        assert!(placed.len() >= 3, "linked plan label, detail label and dimension endpoint");
         let model = &mut app.modeller.model;
         let mut moved = model.get(first_id).unwrap().clone();
         moved.translate(&model.grid, DVec3::new(0.125, -0.25, 0.0));
         model.replace(moved.clone()).unwrap();
         let added = model.add(moved.clone()).unwrap();
         app.show_modelled();
+        let after = placements(&app, first_id);
+        assert_eq!(after.len(), placed.len());
+        for (before, after) in placed.iter().zip(&after) {
+            assert!((after[0] - before[0] - 0.125).abs() < 1e-6);
+            assert!((after[1] - before[1] + 0.25).abs() < 1e-6);
+        }
         assert_eq!(issued(&app)[&first_number], first_id);
         assert_eq!(issued(&app)[&(highest + 1)], added);
         app.modeller.model.remove(added);
         app.show_modelled();
         let mut back = open(save(&app, "reopened.ifcx"));
         assert_eq!(issued(&back), before);
+        assert_eq!(placements(&back, first_id), after);
         assert_eq!(back.modeller.model.get(first_id).unwrap(), &moved);
         let inserted = back.modeller.model.add(moved).unwrap();
         back.show_modelled();

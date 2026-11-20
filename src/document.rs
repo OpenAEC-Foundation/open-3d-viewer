@@ -817,6 +817,15 @@ pub struct Note {
     pub level: bool,
 }
 
+impl Note {
+    /// Native paper text uses the authored em height, including notes without a named family.
+    pub(crate) fn paper_face(&self) -> crate::typeface::Face {
+        let mut face = self.face.clone();
+        if face.family.is_empty() { face.family = "Segoe UI".into(); }
+        face
+    }
+}
+
 /// What a level mark says of height `z` (metres): "+2.700", and "+0.000" at zero.
 pub fn level_text(z: f64) -> String {
     let z = if z.abs() < 0.0005 { 0.0 } else { z };
@@ -879,6 +888,16 @@ pub struct PlacedView {
     pub scale: f64,
     /// Overrides the view's default name and scale caption on this placement only.
     pub show_title: Option<bool>,
+}
+
+impl PlacedView {
+    pub(crate) fn to_paper(&self, origin: [f64; 2], point: [f64; 2]) -> [f64; 2] {
+        [self.at[0] + (point[0] - origin[0]) / self.scale, self.at[1] + (point[1] - origin[1]) / self.scale]
+    }
+
+    pub(crate) fn to_model(&self, origin: [f64; 2], point: [f64; 2]) -> [f64; 2] {
+        [origin[0] + (point[0] - self.at[0]) * self.scale, origin[1] + (point[1] - self.at[1]) * self.scale]
+    }
 }
 
 /// Why a level was not added.

@@ -580,8 +580,8 @@ impl Drawing2d {
                 }
                 at = [at[0] + h * 0.8, at[1] + h * 0.1];
             }
-            let family = (!n.face.family.is_empty()).then(|| n.face.family.clone());
-            let height = if family.is_some() { n.size } else { rules.text };
+            let family = Some(n.paper_face().family);
+            let height = n.size;
             self.texts.push(Text2d { family, bold: n.face.bold, color: n.face.color, pen: Pen::Text, at, height: height * unit, text: n.text.clone(), align, angle: n.angle });
         }
     }
@@ -713,7 +713,7 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
         let (dimensions, notes, crop) = marks(doc, &v.plan);
         let extent = c.as_ref().and_then(|c| c.extent);
         let middle = doc.view_origin(&v.plan).or_else(|| extent.map(|(lo, hi)| [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0])).unwrap_or_default();
-        let to = |q: [f64; 2]| [v.at[0] + (q[0] - middle[0]) / v.scale, v.at[1] + (q[1] - middle[1]) / v.scale];
+        let to = |q: [f64; 2]| v.to_paper(middle, q);
         if let Some(photo) = doc.plan(&v.plan).and_then(|p| p.orthophoto.as_ref()) { d.images.extend(photo.image.placed(crop, &to)); }
         let (lo, hi) = match (crop, extent) {
             (Some((lo, hi)), _) => (to(lo), to(hi)),

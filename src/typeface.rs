@@ -111,6 +111,19 @@ impl Face {
         }
     }
 
+    /// Distance from the baseline of the first line to the bottom of its canvas paragraph.
+    pub(crate) fn baseline_to_bottom(&self, content: &str, size: f32) -> f32 {
+        use iced::advanced::text::Paragraph as _;
+        let defaults = canvas::Text::default();
+        let paragraph = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
+            content, bounds: Size::INFINITE, size: iced::Pixels(size),
+            line_height: defaults.line_height, font: self.font(), align_x: defaults.align_x,
+            align_y: alignment::Vertical::Bottom, shaping: defaults.shaping,
+            wrapping: iced::widget::text::Wrapping::None,
+        });
+        paragraph.buffer().layout_runs().next().map_or(0., |line| paragraph.min_bounds().height - line.line_y)
+    }
+
     /// How wide `text` is at a letter size of `size`: its widest line.
     pub fn measure(&self, text: &str, size: f32) -> f32 {
         use iced::advanced::text::Paragraph as _;

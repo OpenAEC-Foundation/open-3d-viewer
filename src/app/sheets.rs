@@ -157,15 +157,7 @@ impl App {
                     cut: self.cuts.get(path).cloned(),
                     crop,
                     dimensions: dimensions.to_vec(),
-                    notes: {
-                        let default_height = self.view_rules(path).text;
-                        self.document.view_notes(path).unwrap_or(&[]).iter().chain(self.document.view_tags(path)).cloned().map(|mut note| {
-                            if note.face.family.is_empty() {
-                                note.size = default_height;
-                            }
-                            note
-                        }).collect()
-                    },
+                    notes: self.document.view_notes(path).unwrap_or(&[]).iter().chain(self.document.view_tags(path)).cloned().collect(),
                     lines: self.document.view_lines(path).iter().chain(self.document.view_symbols(path)).copied().collect(),
                     fills: self.document.view_fills(path).cloned().collect(),
                 },
@@ -806,7 +798,7 @@ impl canvas::Program<Message> for SheetDrawing {
                             for note in notes.iter().filter(|n| here(n.at)) {
                                 let (at, size) = (on(note.at), note.size as f32 * paper);
                                 if size >= SMALLEST && at.x > -size * 60.0 && at.x < bounds.width + size * 60.0 && at.y > -size * 8.0 && at.y < bounds.height + size * 8.0 {
-                                    super::marks::draw_note_in(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32 - turned, &note.face);
+                                    super::marks::draw_paper_note(&mut frame, at, note, size, ink, note.angle as f32 - turned);
                                 }
                             }
                         }

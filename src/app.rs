@@ -299,6 +299,8 @@ pub struct App {
     /// Sheets of the document open in a document tab (paths), and the one shown.
     pub open_doc_sheets: Vec<String>,
     pub active_doc_sheet: Option<String>,
+    sheet_zoom: f64,
+    sheet_pan: [f64; 2],
     /// The cut of every floor plan placed on a sheet, by the plan's path.
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
     /// The drawings laid on the levels.
@@ -574,6 +576,7 @@ pub enum Message {
     Preset(ViewPreset),
     Ortho(bool),
     Fit,
+    NavigateSheet { zoom: f64, pan: [f64; 2] },
     ToggleLayersPanel,
     TogglePropertiesPanel,
     Layer(usize, bool),
@@ -1114,6 +1117,8 @@ impl Default for App {
             model_view: None,
             open_doc_sheets: Vec::new(),
             active_doc_sheet: None,
+            sheet_zoom: 1.0,
+            sheet_pan: [0.; 2],
             cuts: Default::default(),
             underlays: Vec::new(),
             overlay_lines: Arc::new(Vec::new()),
@@ -1535,6 +1540,11 @@ impl App {
     }
 
     pub fn fit(&mut self) {
+        if self.active_doc_sheet.is_some() {
+            self.sheet_zoom = 1.;
+            self.sheet_pan = [0.; 2];
+            return;
+        }
         self.anim = None;
         self.camera = self.fitted(self.camera);
     }
@@ -2423,6 +2433,7 @@ impl App {
             },
             Message::Ortho(o) => self.camera.ortho = o,
             Message::Fit => self.fit(),
+            Message::NavigateSheet { zoom, pan } => { self.sheet_zoom = zoom; self.sheet_pan = pan; }
             Message::Walk { forward, right, up, fast } => self.walk(forward, right, up, fast),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
             Message::TogglePropertiesPanel => self.show_properties = !self.show_properties,
@@ -4667,7 +4678,11 @@ impl App {
             let shown = if self.mode == RenderMode::SolidEdges { RenderMode::Solid } else { self.mode };
             let picked = styles.iter().find(|s| s.0 == shown).copied();
             let pick = iced::widget::pick_list(styles, picked, |s: Look| Message::Mode(s.0)).text_size(11).padding([2, 6]).width(STYLE_WIDTH);
-            container(pick)
+            let mut controls = iced::widget::column![pick].spacing(3).align_x(iced::Alignment::End);
+            if let Some(scale) = self.shown_view().and_then(|path| self.document.view_scale(path)) {
+                controls = controls.push(text(format!("1:{scale}")).size(12).color(p.text));
+            }
+            container(controls)
                 .padding(iced::Padding { top: STYLE_TOP, right: CUBE_RIGHT - STYLE_WIDTH / 2.0, ..iced::Padding::ZERO })
                 .align_right(Fill)
                 .align_top(Fill)

@@ -1474,6 +1474,14 @@ pub(super) fn draw_note(frame: &mut Frame, at: Point, wording: &str, size: f32, 
 
 /// A text as [`draw_note`] draws it, set in the typeface its file names.
 #[allow(clippy::too_many_arguments)]
+pub(super) fn draw_paper_note(frame: &mut Frame, at: Point, note: &crate::document::Note, size: f32, color: Color, angle: f32) {
+    let face = note.paper_face();
+    let descent = face.baseline_to_bottom(&note.text, size);
+    let (sin, cos) = angle.sin_cos();
+    let bottom = Point::new(at.x + sin * descent, at.y + cos * descent);
+    draw_note_in(frame, bottom, &note.text, size, color, note.align, angle, &face);
+}
+
 pub(super) fn draw_note_in(frame: &mut Frame, at: Point, wording: &str, size: f32, color: Color, align: Align, angle: f32, face: &crate::typeface::Face) {
     let align_x = match align {
         Align::Left => alignment::Horizontal::Left,

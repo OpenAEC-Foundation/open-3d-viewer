@@ -61,6 +61,8 @@ impl App {
         self.ifc.shown = false;
         self.docs.shown = false;
         if self.active_doc_sheet.as_deref() != Some(path) {
+            self.sheet_zoom = 1.;
+            self.sheet_pan = [0.; 2];
             self.pick_on_sheet(None);
         }
         self.active_doc_sheet = Some(path.to_string());
@@ -485,6 +487,8 @@ impl App {
             Some((v.clone(), name, self.cuts.get(&**v).and_then(|c| c.extent)))
         });
         Some(PaperDrawing {
+            zoom: self.sheet_zoom,
+            pan: self.sheet_pan,
             block: crate::title_block::title_block(&self.document, sheet, &self.house),
             sheet: sheet.clone(),
             styles: self.document.dimension_styles().to_vec(),
@@ -515,10 +519,15 @@ impl App {
         let images: Vec<_> = drawing.placed.iter().enumerate().filter_map(|(i, placed)| {
             placed.image.as_ref()?.placed(None, |q| drawing.to_paper(i, q))
         }).collect();
-        if images.is_empty() { return Some(canvas_widget(drawing).width(Fill).height(Fill).into()); }
+        let fit_button = || container(button(text(l.text("Passend", "Fit sheet")).size(11)).padding([3, 7]).on_press(Message::Fit))
+            .padding(8).align_right(Fill).align_top(Fill);
+        if images.is_empty() {
+            return Some(iced::widget::stack![canvas_widget(drawing).width(Fill).height(Fill), fit_button()].into());
+        }
         let paper = drawing.sheet.paper;
+        let (zoom, pan) = (drawing.zoom, drawing.pan);
         let background = crate::raster::Backdrop(move |frame: &mut Frame, bounds: Rectangle| {
-            let fit = Fit::of(paper, bounds.size());
+            let fit = Fit::of(paper, bounds.size()).navigated(bounds.size(), zoom, pan);
             let at = fit.point([0.0, paper[1]]);
             let end = fit.point([paper[0], 0.0]);
             let size = Size::new(end.x - at.x, end.y - at.y);
@@ -526,7 +535,7 @@ impl App {
             frame.fill_rectangle(at, size, if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE });
             for image in &images { image.draw(frame, |q| Some(fit.point(q))); }
         });
-        Some(iced::widget::stack![canvas_widget(background).width(Fill).height(Fill), canvas_widget(drawing).width(Fill).height(Fill)].into())
+        Some(iced::widget::stack![canvas_widget(background).width(Fill).height(Fill), canvas_widget(drawing).width(Fill).height(Fill), fit_button()].into())
     }
 
     /// The Sheet section of the right pane while a sheet is shown: its paper, its arranging, its
@@ -703,6 +712,8 @@ enum Side {
 }
 
 struct PaperDrawing {
+    zoom: f64,
+    pan: [f64; 2],
     block: crate::title_block::TitleBlock,
     styles: Vec<crate::document::DimensionStyle>,
     sheet: Sheet,
@@ -741,6 +752,14 @@ impl Fit {
         let left = (size.width as f64 - paper[0] * scale) / 2.0;
         let top = (size.height as f64 - paper[1] * scale) / 2.0 + paper[1] * scale;
         Fit { scale, left, top }
+    }
+
+    fn navigated(mut self, size: Size, zoom: f64, pan: [f64; 2]) -> Self {
+        let (cx,cy) = (f64::from(size.width)/2., f64::from(size.height)/2.);
+        self.left = cx + (self.left-cx)*zoom + pan[0];
+        self.top = cy + (self.top-cy)*zoom + pan[1];
+        self.scale *= zoom;
+        self
     }
 
     fn point(&self, p: [f64; 2]) -> Point {
@@ -783,14 +802,14 @@ impl PaperDrawing {
     fn to_paper(&self, i: usize, q: [f64; 2]) -> [f64; 2] {
         let view = &self.sheet.views[i];
         let middle = self.middle(i);
-        [view.at[0] + (q[0] - middle[0]) / view.scale, view.at[1] + (q[1] - middle[1]) / view.scale]
+        view.to_paper(middle, q)
     }
 
     /// A paper point in the model of placed view `i`.
     fn to_model(&self, i: usize, at: [f64; 2]) -> [f64; 2] {
         let view = &self.sheet.views[i];
         let middle = self.middle(i);
-        [middle[0] + (at[0] - view.at[0]) * view.scale, middle[1] + (at[1] - view.at[1]) * view.scale]
+        view.to_model(middle, at)
     }
 
     /// The crop handles of placed view `i`: the middles of its frame's sides (paper).
@@ -867,7 +886,7 @@ impl PaperDrawing {
 
     /// The text's paper capitals in canvas font pixels.
     fn note_size(fit: &Fit, note: &crate::document::Note) -> f32 {
-        (note.size * fit.scale / if note.face.family.is_empty() { 0.72 } else { 1.0 }) as f32
+        (note.size * fit.scale) as f32
     }
 
     /// Where text `k` of placed view `i` is on the canvas.
@@ -875,8 +894,13 @@ impl PaperDrawing {
         let note = self.placed.get(i)?.notes.get(k)?;
         let size = Self::note_size(fit, note);
         let at = fit.point(self.to_paper(i, note.at));
-        let width = note.text.chars().count() as f32 * size * 0.56;
-        Some(Rectangle::new(Point::new(at.x, at.y - size * 1.2), Size::new(width, size * 1.2)))
+        let width = note.paper_face().measure(&note.text, size);
+        let x = match note.align { crate::document::Align::Left => 0., crate::document::Align::Center => -width/2., crate::document::Align::Right => -width };
+        let (sin, cos) = (note.angle as f32).sin_cos();
+        let points = [[x,0.], [x+width,0.], [x,-size], [x+width,-size]].map(|[x,y]| Point::new(at.x+x*cos+y*sin, at.y-x*sin+y*cos));
+        let (mut lo, mut hi) = (points[0], points[0]);
+        for q in points { lo.x=lo.x.min(q.x); lo.y=lo.y.min(q.y); hi.x=hi.x.max(q.x); hi.y=hi.y.max(q.y); }
+        Some(Rectangle::new(lo, Size::new(hi.x-lo.x, hi.y-lo.y)))
     }
 
     /// The text under `pointer`, the topmost view first.
@@ -900,6 +924,7 @@ impl PaperDrawing {
 /// the point the pointer snaps to now.
 #[derive(Default)]
 struct PaperState {
+    panning: Option<(Point, [f64; 2])>,
     note_drag: Option<(usize, usize, [f64; 2])>,
     hover: Option<usize>,
     drag: Option<(usize, [f64; 2])>,
@@ -915,7 +940,7 @@ impl canvas::Program<Message> for PaperDrawing {
     type State = PaperState;
 
     fn update(&self, state: &mut PaperState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
-        let fit = Fit::of(self.sheet.paper, bounds.size());
+        let fit = Fit::of(self.sheet.paper, bounds.size()).navigated(bounds.size(), self.zoom, self.pan);
         if !self.busy() {
             state.first = None;
             state.aim = None;
@@ -925,6 +950,29 @@ impl canvas::Program<Message> for PaperDrawing {
             state.carry = None;
         }
         match event {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let at = cursor.position_in(bounds)?;
+                let steps = match delta { mouse::ScrollDelta::Lines { y, .. } => *y, mouse::ScrollDelta::Pixels { y, .. } => *y/50. };
+                let zoom = (self.zoom * 1.2_f64.powf(f64::from(steps))).clamp(0.2, 400.);
+                let anchor = fit.paper(at);
+                let next = Fit::of(self.sheet.paper, bounds.size()).navigated(bounds.size(), zoom, [0.;2]).point(anchor);
+                Some(canvas::Action::publish(Message::NavigateSheet { zoom, pan: [f64::from(at.x-next.x), f64::from(at.y-next.y)] }).and_capture())
+            }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) => {
+                state.panning = Some((cursor.position_in(bounds)?, self.pan));
+                Some(canvas::Action::request_redraw().and_capture())
+            }
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle)) => {
+                state.panning.take().map(|_| canvas::Action::request_redraw().and_capture())
+            }
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) if state.panning.is_some() => {
+                let (start, original) = state.panning?;
+                let at = cursor.position_from(bounds.position())?;
+                Some(canvas::Action::publish(Message::NavigateSheet { zoom: self.zoom, pan: [original[0]+f64::from(at.x-start.x), original[1]+f64::from(at.y-start.y)] }).and_capture())
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Character(c), .. }) if c.eq_ignore_ascii_case("f") && cursor.is_over(bounds) => {
+                Some(canvas::Action::publish(Message::Fit).and_capture())
+            }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) if self.carrying.is_some() => {
                 state.carry = cursor.position_in(bounds);
                 Some(canvas::Action::request_redraw())
@@ -1038,7 +1086,7 @@ impl canvas::Program<Message> for PaperDrawing {
 
     fn draw(&self, state: &PaperState, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
         let p = self.palette;
-        let fit = Fit::of(self.sheet.paper, bounds.size());
+        let fit = Fit::of(self.sheet.paper, bounds.size()).navigated(bounds.size(), self.zoom, self.pan);
         let mut frame = Frame::new(renderer, bounds.size());
         let label = |frame: &mut Frame, content: String, position: Point, size: f32, color: Color, align: alignment::Horizontal| {
             frame.fill_text(canvas::Text {
@@ -1216,7 +1264,7 @@ impl canvas::Program<Message> for PaperDrawing {
                 let picked = self.pick == Some(SheetPick::Note(i, k));
                 let at = fit.point(self.to_paper(i, note.at));
                 let at = if note.level { super::marks::draw_level_mark(&mut frame, at, Self::note_size(&fit, note), if picked { p.accent } else { ink }) } else { at };
-                super::marks::draw_note_in(&mut frame, at, &note.text, Self::note_size(&fit, note), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
+                super::marks::draw_paper_note(&mut frame, at, note, Self::note_size(&fit, note), if picked { p.accent } else { ink }, note.angle as f32);
                 if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
                 }
@@ -1279,7 +1327,8 @@ impl canvas::Program<Message> for PaperDrawing {
     }
 
     fn mouse_interaction(&self, state: &PaperState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
-        let fit = Fit::of(self.sheet.paper, bounds.size());
+        let fit = Fit::of(self.sheet.paper, bounds.size()).navigated(bounds.size(), self.zoom, self.pan);
+        if state.panning.is_some() { return mouse::Interaction::Grabbing; }
         let handle = state.crop.map(|(_, side)| side).or_else(|| cursor.position_in(bounds).and_then(|p| self.handle_at(&fit, p)).map(|(_, side)| side));
         match handle.filter(|_| !self.busy()) {
             Some(Side::Left | Side::Right) => return mouse::Interaction::ResizingHorizontally,
@@ -1635,6 +1684,35 @@ mod tests {
             assert!(drawing.texts.iter().any(|t| t.text == value), "missing {value}: {:?}", drawing.texts.iter().map(|t| &t.text).collect::<Vec<_>>());
             assert!(String::from_utf8_lossy(&pdf).contains(&format!("({value}) Tj")));
         }
+    }
+
+    #[test]
+    fn sheet_wheel_keeps_cursor_anchor_and_panned_click_picks_the_same_view() {
+        let (mut app, _, _, drawing) = sheet_with_plan(false);
+        let mut state = PaperState::default();
+        let base = Fit::of(drawing.sheet.paper, bounds().size());
+        let target = base.point([0.21, 0.1485]);
+        let at = Point::new(target.x - 31., target.y + 23.);
+        let send = |d: &PaperDrawing, state: &mut PaperState, event, at| {
+            canvas::Program::update(d, state, &event, bounds(), mouse::Cursor::Available(at)).unwrap().into_inner().0
+        };
+        let wheel = iced::Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0., y: 3. } });
+        let nav = send(&drawing, &mut state, wheel, at).unwrap();
+        let _ = app.update(nav);
+        let zoomed = base.navigated(bounds().size(), app.sheet_zoom, app.sheet_pan);
+        assert!(zoomed.point(base.paper(at)).distance(at) < 0.001);
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        send(&drawing, &mut state, iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)), at);
+        let end = Point::new(at.x+47., at.y-21.);
+        let nav = send(&drawing, &mut state, iced::Event::Mouse(mouse::Event::CursorMoved { position: end }), end).unwrap();
+        let _ = app.update(nav);
+        send(&drawing, &mut state, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle)), end);
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let shown = base.navigated(bounds().size(), app.sheet_zoom, app.sheet_pan);
+        let click = shown.point(base.paper(target));
+        assert!(matches!(press_at(&drawing, &mut state, click), Some(Message::PickOnSheet(Some(SheetPick::View(0))))));
+        let _ = app.update(Message::Fit);
+        assert_eq!((app.sheet_zoom, app.sheet_pan), (1., [0.;2]));
     }
 
     #[test]

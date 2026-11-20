@@ -55,6 +55,14 @@ fn adopt_legend(plan: &mut PlanView) {
     let legend = &mut plan.presentation["legend"];
     let rows = legend["rows"].as_array().map_or(0, Vec::len);
     let count = 8 + 6 * rows;
+    legend["typeAliases"] = json!(
+        legend["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row["type"].as_str())
+            .collect::<Vec<_>>()
+    );
     if plan.notes.len() >= count
         && plan.notes.get(1).is_some_and(|n| n.text == "Type")
         && plan.notes.iter().take(8).any(|n| n.text == "Aantal")
@@ -62,6 +70,22 @@ fn adopt_legend(plan: &mut PlanView) {
         legend["title"] = json!(plan.notes[0].text);
         legend["nap"] = json!(plan.notes.iter().take(8).any(|n| n.text.contains("NAP")));
         plan.notes.drain(..count);
+        for n in &mut plan.notes {
+            let Some((range, explanation)) = n.text.split_once('.') else {
+                continue;
+            };
+            let words: Vec<_> = range.split_whitespace().collect();
+            if let ["Paalnummers", first, "t/m", last] = words.as_slice() {
+                if first.parse::<u64>().is_ok() && last.parse::<u64>().is_ok() {
+                    let rest = explanation.trim();
+                    n.text = if rest.is_empty() {
+                        "Paalnummers".to_owned()
+                    } else {
+                        rest.to_owned()
+                    };
+                }
+            }
+        }
     }
     plan.lines.clear();
     plan.shapes.clear();
@@ -131,7 +155,7 @@ pub(in crate::app::modeller) fn schedule_table(
                 .iter()
                 .map(String::as_str)
                 .filter(|kind| {
-                    e.name.strip_prefix(kind).is_some_and(|rest| {
+                    e.name.strip_prefix(*kind).is_some_and(|rest| {
                         rest.is_empty() || rest.starts_with(char::is_whitespace)
                     })
                 })
@@ -139,8 +163,8 @@ pub(in crate::app::modeller) fn schedule_table(
                 .unwrap_or_else(|| {
                     e.pile_mark
                         .as_deref()
-                        .and_then(|mark| e.name.split_once(&format!(" {mark}")))
-                        .map_or(e.name.as_str(), |(kind, _)| kind)
+                        .and_then(|mark| e.name.split_once(format!(" {mark}").as_str()))
+                        .map_or(name.as_str(), |(kind, _)| kind)
                 })
                 .to_owned()
         };

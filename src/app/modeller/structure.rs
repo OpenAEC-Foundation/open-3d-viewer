@@ -410,7 +410,7 @@ mod tests {
             p.layers.insert("IfcColumn".into(), false);
             p.lines.push([[0.0, 0.0], [10.0, 0.0]]);
             for (i, text) in ["Legenda", "Type", "Symbool", "Schacht [mm]", "Aantal", "Lengte [m]", "Punt [m NAP]", "Kop [m NAP]",
-                "T1", "300 × 300", "2", "4,00", "+0,50", "+4,50", "Toelichting"].into_iter().enumerate() {
+                "T1", "300 × 300", "2", "4,00", "+0,50", "+4,50", "Paalnummers 01 t/m 02. Toelichting"].into_iter().enumerate() {
                 p.notes.push(Note { at: [1000.0, 1000.0-i as f64*0.4], text: text.into(), size: NOTE_HEIGHT, angle: 0.0,
                     align: Align::Left, level: false, face: Default::default() });
             }
@@ -458,6 +458,34 @@ mod tests {
         assert_eq!(restored.notes, p.notes);
         assert_eq!(back.document.sheet(&sheet).unwrap().views[0].plan, view);
         assert_eq!(back.modeller.model.get(new).unwrap().pile_number, Some(3));
+    }
+
+    #[test]
+    fn pile_legend_groups_free_profiles_independently_of_object_names_and_fits_every_row() {
+        use crate::app::App;
+        let mut app = App::default();
+        app.new_model("Ground");
+        let level = app.document.levels()[0].path.clone();
+        let grid = app.modeller.model.grid;
+        for (i, length) in [2.0, 2.0, 3.0, 4.0, 5.0].into_iter().enumerate() {
+            let mut pile = Element::in_project(&grid, format!("Paal {i}"), Some(level.clone()), Shape::Linear(LinearDef {
+                start: DVec3::new(i as f64, 0.0, -length), end: DVec3::new(i as f64, 0.0, 0.0),
+                profile: ProfileDef::Circle { diameter: 0.3 }, roll: 0.0,
+            }));
+            pile.pile_number = Some(0);
+            app.modeller.model.add(pile).unwrap();
+        }
+        app.show_modelled();
+        let path = app.add_pile_legend(&level, "Legenda").unwrap();
+        let plan = app.document.plan(&path).unwrap();
+        let rows = plan.presentation["legend"]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!(rows.iter().all(|r| r["type"] == "Ø300"));
+        assert_eq!(rows[0]["count"], 2);
+        let (lo, hi) = plan.crop.unwrap();
+        for [x,y] in plan.symbols.iter().flatten() {
+            assert!((lo[0]..=hi[0]).contains(x) && (lo[1]..=hi[1]).contains(y));
+        }
     }
 
     #[test]

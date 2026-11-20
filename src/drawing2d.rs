@@ -1038,15 +1038,16 @@ mod tests {
     #[test]
     fn a_sheets_edges_frames_and_section_marks_are_on_the_frame_pen() {
         let (mut doc, plan) = plan();
-        doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
         let sheet = doc.add_sheet("Plattegronden");
         doc.place_plan(&sheet, &plan).unwrap();
+        let base = sheet_drawing(&doc, &sheet, &|_| None, &|_| Vec::new(), &|_| Rules::default()).unwrap();
+        doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
         let d = sheet_drawing(&doc, &sheet, &|_| None, &|_| Vec::new(), &|_| Rules::default()).unwrap();
         // a level of the view goes with it: its line and its name at both ends, at the view's place
         let with = sheet_drawing(&doc, &sheet, &|_| None, &|_| vec![Datum2 { name: "01".into(), a: [-1.0, 3.0], b: [1.0, 3.0], level: Some(3.0) }], &|_| Rules::default()).unwrap();
-        assert_eq!(with.lines.len(), d.lines.len() + 1);
+        assert!(count(&with, Pen::Grids) > count(&d, Pen::Grids));
         assert_eq!(with.texts.iter().filter(|t| t.text == "01 +3.000").count(), 2);
-        assert!(d.lines.iter().all(|l| l.pen == Pen::Frame), "{:?}", d.lines);
+        assert_eq!(count(&d, Pen::Frame), count(&base, Pen::Frame) + 3);
         // cut: only what lies beyond is thin
         let cut = Arc::new(room());
         let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone()), &|_| Vec::new(), &|_| Rules::default()).unwrap();

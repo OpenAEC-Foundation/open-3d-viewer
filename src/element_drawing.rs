@@ -109,7 +109,7 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
     let dim = |d: &mut Drawing2d, from: [f64; 2], to: [f64; 2], rows: f64| {
         let value = (to[0] - from[0]).hypot(to[1] - from[1]);
         if value > LINEAR_TOLERANCE {
-            d.dimensions.push(Dim2d { units_per_paper_metre: off / OFFSET, witnesses: [from,to], from, to, value, offset: off * rows, text_height: text, style: crate::document::DimensionStyle::standard() });
+            d.dimensions.push(Dim2d { first_witness: true, units_per_paper_metre: off / OFFSET, witnesses: [from,to], from, to, value, offset: off * rows, text_height: text, style: crate::document::DimensionStyle::standard() });
         }
     };
     let outline = |d: &mut Drawing2d, pen: Pen, m: &Member, lo: f64| {
@@ -318,7 +318,7 @@ fn laying_plan(model: &Model, element: &Element, s: &bim_core::SystemDef, named:
     let dim = |d: &mut Drawing2d, from: [f64; 2], to: [f64; 2], rows: f64| {
         let value = (to[0] - from[0]).hypot(to[1] - from[1]);
         if value > LINEAR_TOLERANCE {
-            d.dimensions.push(Dim2d { units_per_paper_metre: off / OFFSET, witnesses: [from,to], from, to, value, offset: off * rows, text_height: text, style: crate::document::DimensionStyle::standard() });
+            d.dimensions.push(Dim2d { first_witness: true, units_per_paper_metre: off / OFFSET, witnesses: [from,to], from, to, value, offset: off * rows, text_height: text, style: crate::document::DimensionStyle::standard() });
         }
     };
     // over it the seams between its slabs, under it its length, to its left its width

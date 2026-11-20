@@ -788,11 +788,11 @@ impl canvas::Program<Message> for SheetDrawing {
                             let paper = fit.scale;
                             for d in dimensions {
                                 let Some(style) = self.styles.get(d.style).or(self.styles.first()) else { continue };
-                                for (actual, [from,to]) in d.intervals() {
+                                for (i, (actual, [from,to])) in d.intervals().enumerate() {
                                     let (a,b) = (on(from), on(to));
                                     if !here([(from[0]+to[0])/2., (from[1]+to[1])/2.]) || !seen(a,b) { continue; }
                                     let look = super::marks::DimensionLook { offset: paper * d.paper_offset() as f32, paper, size: paper * style.paper_font_size() as f32, style };
-                                    super::marks::draw_interval_px(&mut frame, a, b, actual.map(on), (to[0]-from[0]).hypot(to[1]-from[1]), ink, look);
+                                    super::marks::draw_interval_px(&mut frame, a, b, actual.map(on), i == 0, (to[0]-from[0]).hypot(to[1]-from[1]), ink, look);
                                 }
                             }
                             for note in notes.iter().filter(|n| here(n.at)) {

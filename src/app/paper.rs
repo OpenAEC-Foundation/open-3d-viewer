@@ -1199,10 +1199,10 @@ impl canvas::Program<Message> for PaperDrawing {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
                 let style = &self.styles[d.style.min(self.styles.len() - 1)];
                 let screen = |q| fit.point(self.to_paper(i, q));
-                for (actual, [a,b]) in d.intervals() {
+                for (interval, (actual, [a,b])) in d.intervals().enumerate() {
                     let mut look = dimension_look(&fit, style);
                     look.offset = (fit.scale * d.paper_offset()) as f32;
-                    super::marks::draw_interval_px(&mut frame, screen(a), screen(b), actual.map(screen),
+                    super::marks::draw_interval_px(&mut frame, screen(a), screen(b), actual.map(screen), interval == 0,
                         (b[0] - a[0]).hypot(b[1] - a[1]), color, look);
                 }
             }

@@ -186,6 +186,7 @@ impl Text2d {
 /// in whole millimetres beside it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dim2d {
+    pub first_witness: bool,
     /// The actual reference points from which the witness lines start.
     pub witnesses: [[f64; 2]; 2],
     pub units_per_paper_metre: f64,
@@ -221,14 +222,14 @@ impl Dim2d {
         let gap = self.style.gap * paper;
         let extension = self.style.extension * paper;
         let mut lines = Vec::new();
-        for (q, mark) in self.witnesses.into_iter().zip([a,b]) {
+        for (q, mark) in self.witnesses.into_iter().zip([a,b]).skip(usize::from(!self.first_witness)) {
             let distance = (mark[0] - q[0]) * n[0] + (mark[1] - q[1]) * n[1];
             let side = if distance < 0.0 { -1.0 } else { 1.0 };
             lines.push([add(q, n, side * gap.min(distance.abs())), add(mark, n, side * extension)]);
         }
         lines.push([a,b]);
         use crate::document::Tick;
-        for (q, inward) in [(a, 1.0), (b, -1.0)] {
+        for (q, inward) in [(a, 1.0), (b, -1.0)].into_iter().skip(usize::from(!self.first_witness)) {
             match self.style.tick {
                 Tick::Slash => {
                     let diagonal = [u[0] + n[0], u[1] + n[1]];
@@ -253,7 +254,7 @@ impl Dim2d {
         let n = self.axes().map_or([0.0, 1.0], |(_, n)| n);
         let h = self.text_height;
         let w = text.chars().count() as f64 * h * CHARACTER;
-        let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.offset * 0.25;
+        let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.units_per_paper_metre * 0.0015;
         let middle = [(self.from[0] + self.to[0]) / 2.0, (self.from[1] + self.to[1]) / 2.0];
         let centre = add(middle, n, self.offset + clear);
         Text2d { family: self.style.label_family(), bold: false, color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
@@ -461,7 +462,8 @@ impl Drawing2d {
             groups.push((pen.weight_mm(), [0; 3], self.dimensions.iter().flat_map(Dim2d::lines).collect()));
             for dim in self.dimensions.iter().filter(|d| d.style.tick == crate::document::Tick::Dot) {
                 if let Some((a, b)) = dim.line() {
-                    groups.push((dim.style.tick_size * 1000.0, [0; 3], vec![[a, a], [b, b]]));
+                    let dots = if dim.first_witness { vec![[a,a],[b,b]] } else { vec![[b,b]] };
+                    groups.push((dim.style.tick_size * 1000.0, [0; 3], dots));
                 }
             }
         }
@@ -549,8 +551,8 @@ impl Drawing2d {
         for d in dimensions {
             let style = doc.dimension_style(d.style);
             let height = if style.label_family().is_some() { style.paper_font_size() } else { rules.text };
-            for (actual, [a,b]) in d.intervals() {
-                self.dimensions.push(Dim2d { from: to(a), to: to(b), witnesses: actual.map(to), units_per_paper_metre: unit,
+            for (i, (actual, [a,b])) in d.intervals().enumerate() {
+                self.dimensions.push(Dim2d { first_witness: i == 0, from: to(a), to: to(b), witnesses: actual.map(to), units_per_paper_metre: unit,
                     value: (b[0] - a[0]).hypot(b[1] - a[1]), offset: d.paper_offset() * unit,
                     style: style.clone(), text_height: height * unit });
             }
@@ -889,7 +891,7 @@ mod tests {
 
     #[test]
     fn a_dimension_has_its_line_to_the_left_with_slashes_and_its_text_beside_it() {
-        let dim = Dim2d { units_per_paper_metre: 100., witnesses: [[0.0, 0.0], [8.0, 0.0]], from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25, style: crate::document::DimensionStyle::standard() };
+        let dim = Dim2d { first_witness: true, units_per_paper_metre: 100., witnesses: [[0.0, 0.0], [8.0, 0.0]], from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25, style: crate::document::DimensionStyle::standard() };
         let lines = dim.lines();
         // two extension lines, the dimension line, two slashes
         assert_eq!(lines.len(), 5);

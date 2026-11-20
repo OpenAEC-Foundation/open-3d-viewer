@@ -555,6 +555,8 @@ pub struct Dimension {
 /// Direction of a continuous dimension and its model references between the ends.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DimensionChain {
+    /// A point on a dimension line placed explicitly in model coordinates.
+    baseline: Option<[f64; 2]>,
     offset: f64,
     axis: [f64; 2],
     inner: Vec<([f64; 2], Option<Anchor>)>,
@@ -594,9 +596,14 @@ impl Dimension {
     pub fn paper_offset(&self) -> f64 { self.chain.as_ref().map_or(0.006, |c| c.offset) }
 
     pub fn measured_ends(&self) -> [[f64; 2]; 2] {
-        let Some(c) = &self.chain else { return [self.from, self.to] };
-        let t = self.station(self.to);
-        [self.from, [self.from[0] + t * c.axis[0], self.from[1] + t * c.axis[1]]]
+        [self.project(self.from), self.project(self.to)]
+    }
+
+    fn project(&self, q: [f64; 2]) -> [f64; 2] {
+        let Some(c) = &self.chain else { return q };
+        let origin = c.baseline.unwrap_or(self.from);
+        let t = (q[0]-origin[0])*c.axis[0] + (q[1]-origin[1])*c.axis[1];
+        [origin[0]+t*c.axis[0], origin[1]+t*c.axis[1]]
     }
 
     fn axis(&self) -> [f64; 2] {
@@ -615,13 +622,7 @@ impl Dimension {
     pub fn intervals(&self) -> impl Iterator<Item = ([[f64; 2]; 2], [[f64; 2]; 2])> + '_ {
         self.references().zip(self.references().skip(1)).map(|((a, _), (b, _))| {
             let actual = [a, b];
-            let projected = if self.chain.is_none() { actual } else {
-                let u = self.axis();
-                actual.map(|q| {
-                    let t = self.station(q);
-                    [self.from[0] + t * u[0], self.from[1] + t * u[1]]
-                })
-            };
+            let projected = actual.map(|q| self.project(q));
             (actual, projected)
         })
     }
@@ -643,18 +644,89 @@ impl Dimension {
     }
 
     fn set_references(&mut self, refs: &[([f64; 2], Option<Anchor>)], axis: [f64; 2]) {
+        let baseline = self.chain.as_ref().and_then(|c| c.baseline)
+            .or_else(|| (refs.len() > 2).then_some(self.from));
         (self.from, self.anchors[0]) = refs[0];
         (self.to, self.anchors[1]) = refs[refs.len() - 1];
         let offset = self.paper_offset();
         let end = self.to;
         let off_axis = ((end[0]-self.from[0])*axis[1] - (end[1]-self.from[1])*axis[0]).abs() > 1e-9;
-        self.chain = (refs.len() > 2 || offset != 0.006 || off_axis).then(|| DimensionChain { axis, offset, inner: refs[1..refs.len() - 1].to_vec() });
+        self.chain = (refs.len() > 2 || offset != 0.006 || off_axis || baseline.is_some()).then(|| DimensionChain { axis, offset, baseline, inner: refs[1..refs.len() - 1].to_vec() });
     }
 
     /// Its length (metres).
     pub fn length(&self) -> f64 {
         if self.chain.is_some() { self.station(self.to).abs() }
         else { (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1]) }
+    }
+}
+
+impl PlanView {
+    /// Recover explicit reference points and measurement-line positions from a view that
+    /// also supplies ordinary two-point dimensions for readers without continuous dimensions.
+    fn adopt_dimension_chains(&mut self) {
+        let Some(records) = self.presentation["dimensionChains"].as_array() else { return };
+        let mut replacements = std::collections::BTreeMap::new();
+        let mut witnesses = Vec::new();
+        for record in records {
+            let Some(first) = record["firstDimension"].as_u64().and_then(|v| usize::try_from(v).ok()) else { continue };
+            let Some(count) = record["segments"].as_u64().and_then(|v| usize::try_from(v).ok()) else { continue };
+            let Some(end) = first.checked_add(count) else { continue };
+            let Some(segments) = self.dimensions.get(first..end).filter(|s| !s.is_empty()) else { continue };
+            let Some(axis @ 0..=1) = record["axis"].as_u64().map(|v| v as usize) else { continue };
+            let Some(offset) = record["offset"].as_f64().filter(|v| v.is_finite()) else { continue };
+            let Some(points) = record["references"].as_array().and_then(|rs| {
+                rs.iter().map(|r| serde_json::from_value::<[f64; 2]>(r.clone()).ok()).collect::<Option<Vec<_>>>()
+            }).filter(|p| p.len() == count + 1) else { continue };
+            let cross = 1-axis;
+            let mut u = [0.,0.];
+            u[axis] = (points[count][axis]-points[0][axis]).signum();
+            let station_matches = |a: f64,b: f64| (a-b).abs() < 1e-7;
+            if !segments.iter().zip(points.windows(2)).all(|(d,w)| {
+                d.chain.is_none() && d.style == segments[0].style && (w[1][axis]-w[0][axis])*u[axis] >= 0.001
+                    && station_matches(d.from[axis],w[0][axis]) && station_matches(d.to[axis],w[1][axis])
+                    && station_matches(d.from[cross],offset) && station_matches(d.to[cross],offset)
+            }) { continue; }
+            if replacements.range(..end).next_back().is_some_and(|(_, (prev_end,_))| *prev_end > first) { continue; }
+            let mut baseline = points[0];
+            baseline[cross] = offset;
+            let mut refs = Vec::new();
+            for (i,q) in points.iter().copied().enumerate() {
+                let mut anchor = if i == count { segments[count-1].anchors[1] } else { segments[i].anchors[0] };
+                // A fallback anchor belongs to the stored endpoint; an actual reference can
+                // reuse it only when it names that same physical point.
+                if !station_matches(q[cross], offset) { anchor = None; }
+                refs.push((q,anchor));
+            }
+            let mut d = segments[0].clone();
+            d.chain = Some(DimensionChain { axis: u, baseline: Some(baseline), offset: 0., inner: Vec::new() });
+            d.set_references(&refs,u);
+            witnesses.extend(points.iter().map(|q| (axis,*q,offset)));
+            replacements.insert(first,(end,d));
+        }
+        if replacements.is_empty() { return; }
+        let raw = std::mem::take(&mut self.dimensions);
+        let mut skip = 0;
+        for (i,d) in raw.into_iter().enumerate() {
+            if i < skip { continue; }
+            if let Some((end,chain)) = replacements.remove(&i) {
+                self.dimensions.push(chain);
+                skip = end;
+            } else { self.dimensions.push(d); }
+        }
+        // An ungrouped, unstyled perpendicular crossing the very same tick on the
+        // reference's side is fallback witness ink. Leave shape and pen index ranges intact.
+        if self.shapes.is_empty() && self.presentation["pens"].is_null() {
+            self.lines.retain(|[a,b]| !witnesses.iter().any(|&(axis,q,offset)| {
+                let cross = 1-axis;
+                let side = (q[cross]-offset).signum();
+                let along = |p: [f64;2]| (p[cross]-offset)*side;
+                (a[axis]-q[axis]).abs() < 1e-7 && (b[axis]-q[axis]).abs() < 1e-7
+                    && along(*a).min(along(*b)) < 0. && along(*a).max(along(*b)) > 0.
+                    && along(*a).max(along(*b)) < (q[cross]-offset).abs()
+            }));
+        }
+        if let Some(obj) = self.presentation.as_object_mut() { obj.remove("dimensionChains"); }
     }
 }
 
@@ -860,7 +932,7 @@ impl Document {
                 let style = if d.style == 0 { Value::Null } else { json!(self.dimension_style(d.style).name) };
                 if let Some(chain) = &d.chain {
                     let refs: Vec<_> = d.references().map(|(at, anchor)| json!([at, anchor.map(Anchor::to_ifcx)])).collect();
-                    return json!({"references":refs, "axis":chain.axis, "offset":chain.offset, "style":style});
+                    return json!({"references":refs, "axis":chain.axis, "baseline":chain.baseline, "offset":chain.offset, "style":style});
                 }
                 match (d.style, d.anchors) {
                     (0, [None, None]) => json!([d.from, d.to]),
@@ -996,8 +1068,8 @@ impl Document {
                     if !length.is_finite() || length < 1e-12 { return None; }
                     let mut dimension = Dimension { from: refs[0].0, to: refs.last()?.0, style: style(d.get("style")), anchors: [None, None], chain: None };
                     let axis = axis.map(|x| x / length);
-                    let offset = d.get("offset").and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).unwrap_or(0.006);
-                    dimension.chain = Some(DimensionChain { axis, offset, inner: Vec::new() });
+                    let offset = d.get("offset").and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(0.006);
+                    dimension.chain = Some(DimensionChain { axis, baseline: d.get("baseline").and_then(pair), offset, inner: Vec::new() });
                     dimension.set_references(&refs, axis);
                     Some(dimension)
                 } else {
@@ -1080,8 +1152,12 @@ impl Document {
                     layers: layers(p.get("layers")),
                     hidden: hidden(p),
                 };
-                if plan.drawing.as_deref() == Some("pile-plan") && p.get("dimension_format").is_none() {
-                    plan.dimensions = join_legacy_dimensions(plan.dimensions);
+                if p.get("dimension_format").is_none() {
+                    if plan.presentation["dimensionChains"].is_array() {
+                        plan.adopt_dimension_chains();
+                    } else if plan.drawing.as_deref() == Some("pile-plan") {
+                        plan.dimensions = join_legacy_dimensions(plan.dimensions);
+                    }
                 }
                 plan.append_sounding_marks();
                 self.plans.push(plan);
@@ -1517,16 +1593,21 @@ impl Document {
 
     /// An independent overall dimension of the two outside references, one row further out.
     pub fn add_dimension_chain_total(&mut self, view: &str, index: usize) -> bool {
+        let scale = self.view_scale(view).unwrap_or(SHEET_SCALE);
         let Some((dims,_)) = self.marks_mut(view) else { return false };
         let Some(d) = dims.get(index) else { return false };
         if d.references().count() < 3 { return false; }
         let axis = d.axis();
-        let offset = d.paper_offset() + 0.008;
+        let line = d.measured_ends()[0];
+        let normal = [-axis[1],axis[0]];
+        let end = [(d.from[0]+d.to[0])/2., (d.from[1]+d.to[1])/2.];
+        let signed = (line[0]-end[0])*normal[0] + (line[1]-end[1])*normal[1] + d.paper_offset()*scale;
+        let offset = d.paper_offset() + if signed < 0. { -0.008 } else { 0.008 };
         if dims.iter().any(|other| other.from == d.from && other.to == d.to && other.paper_offset() == offset) {
             return false;
         }
         let total = Dimension { from: d.from, to: d.to, style: d.style, anchors: d.anchors,
-            chain: Some(DimensionChain { axis, offset, inner: Vec::new() }) };
+            chain: Some(DimensionChain { axis, baseline: d.chain.as_ref().and_then(|c| c.baseline), offset, inner: Vec::new() }) };
         dims.push(total);
         true
     }
@@ -1591,6 +1672,12 @@ impl Document {
         d.anchors.swap(0, 1);
         if let Some(c) = &mut d.chain {
             c.inner.reverse();
+            if let Some(b) = &mut c.baseline {
+                let n = [-c.axis[1], c.axis[0]];
+                let middle = [(d.from[0]+d.to[0])/2., (d.from[1]+d.to[1])/2.];
+                let distance = (b[0]-middle[0])*n[0] + (b[1]-middle[1])*n[1];
+                *b = [b[0]-2.*distance*n[0], b[1]-2.*distance*n[1]];
+            }
             c.axis = c.axis.map(|x| -x);
         }
         true
@@ -2595,6 +2682,59 @@ mod tests {
         assert_eq!(document.place_plan(&sheet, &a), Some(0));
         assert!(document.remove_section(&a));
         assert!(document.sheet(&sheet).unwrap().views.is_empty());
+    }
+
+    #[test]
+    fn authored_dimension_chains_keep_real_witness_origins_and_separate_outer_lines() {
+        let model = model_with(&[("00",0.)]);
+        let node = json!({"o3v::view::plan":{
+            "level":"00", "name":"Layout", "drawing":"pile-plan", "dimensions":[
+                [[0.,3.],[2.,3.]], [[2.,3.],[5.,3.]], [[0.,5.],[5.,5.]]],
+            "presentation":{"dimensionChains":[
+                {"axis":0,"offset":3.,"references":[[0.,1.],[2.,0.],[5.,1.]],"firstDimension":0,"segments":2},
+                {"axis":0,"offset":5.,"references":[[0.,1.],[5.,1.]],"firstDimension":2,"segments":1}]},
+            "lines":[[[2.,2.8],[2.,3.1]], [[0.,0.],[5.,0.]]]
+        }});
+        let mut doc = Document::from_model(&model);
+        doc.adopt_ifcx(&[("layout".into(),node)]);
+        let plan = doc.plan("layout").unwrap();
+        assert_eq!(plan.lines.len(),1);
+        assert_eq!(plan.dimensions.len(),2);
+        assert_eq!(plan.dimensions[1].measured_ends(),[[0.,5.],[5.,5.]]);
+        let spans = plan.dimensions[0].intervals().collect::<Vec<_>>();
+        assert_eq!(spans[1], ([[2.,0.],[5.,1.]], [[2.,3.],[5.,3.]]));
+        assert_eq!(plan.dimensions[0].paper_offset(),0.);
+        let nodes = doc.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut again = Document::from_model(&model);
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.plan("layout").unwrap().dimensions, plan.dimensions);
+    }
+
+    #[test]
+    fn an_explicit_negative_chain_stays_on_its_line_after_edits_and_its_total_is_further_out() {
+        let model = model_with(&[("00",0.)]);
+        let mut doc = Document::from_model(&model);
+        let plan = doc.add_plan(&doc.levels()[0].path.clone()).unwrap();
+        assert!(doc.add_dimension_chain(&plan,&[[0.,0.],[2.,0.],[4.,0.]]));
+        let c = doc.dimension_mut(&plan,0).unwrap().chain.as_mut().unwrap();
+        c.baseline = Some([0.,-2.]);
+        c.offset = 0.;
+        assert!(doc.add_dimension_chain_total(&plan,0));
+        assert_eq!(doc.plan(&plan).unwrap().dimensions[1].paper_offset(),-0.008);
+        assert!(doc.insert_dimension_reference(&plan,0,[5.,1.],None));
+        assert!(doc.remove_dimension_reference(&plan,0,0));
+        assert!(doc.remove_dimension_reference(&plan,0,0));
+        let d = doc.dimension_mut(&plan,0).unwrap();
+        d.order_references();
+        assert_eq!(d.measured_ends(), [[4.,-2.],[5.,-2.]]);
+        assert!(doc.flip_dimension(&plan,0));
+        assert_eq!(doc.plan(&plan).unwrap().dimensions[0].measured_ends(), [[5.,3.],[4.,3.]]);
+        let nodes = doc.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut again = Document::from_model(&model);
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.plan(&plan).unwrap().dimensions, doc.plan(&plan).unwrap().dimensions);
+        assert!(again.flip_dimension(&plan,0));
+        assert_eq!(again.plan(&plan).unwrap().dimensions[0].measured_ends(), [[4.,-2.],[5.,-2.]]);
     }
 
     #[test]

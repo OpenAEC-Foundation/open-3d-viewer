@@ -1160,12 +1160,12 @@ impl canvas::Program<Message> for ViewMarks {
         for (k, d) in self.dimensions.iter().enumerate() {
             let lost = d.references().filter_map(|(_, a)| a).any(|a| a.lost);
             let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else if lost { Color::from_rgb8(200, 40, 40) } else { ink };
-            for (actual, [from, to]) in d.intervals() {
+            for (i, (actual, [from, to])) in d.intervals().enumerate() {
                 let [Some(a), Some(b)] = [from, to].map(|q| self.px(&screen, q)) else { continue };
                 let [Some(first), Some(last)] = actual.map(|q| self.px(&screen, q)) else { continue };
                 let mut look = self.look(&screen, from, d.style);
                 look.offset = look.paper * d.paper_offset() as f32;
-                draw_interval_px(&mut frame, a, b, [first, last], (to[0]-from[0]).hypot(to[1]-from[1]), color, look);
+                draw_interval_px(&mut frame, a, b, [first, last], i == 0, (to[0]-from[0]).hypot(to[1]-from[1]), color, look);
             }
         }
         // the regions filled in one colour, under the lines: black is the ink of the drawing
@@ -1305,10 +1305,10 @@ pub(super) struct DimensionLook<'a> {
 /// a → b (as seen with y up), extension lines from just off the points to just past it, its
 /// style's mark at each end, and the length in its style's unit over the middle.
 pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f64, color: Color, look: DimensionLook) {
-    draw_interval_px(frame, a, b, [a,b], length, color, look);
+    draw_interval_px(frame, a, b, [a,b], true, length, color, look);
 }
 
-pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses: [Point; 2], length: f64, color: Color, look: DimensionLook) {
+pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses: [Point; 2], first_witness: bool, length: f64, color: Color, look: DimensionLook) {
     let run = a.distance(b);
     if run <= 0.0 {
         return;
@@ -1320,7 +1320,7 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
     let off = |q: Point, d: f32| Point::new(q.x + nx * d, q.y + ny * d);
     let (a2, b2) = (off(a, look.offset), off(b, look.offset));
     let lines = Path::new(|path| {
-        for (q, mark) in witnesses.into_iter().zip([a2,b2]) {
+        for (q, mark) in witnesses.into_iter().zip([a2,b2]).skip(usize::from(!first_witness)) {
             let distance = (mark.x - q.x) * nx + (mark.y - q.y) * ny;
             let side = if distance < 0.0 { -1.0 } else { 1.0 };
             path.move_to(off(q, gap.min(distance.abs()) * side));
@@ -1330,7 +1330,7 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
         path.line_to(b2);
         if style.tick == Tick::Slash {
             let (sx, sy) = ((ux + nx) * tick, (uy + ny) * tick);
-            for q in [a2, b2] {
+            for q in [a2, b2].into_iter().skip(usize::from(!first_witness)) {
                 path.move_to(Point::new(q.x - sx, q.y - sy));
                 path.line_to(Point::new(q.x + sx, q.y + sy));
             }
@@ -1341,7 +1341,7 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
     match style.tick {
         Tick::Arrow => {
             // the point on the end of the line, the head lying on the line
-            for (q, inward) in [(a2, 1.0), (b2, -1.0)] {
+            for (q, inward) in [(a2, 1.0), (b2, -1.0)].into_iter().skip(usize::from(!first_witness)) {
                 let back = Point::new(q.x + ux * tick * inward, q.y + uy * tick * inward);
                 let head = Path::new(|path| {
                     path.move_to(q);
@@ -1353,7 +1353,7 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
             }
         }
         Tick::Dot => {
-            for q in [a2, b2] {
+            for q in [a2, b2].into_iter().skip(usize::from(!first_witness)) {
                 frame.fill(&Path::circle(q, tick / 2.0), color);
             }
         }
@@ -1362,7 +1362,7 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
     // the length beside the line, clear of it whichever way the line runs
     let content = style.figure(length);
     let (w, h) = (content.chars().count() as f32 * look.size * 0.6, look.size);
-    let clear = nx.abs() * w / 2.0 + ny.abs() * h / 2.0 + look.offset * 0.25;
+    let clear = nx.abs() * w / 2.0 + ny.abs() * h / 2.0 + look.paper * 0.0015;
     frame.fill_text(canvas::Text {
         content,
         position: off(Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), look.offset + clear),

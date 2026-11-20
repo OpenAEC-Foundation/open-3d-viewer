@@ -31,7 +31,7 @@ pub use buildup::{BuildUp, Layer, Role};
 pub use library::Library;
 pub use material::{DrawingStandard, HatchKind, HatchPattern, Material, Names};
 pub use profile::{LinearRole, LinearType, ProfileShape, Series, SteelProfile};
-pub use system::{Clearance, Corner, Framing, Gauge, Grid, HeaderBand, StudStart, Members, Panels, Pattern, SystemGroup, SystemLayer, SystemType, Trimmer};
+pub use system::{Clearance, Corner, Framing, Gauge, Grid, HeaderBand, StudStart, Members, Panels, Pattern, SystemGroup, SystemLayer, SystemType, Trimmer, Cores};
 
 use serde::{Deserialize, Serialize};
 

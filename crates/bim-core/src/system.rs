@@ -52,7 +52,7 @@ use crate::join::{self, JoinKind, Member, MemberEnd};
 use crate::profile::Profile;
 use crate::solid::{Axes, Plane, Solid};
 use crate::{positive, Refusal, LINEAR_TOLERANCE};
-use bim_library::system::{Corner, Framing, Gauge, Pattern, Trimmer, StudStart, SystemLayer, SystemType};
+use bim_library::system::{Cores, Corner, Framing, Gauge, Pattern, Trimmer, StudStart, SystemLayer, SystemType};
 use bim_library::Library;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,9 @@ pub struct SystemTypeDef {
     /// than equal ones.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole: bool,
+    /// Its panels are hollow slabs with these cores, running across the system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cores: Option<Cores>,
 }
 
 fn is_upright(lying: &bool) -> bool {
@@ -150,6 +153,7 @@ impl SystemDef {
             lying: t.lying.is_some(),
             trimmer: t.trimmer,
             whole: t.whole,
+            cores: t.cores,
         });
         self
     }
@@ -921,7 +925,11 @@ impl Line {
         // a panel between the lines `w` apart, up to the face's end and head (where boards are
         // cut), cut around the openings and left out of the face's gaps
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
-            let r = [u + w / 2.0, v + w / 2.0, u + du.min(self.length - u) - w / 2.0, v + dv.min(self.height - v) - w / 2.0];
+            let (u1, v1) = (u + du.min(self.length - u), v + dv.min(self.height - v));
+            // slabs have no joint round the face's edge: they run to it
+            let tol = LINEAR_TOLERANCE;
+            let edge = |at: bool| if f.whole && at { 0.0 } else { w / 2.0 };
+            let r = [u + edge(u < tol), v + edge(v < tol), u1 - edge(u1 > self.length - tol), v1 - edge(v1 > self.height - tol)];
             outside(split(around(r, openings), joints), &self.gaps).into_iter().map(|r| self.panel(f, r[0], r[1], r[2] - r[0], r[3] - r[1])).collect()
         };
         let mut pieces: Vec<Piece> = Vec::new();
@@ -941,19 +949,31 @@ impl Line {
                 if let Some((size, _)) = f.member {
                     // the vertical members on every division along run through; the horizontal
                     // ones on every division up stop against them, a mitre at the corners
-                    let mut verticals = Vec::with_capacity(bays + 1);
+                    // (a face of slabs has none on its edges: the slabs run to them)
+                    let mut verticals: Vec<Option<usize>> = Vec::with_capacity(bays + 1);
                     for i in 0..=bays {
-                        let (from, to) = span(i == 0 || i == bays);
+                        let on_edge = i == 0 || i == bays;
+                        if f.whole && on_edge {
+                            verticals.push(None);
+                            continue;
+                        }
+                        let (from, to) = if f.whole { (0.0, self.height) } else { span(on_edge) };
                         pieces.push(self.vertical(f, size, line(i), from, to)?);
-                        verticals.push(pieces.len() - 1);
+                        verticals.push(Some(pieces.len() - 1));
                     }
                     for i in 0..bays {
                         for j in 0..=rows {
+                            let edge_row = j == 0 || j == rows;
+                            if f.whole && edge_row {
+                                continue;
+                            }
                             pieces.push(self.horizontal(f, size, j as f64 * row, line(i), line(i + 1))?);
                             let h = pieces.len() - 1;
-                            let edge_row = j == 0 || j == rows;
-                            joins.push((if edge_row && i == 0 { corner } else { JoinKind::Butt }, verticals[i], h));
-                            joins.push((if edge_row && i + 1 == bays { corner } else { JoinKind::Butt }, verticals[i + 1], h));
+                            for (k, last) in [(i, i == 0), (i + 1, i + 1 == bays)] {
+                                if let Some(v) = verticals[k] {
+                                    joins.push((if edge_row && last { corner } else { JoinKind::Butt }, v, h));
+                                }
+                            }
                         }
                     }
                 }
@@ -1666,6 +1686,15 @@ mod tests {
         let ends_at = |z: f64| tops.iter().filter(|v| (**v - z).abs() < 1e-9).count();
         assert_eq!(ends_at(2.1 + w - t), 2, "the trimmers: {tops:?}");
         assert!(ends_at(0.9 - t) >= 1, "the cripples under the sill: {tops:?}");
+        // a metal stud partition: C studs 50 by 75 of 0.6 mm sheet with lips of 6, in U tracks
+        let (d, t, lip) = (0.075, 0.0006, 0.006);
+        let made = parts(&typed(3.0, 2.7, "system.metal-stud-75-1")).unwrap();
+        let steel = of(&made, "steel");
+        let c_area = (d - 2.0 * t) * t + 2.0 * (w - t) * t + 2.0 * (lip - t) * t;
+        let studs: Vec<_> = steel.iter().filter(|p| p.solid.bounds().1.z - p.solid.bounds().0.z > 2.0).collect();
+        assert_eq!(studs.len(), 6);
+        assert!(studs.iter().all(|p| (p.solid.volume() - c_area * (2.7 - 2.0 * t)).abs() < 1e-9), "{:?}", studs.iter().map(|p| p.solid.volume()).collect::<Vec<_>>());
+        assert_eq!(steel.iter().filter(|p| (p.solid.volume() - (d * t + 2.0 * (w - t) * t) * 3.0).abs() < 1e-9).count(), 2, "the tracks");
         // the type's sheet stays with the system in its file
         let s = typed(3.0, 2.7, "system.steel-frame-150");
         let text = serde_json::to_string(&s).unwrap();
@@ -1848,10 +1877,12 @@ mod tests {
             let (a, b) = p.solid.bounds();
             (lo, hi) = (lo.min(a), hi.max(b));
         }
-        // the joints round its edge are centred on it: half a joint (10) outside
-        assert!((lo - DVec3::new(-0.01, -0.01, 2.8)).length() < 1e-6 && (hi - DVec3::new(3.61, 6.01, 3.0)).length() < 1e-6, "{lo} {hi}");
+        // slabs run to its edges: no joint round it
+        assert!((lo - DVec3::new(0.0, 0.0, 2.8)).length() < 1e-6 && (hi - DVec3::new(3.6, 6.0, 3.0)).length() < 1e-6, "{lo} {hi}");
         let volume: f64 = parts.iter().map(|p| p.solid.volume()).sum();
-        assert!(volume > 3.6 * 6.0 * 0.2 - 1e-6 && volume < 3.62 * 6.02 * 0.2 + 1e-6, "slabs and grout fill it: {volume}");
+        // three slabs with seven cores each, 135 wide and 140 high, from end to end
+        let cores = 3.0 * 7.0 * (8.0 * 0.0675 * 0.0675 * (std::f64::consts::TAU / 16.0).sin() + 0.135 * 0.005) * 6.0;
+        assert!((volume + cores - 3.6 * 6.0 * 0.2).abs() < 1e-6, "slabs and grout fill it but for the cores: {volume}");
         // a ceiling: tiles 600 square in a grid of profiles
         let ceiling = SystemDef { base: 2.6, ..system(3.0, 2.4) }.laid(library.system_type("system.ceiling-600x600").unwrap()).unwrap();
         let parts = super::parts(&ceiling).unwrap();

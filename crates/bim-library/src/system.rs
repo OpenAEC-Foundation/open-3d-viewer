@@ -400,6 +400,25 @@ impl Trimmer {
     }
 }
 
+/// The cores of a hollow slab: `count` of them side by side over a whole slab's width, each
+/// `width` wide and `height` high with round ends up and down, running the slab's length.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Cores {
+    pub count: u32,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Cores {
+    pub const fn new(count: u32, width: f64, height: f64) -> Self {
+        Self { count, width, height }
+    }
+
+    fn fits(&self) -> bool {
+        self.count > 0 && self.width.is_finite() && self.width > 0.0 && self.height.is_finite() && self.height >= self.width
+    }
+}
+
 /// A system type: its group, the grid of its face with its members and panels, the layers across
 /// it, and, for a floor or a ceiling, how high above its level it lies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -424,6 +443,9 @@ pub struct SystemType {
     /// width, the last a fitting slab), rather than equal ones as near the grid's as fit.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole: bool,
+    /// Its panels are hollow slabs with these cores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cores: Option<Cores>,
 }
 
 /// Whether a grid fits members `width` wide: positive bays and rows, wider than the members.
@@ -474,7 +496,7 @@ impl SystemType {
             }
             known(&panels.material)?;
         }
-        if self.lying.is_some_and(|h| !h.is_finite()) || self.trimmer.is_some_and(|t| !t.fits()) {
+        if self.lying.is_some_and(|h| !h.is_finite()) || self.trimmer.is_some_and(|t| !t.fits()) || self.cores.is_some_and(|c| !c.fits()) {
             return Err(LibraryError::NotPositive);
         }
         Ok(())
@@ -548,7 +570,7 @@ pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
     let glass = || Panels::new("glass", 0.024);
-    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, trimmer: None, whole: false };
+    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, trimmer: None, whole: false, cores: None };
     // aluminium and PVC frames are mitred at their corners
     let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
     // boards of `material` laid edge to edge, `bay` wide and `row` high; membranes come in rolls
@@ -626,6 +648,7 @@ pub fn starter() -> Vec<SystemType> {
     // a metal stud partition as Open BIM Studio's catalogue has it: steel studs `depth` deep at 600
     // between a bottom and a top track, mineral wool between them, and `linings` gypsum boards of
     // 12.5 on either face. The catalogue gives the studs no width: 50, the flange of a C stud.
+    // The studs are C sections of 0.6 mm sheet with a lip of 6, standing in U tracks.
     let metal_stud = |depth: f64, linings: usize| {
         let board = 0.0125;
         let layers = [1.0, -1.0]
@@ -638,7 +661,7 @@ pub fn starter() -> Vec<SystemType> {
                 &format!("system.metal-stud-{}-{linings}", (depth * 1000.0).round()),
                 MetalStud,
                 Grid::new(0.6, 3.0, Stack),
-                Members::new(0.05, depth, "steel").framed(Framing::PLATES.with_header(0.05)),
+                Members::new(0.05, depth, "steel").framed(Framing::PLATES.with_header(0.05)).cold_formed(0.0006, 0.006),
                 Panels::new("mineral-wool", depth),
             )
         }
@@ -655,8 +678,17 @@ pub fn starter() -> Vec<SystemType> {
             ..upright(&format!("system.wide-slab-{}", (depth * 1000.0).round()), Floor, Grid::new(2.4, 7.2, Stack), Members::new(0.002, plank, "topping-concrete"), Panels::new("wide-slab", plank))
         }
     };
+    // hollow-core slabs: round cores in the thin ones, higher ones with round ends in the thick
+    // ones; indicative sections, not a maker's
     let hollow_core = |depth: f64| SystemType {
         lying: Some(3.0),
+        cores: Some(match (depth * 1000.0).round() as u32 {
+            0..=175 => Cores::new(9, 0.09, 0.09),
+            176..=230 => Cores::new(7, 0.135, 0.14),
+            231..=290 => Cores::new(5, 0.175, 0.19),
+            291..=360 => Cores::new(4, 0.22, 0.24),
+            _ => Cores::new(4, 0.22, 0.32),
+        }),
         trimmer: Some(Trimmer::SLABS),
         whole: true,
         ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, 6.0, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))

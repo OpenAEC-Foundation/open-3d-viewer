@@ -523,9 +523,9 @@ mod tests {
         assert!(d.lines.iter().filter(|l| l.pen == Pen::Cut).count() > 5 * 4 + 8);
         assert_eq!(d.lines.iter().filter(|l| l.pen == Pen::Detail).count(), 2 * 4);
         let values: Vec<i64> = d.dimensions.iter().map(|x| mm(x.value)).collect();
-        assert!(values.contains(&4780) && values.contains(&5980) && values.iter().filter(|v| **v == 1200).count() >= 2, "{values:?}");
+        assert!(values.contains(&4800) && values.contains(&6000) && values.iter().filter(|v| **v == 1200).count() >= 2, "{values:?}");
         let texts: Vec<&str> = d.texts.iter().map(|t| t.text.as_str()).collect();
         assert!(texts[0].contains("hollow-core-concrete 200") && texts[0].contains("1:50"), "{texts:?}");
-        assert!(texts.contains(&"3 × 200 × 1180 × 5980") && texts.contains(&"1 × 200 × 1180 × 2990") && texts.contains(&"2 × steel L=1180"), "{texts:?}");
+        assert!(texts.contains(&"2 × 200 × 1190 × 6000") && texts.contains(&"1 × 200 × 1180 × 6000") && texts.contains(&"1 × 200 × 1180 × 3000") && texts.contains(&"2 × steel L=1180"), "{texts:?}");
     }
 }

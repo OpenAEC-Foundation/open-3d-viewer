@@ -15,7 +15,7 @@ pub struct PlacedImage {
     pub(crate) bytes: Arc<[u8]>,
     pub(crate) format: ImageFormat,
     pub(crate) pixels: [u32; 2],
-    handle: Handle,
+    tiles: Arc<Vec<([u32; 4], Handle)>>,
 }
 
 impl PartialEq for PlacedImage {
@@ -44,14 +44,25 @@ impl PlacedImage {
         if format == ImageFormat::Jpeg && decoded.color() != image::ColorType::Rgb8 {
             return Err("A drawing JPEG must contain RGB colour".into());
         }
-        let handle = Handle::from_rgba(w, h, decoded.into_rgba8().into_raw());
+        // Individual canvas uploads fit in the synchronous texture budget, including
+        // in the renderer used for a single printed-sheet preview frame.
+        let pixels = decoded.into_rgba8();
+        let mut tiles = Vec::new();
+        for y in (0..h).step_by(512) {
+            for x in (0..w).step_by(512) {
+                let tw = (w - x).min(512);
+                let th = (h - y).min(512);
+                let tile = image::imageops::crop_imm(&pixels, x, y, tw, th).to_image();
+                tiles.push(([x, y, tw, th], Handle::from_rgba(tw, th, tile.into_raw())));
+            }
+        }
         Ok(Self {
             bounds,
             clip: bounds,
             bytes: bytes.into(),
             format,
             pixels: [w, h],
-            handle,
+            tiles: Arc::new(tiles),
         })
     }
 
@@ -82,10 +93,12 @@ impl PlacedImage {
         };
         if let (Some(bounds), Some(clip)) = (rect(self.bounds), rect(self.clip)) {
             frame.with_clip(clip, |f| {
-                f.draw_image(
-                    bounds,
-                    canvas::Image::new(self.handle.clone()),
-                );
+                let dx = bounds.width / self.pixels[0] as f32;
+                let dy = bounds.height / self.pixels[1] as f32;
+                for &([x, y, w, h], ref handle) in self.tiles.iter() {
+                    let tile = Rectangle::new(Point::new(bounds.x + x as f32 * dx, bounds.y + y as f32 * dy), Size::new(w as f32 * dx, h as f32 * dy));
+                    if tile.intersects(&clip) { f.draw_image(tile, canvas::Image::new(handle.clone())); }
+                }
             });
         }
     }

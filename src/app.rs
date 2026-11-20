@@ -761,6 +761,7 @@ pub enum Message {
     DeletePicked,
     DesignatePiles,
     DesignateReinforcement,
+    PlacePileLegend(Arc<str>, &'static str),
     NewPileSchedule(Arc<str>, &'static str),
     /// Remove what is picked on the sheet shown.
     RemovePicked,
@@ -2246,6 +2247,7 @@ impl App {
             Message::SpaceNameDone => self.modeller.space_typing = None,
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
+            Message::PlacePileLegend(sheet, name) => self.place_pile_legend(&sheet, name),
             Message::NewPileSchedule(level, name) => self.new_pile_schedule_view(&level, name),
             Message::DesignatePiles => self.designate_members(false),
             Message::DesignateReinforcement => self.designate_members(true),

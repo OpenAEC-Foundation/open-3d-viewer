@@ -145,6 +145,22 @@ impl App {
         }
     }
 
+    pub(super) fn place_pile_legend(&mut self, sheet: &str, name: &str) {
+        let Some(target) = self.document.sheet(sheet) else { return };
+        let centre = target.paper.map(|side| side / 2.0);
+        // The legend covers the whole project, so its placed views can share one definition.
+        let existing = self.document.plans().iter()
+            .find(|v| v.drawing.as_deref() == Some("pile-schedule"))
+            .map(|v| v.path.clone());
+        let path = existing.or_else(|| {
+            let level = self.document.levels().first()?.path.clone();
+            self.add_pile_legend(&level, name)
+        });
+        if let Some(index) = path.and_then(|path| self.place_view_at(sheet, &path, centre)) {
+            self.pick_on_sheet(Some(SheetPick::View(index)));
+        }
+    }
+
     /// The offset of a cropped drawing's visible centre from its placement anchor, in model metres.
     fn crop_offset(&self, path: &str) -> [f64; 2] {
         let Some((_, Some((lo, hi)))) = self.document.view_marks(path) else { return [0.0; 2] };
@@ -598,6 +614,11 @@ impl App {
             }
             rows = rows.push(self.export_control(p, l));
             rows = rows.push(label(l.text("Plaats op dit blad:", "Place on this sheet:")));
+            let has_legend = sheet.views.iter().any(|v| self.document.view_drawing(&v.plan) == Some("pile-schedule"));
+            if !has_legend && !self.document.levels().is_empty() {
+                let name = l.text("Paallegenda", "Pile legend");
+                rows = rows.push(small(name.into(), false, Message::PlacePileLegend(key.clone(), name)));
+            }
             if self.document.plans().is_empty() {
                 rows = rows.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
             }
@@ -1357,6 +1378,21 @@ mod tests {
         app.dimension_tool = tool;
         let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
         (app, sheet, plan, drawing)
+    }
+
+    #[test]
+    fn pile_legend_can_be_placed_on_two_sheets_from_the_sheet_panel() {
+        let (mut app, first, _, _) = sheet_with_plan(false);
+        let _ = app.update(Message::PlacePileLegend(first.clone(), "Pile legend"));
+        let legend = app.document.sheet(&first).unwrap().views[1].plan.clone();
+        assert_eq!(app.document.view_drawing(&legend), Some("pile-schedule"));
+        assert_eq!(app.active_doc_sheet.as_deref(), Some(first.as_ref()));
+        assert_eq!(app.sheet_pick, Some(SheetPick::View(1)));
+        let _ = app.update(Message::NewSheet("Second sheet"));
+        let second = Arc::<str>::from(app.active_doc_sheet.as_deref().unwrap());
+        let _ = app.update(Message::PlacePileLegend(second.clone(), "Pile legend"));
+        assert_eq!(app.document.sheet(&second).unwrap().views[0].plan, legend);
+        assert_eq!(app.sheet_pick, Some(SheetPick::View(0)));
     }
 
     #[test]

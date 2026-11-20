@@ -632,7 +632,7 @@ impl App {
                     .on_press(make),
             );
             if kind == PlanKind::StructuralUp {
-                let name = l.text("Paalstaat", "Pile schedule");
+                let name = l.text("Paallegenda", "Pile legend");
                 body = body.push(button(text(name).size(12)).on_press(Message::NewPileSchedule(Arc::from(level.path.as_str()), name)));
             }
         }

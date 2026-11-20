@@ -1396,6 +1396,39 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a local IFCX fixture with a placed pile legend and a new output directory"]
+    fn an_imported_pile_legend_reopens_and_exports_on_its_sheet() {
+        let input = PathBuf::from(std::env::var_os("PILE_LEGEND_IFCX").unwrap());
+        let output = PathBuf::from(std::env::var_os("PILE_LEGEND_OUTPUT").unwrap());
+        std::fs::create_dir(&output).unwrap();
+        let open = |path: &std::path::Path| {
+            let mut app = App::default();
+            app.set_model(Arc::new(crate::loaders::load(path).unwrap()));
+            app
+        };
+        let inspect = |app: &mut App| {
+            let plan = app.document.plans().iter().find(|p| p.drawing.as_deref() == Some("pile-schedule")).unwrap();
+            let path = plan.path.clone();
+            let tags: Vec<_> = plan.tags.iter().map(|n| n.text.clone()).collect();
+            assert!(!tags.is_empty());
+            assert!(!tags.iter().any(|t| matches!(t.as_str(), "X (m)" | "Y (m)")));
+            let sheet = app.document.sheets().iter().find(|s| s.views.iter().any(|v| v.plan == path)).unwrap();
+            let sheet_path = sheet.path.clone();
+            app.open_doc_sheet(&sheet_path);
+            let drawing = app.drawing_to_export().unwrap();
+            assert!(tags.iter().all(|tag| drawing.texts.iter().any(|t| &t.text == tag)));
+            tags
+        };
+        let mut current = open(&input);
+        let tags = inspect(&mut current);
+        current.export_shown_to(&output.join("legend.pdf")).unwrap();
+        let saved = output.join("roundtrip.ifcx");
+        let bytes = crate::export::to_bytes(current.model.as_ref().unwrap(), &current.document_now(), "roundtrip.ifcx").unwrap();
+        std::fs::write(&saved, bytes).unwrap();
+        assert_eq!(inspect(&mut open(&saved)), tags);
+    }
+
+    #[test]
     fn a_remote_crop_keeps_its_paper_position_when_scaled_and_dragged() {
         let (mut app, sheet, plan, _) = sheet_with_plan(false);
         let mut nodes = app.document.ifcx_drawing_nodes();

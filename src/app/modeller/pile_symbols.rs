@@ -158,7 +158,9 @@ mod tests {
         let mut pile = Element::in_project(&grid, "Pile", Some(level.clone()), shape);
         pile.pile_number = Some(7);
         pile.pile_mark = Some("A".into());
-        let id = model.add(pile).unwrap();
+        let id = bim_core::ElementId(1);
+        pile.id = id;
+        model.insert(pile);
         let plan = doc
             .add_plan_of(&level, PlanKind::StructuralUp, "Piles")
             .unwrap();

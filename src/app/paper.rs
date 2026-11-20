@@ -1472,13 +1472,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a structural sheet IFCX fixture with four placed views"]
+    #[ignore = "requires a structural sheet IFCX fixture with a plan, axon and linked section"]
     fn linked_section_on_structural_sheet_exports_without_unrelated_section_marks() {
         let input = PathBuf::from(std::env::var_os("STRUCTURAL_SHEET_IFCX").unwrap());
         let mut app = App::default();
         app.set_model(Arc::new(crate::loaders::load(&input).unwrap()));
         let sheet = app.document.sheets().iter().find(|s| s.number == "CP-21").unwrap();
-        assert_eq!(sheet.views.len(), 4);
+        assert!(sheet.views.len() >= 4);
+        for placement in &sheet.views {
+            let name = app.document.view_name(&placement.plan).unwrap_or_default();
+            if name.starts_with("P1 ·") || name.starts_with("P2 ·") {
+                assert_eq!(placement.scale, if name.starts_with("P1") { 5.0 } else { 10.0 });
+                assert!(app.document.view_notes(&placement.plan).unwrap().iter().any(|n| n.text.contains("constructief te bepalen")));
+            }
+        }
         let plan = &sheet.views[0].plan;
         let sections = crate::drawing2d::plan_sections(&app.document, plan);
         assert_eq!(sections.len(), 1);

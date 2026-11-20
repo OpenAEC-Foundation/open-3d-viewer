@@ -243,6 +243,7 @@ pub struct Datum2 {
 /// A drawing to export.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drawing2d {
+    pub images: Vec<crate::raster::PlacedImage>,
     /// The view's or sheet's name, for the file name.
     pub name: String,
     pub space: Space,
@@ -309,6 +310,7 @@ impl Drawing2d {
                 hi[k] = hi[k].max(p[k]);
             }
         };
+        for image in &self.images { image.clip.into_iter().for_each(&mut grow); }
         for l in &self.lines {
             grow(l.a);
             grow(l.b);
@@ -526,7 +528,8 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut, rules: &Rules) -> Opt
     let name = doc.view_name(path)?.to_string();
     let scale = doc.sheets().iter().flat_map(|s| &s.views).find(|v| v.plan == path).map_or_else(|| doc.view_scale(path).unwrap_or(SHEET_SCALE), |v| v.scale);
     let (dimensions, notes, crop) = marks(doc, path);
-    let mut d = Drawing2d { name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { images: Vec::new(), name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    if let Some(photo) = doc.plan(path).and_then(|p| p.orthophoto.as_ref()) { d.images.extend(photo.image.placed(crop, |q| q)); }
     d.view(Some(cut), crop, (dimensions, &notes), &|q| q, scale, scale, rules);
     d.detail(doc.view_lines(path), &|q| q);
     d.detail(doc.view_symbols(path), &|q| q);
@@ -544,7 +547,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
 pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::HouseStyle, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, datums: &dyn Fn(&str) -> Vec<Datum2>, rules: &dyn Fn(&str) -> Rules) -> Option<Drawing2d> {
     let sheet = doc.sheet(path)?;
     let [w, h] = sheet.paper;
-    let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.rectangle(Pen::Frame, [0.0, 0.0], [w, h]);
     d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
     let block = crate::title_block::title_block(doc, sheet, style);
@@ -556,6 +559,7 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
         let extent = c.as_ref().and_then(|c| c.extent);
         let middle = doc.view_origin(&v.plan).or_else(|| extent.map(|(lo, hi)| [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0])).unwrap_or_default();
         let to = |q: [f64; 2]| [v.at[0] + (q[0] - middle[0]) / v.scale, v.at[1] + (q[1] - middle[1]) / v.scale];
+        if let Some(photo) = doc.plan(&v.plan).and_then(|p| p.orthophoto.as_ref()) { d.images.extend(photo.image.placed(crop, &to)); }
         let (lo, hi) = match (crop, extent) {
             (Some((lo, hi)), _) => (to(lo), to(hi)),
             (None, Some((lo, hi))) => {
@@ -597,7 +601,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
     let zero = [f64::from(covers.min[0]), f64::from(covers.min[1])];
     let size = [f64::from(covers.max[0]) - zero[0], f64::from(covers.max[1]) - zero[1]];
     let on_paper = |p: [f32; 2]| [f64::from(p[0]) - zero[0], f64::from(p[1]) - zero[1]];
-    let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(size), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(size), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.rectangle(Pen::Frame, [0.0, 0.0], size);
     for line in &sheet.lines {
         d.line(Pen::Frame, on_paper(line[0]), on_paper(line[1]));

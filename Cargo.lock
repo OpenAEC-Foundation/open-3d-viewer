@@ -415,6 +415,8 @@ dependencies = [
 name = "bim-gis"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "serde",
  "serde_json",
  "tiff",
 ]
@@ -4303,6 +4305,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "open-3d-viewer"
 version = "2026.47.5"
 dependencies = [
+ "base64 0.22.1",
  "bim-bcf",
  "bim-civil",
  "bim-core",

@@ -59,6 +59,8 @@ pointcloud = ["dep:pointcloud-core"]
 planner = ["dep:wry"]
 
 [dependencies]
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
 iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "advanced", "svg", "canvas", "image"] }
 # Shared OpenAEC window shell, tokens, widgets and icons (LGPL-3.0-only; fonts OFL, icons CC BY-SA,

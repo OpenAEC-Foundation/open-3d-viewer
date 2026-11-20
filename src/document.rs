@@ -154,6 +154,7 @@ impl Shape {
 /// [`PlanView::cut`] above its level.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanView {
+    pub orthophoto: Option<crate::raster::OrthoPhoto>,
     /// The IfcX path, a UUID.
     pub path: String,
     pub name: String,
@@ -749,7 +750,8 @@ impl Document {
             let view = json!({
                 "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
-            let view = shaped(view, &p.path, &p.shapes);
+            let mut view = shaped(view, &p.path, &p.shapes);
+            if let Some(photo) = &p.orthophoto { photo.write(&mut view["presentation"]); }
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(with_drawing(view, &p.drawing), &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
@@ -872,6 +874,7 @@ impl Document {
                 let kind = PlanKind::from_key(&text(p, "kind"));
                 let (cut, depth) = self.plan_defaults(&level, kind);
                 self.plans.push(PlanView {
+                    orthophoto: p.get("presentation").and_then(crate::raster::OrthoPhoto::read),
                     path: path.clone(),
                     name: text(p, "name"),
                     level,
@@ -1039,7 +1042,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 

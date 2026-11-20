@@ -57,6 +57,53 @@ impl Grid {
         Rd::new(self.west + (col as f64 + 0.5) * self.cell[0], self.north - (row as f64 + 0.5) * self.cell[1])
     }
 
+    /// Ground profile along a straight section, in metres from its start and metres NAP.
+    /// Split at every crossed pixel edge, so even a narrow NoData cell breaks the line.
+    pub fn profile(&self, from: Rd, to: Rd) -> Vec<Vec<[f64; 2]>> {
+        let length = from.distance(to);
+        if !length.is_finite() || length <= 0.0 {
+            return Vec::new();
+        }
+        let dx = to.x - from.x;
+        let dy = to.y - from.y;
+        let mut cuts = vec![0.0, 1.0];
+        for (start, delta, edge, step, count) in [
+            (from.x, dx, self.west, self.cell[0], self.cols),
+            (from.y, dy, self.north, -self.cell[1], self.rows),
+        ] {
+            if delta != 0.0 {
+                cuts.extend((0..=count).map(|i| (edge + step * i as f64 - start) / delta).filter(|t| *t > 0.0 && *t < 1.0));
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+        let mut runs = Vec::new();
+        let mut run = Vec::new();
+        let mut last = [0.0; 2];
+        for pair in cuts.windows(2) {
+            let mid = (pair[0] + pair[1]) / 2.0;
+            let col = ((from.x + mid * dx - self.west) / self.cell[0]).floor();
+            let row = ((self.north - from.y - mid * dy) / self.cell[1]).floor();
+            let height = (col >= 0.0 && col < self.cols as f64 && row >= 0.0 && row < self.rows as f64)
+                .then(|| self.heights[row as usize * self.cols + col as usize]).filter(|z| z.is_finite());
+            if let Some(z) = height {
+                if run.is_empty() {
+                    run.push([pair[0] * length, f64::from(z)]);
+                }
+                run.push([mid * length, f64::from(z)]);
+                last = [pair[1] * length, f64::from(z)];
+            } else if !run.is_empty() {
+                run.push(last);
+                runs.push(std::mem::take(&mut run));
+            }
+        }
+        if !run.is_empty() {
+            run.push(last);
+            runs.push(run);
+        }
+        runs
+    }
+
     /// How many cells have a height.
     pub fn known(&self) -> usize {
         self.heights.iter().filter(|z| z.is_finite()).count()
@@ -96,6 +143,24 @@ pub fn parse(tiff: &[u8]) -> Result<Grid, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_preserves_nodata_and_grid_edges_in_both_directions() {
+        let grid = Grid { west: 100.0, north: 200.0, cell: [0.5, 0.5], rows: 1, cols: 3, heights: vec![1.0, f32::NAN, 2.0] };
+        let a = Rd::new(99.5, 199.75);
+        let b = Rd::new(102.0, 199.75);
+        for (from, to, first, last) in [(a, b, 1.0, 2.0), (b, a, 2.0, 1.0)] {
+            let runs = grid.profile(from, to);
+            assert_eq!(runs.len(), 2);
+            for (run, start, z) in [(&runs[0], 0.5, first), (&runs[1], 1.5, last)] {
+                assert_eq!(run.len(), 3);
+                for (i, point) in run.iter().enumerate() {
+                    assert!((point[0] - start - i as f64 * 0.25).abs() < 1e-10);
+                    assert_eq!(point[1], z);
+                }
+            }
+        }
+    }
 
     /// 40 by 40 m of the ground at the town hall square of Amersfoort, in cells of 2 m, as the
     /// service gave it.

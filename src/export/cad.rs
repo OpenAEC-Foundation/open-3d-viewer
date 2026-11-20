@@ -137,6 +137,7 @@ mod tests {
     /// Two cut walls of 8 m and 5 m, a line beyond, a text and an 8 m dimension, at 1:100.
     fn drawing() -> Drawing2d {
         Drawing2d {
+            images: Vec::new(),
             name: "Begane grond".into(),
             space: Space::Model { scale: 100.0 },
             paper: None,
@@ -190,6 +191,7 @@ mod tests {
     #[test]
     fn a_sheet_dimension_shows_the_model_length() {
         let d = Drawing2d {
+            images: Vec::new(),
             name: "A01".into(),
             space: Space::Paper,
             paper: Some([0.42, 0.297]),

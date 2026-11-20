@@ -122,7 +122,7 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
     let mut lo = start;
     for (k, length) in units.iter().enumerate() {
         let hi = lo + length;
-        let mut d = Drawing2d { name: format!("{} {}-{}", element.name, element.id.0, k + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+        let mut d = Drawing2d { images: Vec::new(), name: format!("{} {}-{}", element.name, element.id.0, k + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
         let mut own: Vec<Member> = members.iter().copied().filter(|m| (m.u.0 + m.u.1) / 2.0 > lo - tol && (m.u.0 + m.u.1) / 2.0 < hi + tol).collect();
         own.sort_by(|a, b| a.u.0.total_cmp(&b.u.0).then(a.v.0.total_cmp(&b.v.0)));
         for m in &own {
@@ -208,7 +208,7 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
             }
             own.sort_by(|a, b| a.at.u.0.total_cmp(&b.at.u.0).then(a.at.v.0.total_cmp(&b.at.v.0)));
             let key = l.members.as_ref().filter(|_| own[0].member).map_or(l.panels.material.as_str(), |m| m.material.as_str());
-            let mut d = Drawing2d { name: format!("{} {}-{} L{} {key}", element.name, element.id.0, k + 1, n + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+            let mut d = Drawing2d { images: Vec::new(), name: format!("{} {}-{} L{} {key}", element.name, element.id.0, k + 1, n + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
             for i in &own {
                 outline(&mut d, Pen::Cut, &i.at, lo);
             }
@@ -262,7 +262,7 @@ fn laying_plan(model: &Model, element: &Element, s: &bim_core::SystemDef, named:
     let left = dir.perp();
     let parts = model.evaluate(element.id).ok()?;
     let (text, off) = (TEXT * PLAN_SCALE, OFFSET * PLAN_SCALE);
-    let mut d = Drawing2d { name: format!("{} {}", element.name, element.id.0), space: Space::Model { scale: PLAN_SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { images: Vec::new(), name: format!("{} {}", element.name, element.id.0), space: Space::Model { scale: PLAN_SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     let flat = |q: &glam::DVec3| {
         let p = DVec2::new(q.x, q.y) - s.start;
         [p.dot(dir), p.dot(left)]

@@ -413,6 +413,7 @@ impl App {
                     plan: Arc::from(v.plan.as_str()),
                     cut: self.cuts.get(&v.plan).cloned(),
                     origin: self.document.view_origin(&v.plan),
+                    image: self.document.plan(&v.plan).and_then(|p| p.orthophoto.as_ref()).and_then(|p| p.image.placed(marks.and_then(|(_, c)| c), |q| q)),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
                     notes: self.document.view_notes(&v.plan).unwrap_or(&[]).iter().chain(self.document.view_tags(&v.plan)).cloned().collect(),
                     lines: self.document.view_lines(&v.plan).iter().chain(self.document.view_symbols(&v.plan)).copied().collect(),
@@ -566,6 +567,7 @@ impl App {
 /// A floor plan on the sheet as the canvas draws it.
 #[derive(Debug, Clone, Default)]
 struct Placed {
+    image: Option<crate::raster::PlacedImage>,
     name: String,
     /// The floor plan's path.
     plan: Arc<str>,
@@ -971,6 +973,7 @@ impl canvas::Program<Message> for PaperDrawing {
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
             }
             let placed = self.placed.get(i).cloned().unwrap_or_default();
+            if let Some(image) = &placed.image { image.draw(&mut frame, |q| Some(fit.point(self.to_paper(i, q)))); }
             match placed.cut.filter(|c| crate::drawing::drawn(c).next().is_some()) {
                 Some(cut) => {
                     // what is seen below the cut, thin and grey, then the cut itself

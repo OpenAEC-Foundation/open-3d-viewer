@@ -28,6 +28,7 @@ fn win_ansi(c: char) -> u8 {
         ('Š', 0x8A), ('‹', 0x8B), ('Œ', 0x8C), ('Ž', 0x8E), ('‘', 0x91), ('’', 0x92), ('“', 0x93), ('”', 0x94), ('•', 0x95),
         ('–', 0x96), ('—', 0x97), ('˜', 0x98), ('™', 0x99), ('š', 0x9A), ('›', 0x9B), ('œ', 0x9C), ('ž', 0x9E), ('Ÿ', 0x9F),
     ];
+    if c == '′' { return b'\''; }
     match c as u32 {
         0x20..=0x7E | 0xA0..=0xFF => c as u8,
         _ => EXTRA.iter().find(|(e, _)| *e == c).map_or(b'?', |(_, b)| *b),
@@ -60,6 +61,12 @@ fn content(d: &Drawing2d) -> String {
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let at = |q: [f64; 2]| format!("{} {}", num((q[0] - lo[0]) * k), num((q[1] - lo[1]) * k));
     let mut s = String::from("1 J 1 j 0 G 0 g\n");
+    for (i, image) in d.images.iter().enumerate() {
+        let [a, b] = image.bounds;
+        let [c, e] = image.clip;
+        let _ = writeln!(s, "q {} {} {} re W n {} 0 0 {} {} cm /Im{} Do Q", at(c), num((e[0]-c[0])*k), num((e[1]-c[1])*k),
+            num((b[0]-a[0])*k), num((b[1]-a[1])*k), at(a), i);
+    }
     for pen in Pen::ALL {
         // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
         // what is seen beyond it a width of its own
@@ -152,27 +159,49 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let (w, h) = (num_to((hi[0] - lo[0]) * k, 2), num_to((hi[1] - lo[1]) * k, 2));
     let stream = content(d);
+    let references = (0..d.images.len()).map(|i| format!("/Im{i} {} 0 R", i+7)).collect::<Vec<_>>().join(" ");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << {references} >> >> >>"),
         format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
         format!("<< /Title {} /Producer (Open BIM Suite) >>", utf16(&d.name)),
     ];
-    let mut out = String::from("%PDF-1.4\n");
+    let mut objects = objects.into_iter().map(String::into_bytes).collect::<Vec<_>>();
+    for image in &d.images {
+        use std::io::Write as _;
+        let (filter, stream) = if image.format == image::ImageFormat::Jpeg {
+            ("DCTDecode", image.bytes.to_vec())
+        } else {
+            let rgba = image::load_from_memory_with_format(&image.bytes, image.format).expect("validated drawing image").into_rgba8();
+            let mut encoded = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            for px in rgba.pixels() {
+                let a = u32::from(px[3]);
+                let rgb = [0, 1, 2].map(|k| ((u32::from(px[k])*a + 255*(255-a) + 127)/255) as u8);
+                encoded.write_all(&rgb).expect("in-memory stream");
+            }
+            ("FlateDecode", encoded.finish().expect("in-memory stream"))
+        };
+        let mut object = format!("<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /{filter} /Length {} >>\nstream\n", image.pixels[0], image.pixels[1], stream.len()).into_bytes();
+        object.extend(stream);
+        object.extend_from_slice(b"\nendstream");
+        objects.push(object);
+    }
+    use std::io::Write as _;
+    let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
     for (i, object) in objects.iter().enumerate() {
         offsets.push(out.len());
-        let _ = write!(out, "{} 0 obj\n{object}\nendobj\n", i + 1);
+        let _ = writeln!(out, "{} 0 obj", i+1);
+        out.extend(object);
+        out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
     let _ = write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
-    for offset in offsets {
-        let _ = write!(out, "{offset:010} 00000 n \n");
-    }
+    for offset in offsets { let _ = writeln!(out, "{offset:010} 00000 n "); }
     let _ = write!(out, "trailer\n<< /Size {} /Root 1 0 R /Info 6 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1);
-    out.into_bytes()
+    out
 }
 
 #[cfg(test)]
@@ -183,6 +212,7 @@ mod tests {
 
     fn sheet() -> Drawing2d {
         Drawing2d {
+            images: Vec::new(),
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(A3_LANDSCAPE),

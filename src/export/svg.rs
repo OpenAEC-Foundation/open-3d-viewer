@@ -41,8 +41,16 @@ pub fn svg(d: &Drawing2d) -> String {
     let (w, h) = page_mm(d);
     let at = |q: [f64; 2]| (num((q[0] - lo[0]) * k), num((hi[1] - q[1]) * k));
     let mut s = String::new();
-    let _ = write!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#, w = num(w), h = num(h));
+    let _ = write!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#, w = num(w), h = num(h));
     let _ = write!(s, r##"<rect width="{}" height="{}" fill="#fff"/>"##, num(w), num(h));
+    for (i, image) in d.images.iter().enumerate() {
+        let rect = |[lo, hi]: [[f64; 2]; 2]| {
+            let (x, y) = at([lo[0], hi[1]]);
+            format!(r#"x="{x}" y="{y}" width="{}" height="{}""#, num((hi[0]-lo[0])*k), num((hi[1]-lo[1])*k))
+        };
+        let mime = image.format.to_mime_type();
+        let _ = write!(s, r##"<defs><clipPath id="img{i}"><rect {}/></clipPath></defs><image {} preserveAspectRatio="none" clip-path="url(#img{i})" xlink:href="data:{mime};base64,{}"/>"##, rect(image.clip), rect(image.bounds), image.encoded());
+    }
     for pen in Pen::ALL {
         // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
         // what is seen beyond it a width of its own
@@ -130,6 +138,7 @@ mod tests {
 
     fn sheet(paper: [f64; 2]) -> Drawing2d {
         Drawing2d {
+            images: Vec::new(),
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(paper),

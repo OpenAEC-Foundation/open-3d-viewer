@@ -606,6 +606,7 @@ mod tests {
     fn a_pdf_the_viewer_exported_reads_back_at_paper_size() {
         use crate::drawing2d::{Drawing2d, Line2d, Pen, Space};
         let sheet = Drawing2d {
+            images: Vec::new(),
             name: "A01".into(),
             space: Space::Paper,
             paper: Some([0.42, 0.297]),

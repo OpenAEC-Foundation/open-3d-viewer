@@ -318,6 +318,7 @@ impl App {
             // its own texts and lines, then what the model says and draws on it by itself
             notes: self.document.view_notes(view)?.iter().chain(self.document.view_tags(view)).cloned().collect(),
             lines: self.document.view_lines(view).iter().chain(self.document.view_symbols(view)).copied().collect(),
+            image: self.document.plan(view).and_then(|p| p.orthophoto.as_ref()).and_then(|p| p.image.placed(self.document.view_marks(view).and_then(|(_, crop)| crop), |q| q)),
             fills: self.document.view_fills(view).to_vec(),
             cut: self.cuts.get(view).cloned(),
             crop,
@@ -643,6 +644,7 @@ pub(super) struct ViewMarks {
     /// The lines of the view's tags: their shapes and leaders.
     lines: Vec<[[f64; 2]; 2]>,
     /// The regions of the view filled in one colour, under its lines.
+    image: Option<crate::raster::PlacedImage>,
     fills: Vec<crate::document::Fill>,
     /// The view's lines, to snap to.
     cut: Option<Arc<Cut>>,
@@ -1027,6 +1029,7 @@ impl canvas::Program<Message> for ViewMarks {
             let paper = if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE };
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), paper);
         }
+        if let Some(image) = &self.image { image.draw(&mut frame, |q| self.px(&screen, q)); }
         // the cut faces in their hatch, over the model's own cut fill
         if let Some(cut) = &self.cut {
             let per_metre = cut.extent.map_or(0.0, |(lo, _)| self.paper(&screen, lo.map(f64::from)) / self.scale as f32);

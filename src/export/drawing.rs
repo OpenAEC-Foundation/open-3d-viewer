@@ -86,6 +86,7 @@ mod tests {
 
     fn sheet(name: &str) -> Drawing2d {
         Drawing2d {
+            images: Vec::new(),
             name: name.into(),
             space: Space::Paper,
             paper: Some(A3_LANDSCAPE),

@@ -162,11 +162,17 @@ impl App {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.history.can_undo() || self.modeller.history.can_undo()
+        let view = self.history.can_undo();
+        let model = self.modeller.history.can_undo();
+        if self.annotates { return view || model; }
+        view && (!model || self.undo_trail.last() != Some(&true))
     }
 
     pub fn can_redo(&self) -> bool {
-        self.history.can_redo() || self.modeller.history.can_redo()
+        let view = self.history.can_redo();
+        let model = self.modeller.history.can_redo();
+        if self.annotates { return view || model; }
+        view && (!model || self.redo_trail.last() != Some(&true))
     }
 
     /// Which history the next step comes from: the one `trail` names last that still has a step
@@ -229,9 +235,7 @@ impl App {
     /// Takes back the last step.
     pub(super) fn undo_step(&mut self) {
         // a move under way is dropped first: the model is then as its last step left it
-        if self.moving() {
-            return;
-        }
+        if self.moving() || !self.can_undo() { return; }
         match Self::next_step(&mut self.undo_trail, self.history.can_undo(), self.modeller.history.can_undo()) {
             Some(true) => {
                 if let Some(model) = self.modeller.history.undo(self.modeller.base.clone()) {
@@ -251,9 +255,7 @@ impl App {
 
     /// Makes the step taken back last again.
     pub(super) fn redo_step(&mut self) {
-        if self.moving() {
-            return;
-        }
+        if self.moving() || !self.can_redo() { return; }
         match Self::next_step(&mut self.redo_trail, self.history.can_redo(), self.modeller.history.can_redo()) {
             Some(true) => {
                 if let Some(model) = self.modeller.history.redo(self.modeller.base.clone()) {

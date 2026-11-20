@@ -141,6 +141,7 @@ impl App {
 
     /// The lines of the temporary dimensions over the viewport.
     pub(in crate::app) fn temp_dim_marks(&self, ink: Color) -> Option<TempDimMarks> {
+        if !self.annotates { return None; }
         let dims = self.temp_dims();
         (!dims.is_empty()).then(|| TempDimMarks { lines: dims.iter().map(|d| [d.from.as_vec3(), d.to.as_vec3()]).collect(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink })
     }
@@ -148,6 +149,7 @@ impl App {
     /// The fields of the temporary dimensions, each at the middle of its line: the distance, to
     /// type another over.
     pub(in crate::app) fn temp_dim_fields(&self, _p: Palette) -> Option<Element<'_, Message>> {
+        if !self.annotates { return None; }
         let dims = self.temp_dims();
         if dims.is_empty() {
             return None;

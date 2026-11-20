@@ -232,6 +232,8 @@ pub struct Modeller {
     pub slab_drag: Option<slab_handles::SlabDrag>,
     /// The sketch of a floor outline, open (see `sketch`).
     pub sketch: Option<sketch::Sketch>,
+    /// An unfinished floor outline kept while its project is being inspected.
+    pub parked_sketch: Option<sketch::Sketch>,
     /// Where the next click of the tool would place a point (snapped, scene coordinates), while
     /// the cursor is over the viewport: the preview runs to it.
     pub cursor: Option<DVec3>,

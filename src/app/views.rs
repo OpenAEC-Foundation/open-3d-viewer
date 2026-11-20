@@ -192,6 +192,7 @@ impl App {
 
     /// Lets the 3D view at `path` (if it is one) keep the camera and section box of `slot`.
     fn keep_view_3d(&mut self, path: &str, slot: &ViewSlot) {
+        if !self.annotates { return; }
         let section = slot.section.filter(|_| slot.section_on).map(|b| view_box(&b));
         self.document.set_view_3d_camera(path, camera_3d(&slot.camera), section);
         // a view that had its say in the loads and results keeps what shows now

@@ -168,7 +168,7 @@ impl App {
 
     /// Whether Tab means edit mode now: in it, or with one modelled element selected.
     pub(crate) fn wants_tab(&self) -> bool {
-        self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.editable().is_some()
+        self.annotates && (self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.editable().is_some())
     }
 
     /// Tab: into edit mode on the selected element, or out of it.

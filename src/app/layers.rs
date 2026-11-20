@@ -158,6 +158,7 @@ impl App {
     /// Keeps the layer switches and the hidden elements of the view in the viewport in the
     /// document (the 3D view keeps its own in the app), and cuts it again when they changed.
     pub(super) fn keep_view_layers(&mut self) {
+        if !self.annotates { return; }
         let Some(path) = self.active_plan.clone() else { return };
         let own = self.own_switches(&self.viewport_switches());
         let layers = self.document.set_view_layers(&path, own);
@@ -195,6 +196,7 @@ impl App {
     pub(super) fn switch_layers(&mut self, layers: &[usize], on: bool) {
         match self.layers_of() {
             Some(LayersOf::Placed(path)) => {
+                if !self.annotates { return; }
                 let mut switches = self.switches_of(&path);
                 for &i in layers {
                     if let Some(s) = switches.get_mut(i) {

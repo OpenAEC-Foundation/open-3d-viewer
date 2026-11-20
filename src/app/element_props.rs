@@ -476,6 +476,7 @@ impl App {
     /// The Definition section: the selected modelled element's values to type in, and the openings
     /// of a wall or a timber frame.
     pub(super) fn element_properties(&self, p: Palette, l: Language) -> Option<Widget<'_, Message>> {
+        if !self.annotates { return None; }
         let e = self.defined()?;
         let shape = e.shape_in_project(&self.modeller.model.grid);
         let field = |label: &str, f: ElementField| field_row(p, label, self.element_field_text(e, f), f);

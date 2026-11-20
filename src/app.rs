@@ -81,6 +81,7 @@ mod schedules;
 mod take_over;
 pub mod transform;
 mod undo;
+mod viewer;
 mod view_props;
 mod views;
 mod sheets;
@@ -1811,6 +1812,7 @@ impl App {
     /// What belongs to the window, not to a project, from the project shown before: the theme,
     /// the viewport's size and place, touch input and the remote control.
     pub fn take_window_settings(&mut self, from: &App) {
+        self.annotates = from.annotates;
         self.theme = from.theme;
         self.viewport_size = from.viewport_size;
         self.viewport_origin = from.viewport_origin;
@@ -2086,6 +2088,7 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if !self.annotates && !message.allowed_in_viewer() { return Task::none(); }
         let before = changes_visibility(&message).then(|| self.view_state());
         let shown = before.is_some() || matches!(message, Message::Undo | Message::Redo);
         // typing in one field of a Library editor is one step to take back

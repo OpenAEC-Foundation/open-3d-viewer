@@ -550,6 +550,7 @@ impl App {
     /// that (a view's scale and crop, a text's wording, a dimension's side).
     pub(super) fn sheet_properties(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let path = self.active_doc_sheet.as_ref()?;
+        if !self.annotates { return Some(self.export_control(p, l)); }
         let sheet = self.document.sheet(path)?;
         let key: Arc<str> = Arc::from(path.as_str());
         let small = |label: String, active: bool, message: Message| -> Element<'static, Message> {

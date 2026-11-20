@@ -352,6 +352,10 @@ impl App {
     /// Runs a remote command. Most answer at once; `open_file` answers when the model is in and
     /// `screenshot` when the window is captured.
     pub fn remote(&mut self, call: RemoteCall) -> Task<Message> {
+        if !self.annotates && (matches!(call.cmd.as_str(), "save_file" | "drag_handle" | "tool_type" | "click_drawing" | "element_drawings") || call.cmd.starts_with("collab_")) {
+            call.answer(Err("The Viewer is read-only.".into()));
+            return Task::none();
+        }
         match call.cmd.as_str() {
             "open_file" => return self.remote_open(call),
             "save_file" => return self.remote_save(call),

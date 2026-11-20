@@ -355,6 +355,7 @@ impl App {
 
     /// The Definition section for the one space selected: its name, typed in.
     pub(in crate::app) fn space_properties(&self, p: crate::theme::Palette, l: openaec_ui::Language) -> Option<iced::Element<'_, crate::app::Message>> {
+        if !self.annotates { return None; }
         use iced::widget::{row, text, text_input};
         let k = self.selected_space()?;
         let space = self.spaces().into_iter().nth(k)?;

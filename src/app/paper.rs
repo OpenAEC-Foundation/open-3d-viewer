@@ -931,6 +931,7 @@ impl PaperDrawing {
 /// the point the pointer snaps to now.
 #[derive(Default)]
 struct PaperState {
+    last_view_click: Option<(Arc<str>, usize, iced::advanced::mouse::Click)>,
     panning: Option<(Point, [f64; 2])>,
     note_drag: Option<(usize, usize, [f64; 2])>,
     hover: Option<usize>,
@@ -1052,6 +1053,17 @@ impl canvas::Program<Message> for PaperDrawing {
                 if let Some(handle) = self.handle_at(&fit, fit.point(at)) {
                     state.crop = Some(handle);
                     return Some(canvas::Action::request_redraw().and_capture());
+                }
+                let previous = state.last_view_click.take();
+                if let Some(i) = self.view_at(at) {
+                    let last = previous.filter(|(sheet, index, _)| sheet == &self.key && *index == i);
+                    let click = iced::advanced::mouse::Click::new(cursor.position_in(bounds)?, mouse::Button::Left, last.map(|(_, _, click)| click));
+                    if click.kind() == iced::advanced::mouse::click::Kind::Double {
+                        state.drag = None;
+                        state.note_drag = None;
+                        return Some(canvas::Action::publish(Message::OpenPlan(self.placed[i].plan.clone())).and_capture());
+                    }
+                    state.last_view_click = Some((self.key.clone(), i, click));
                 }
                 if let Some((i, k)) = self.note_at(&fit, fit.point(at)) {
                     let q = self.to_model(i, at);
@@ -2050,6 +2062,15 @@ mod tests {
         let count = app.document.sheets().len();
         let _ = app.update(Message::FillSheets(["Floor plans", "Sections and elevations"]));
         assert_eq!(app.document.sheets().len(), count);
+    }
+
+    #[test]
+    fn double_click_activates_a_placed_view() {
+        let (_, _, _, drawing) = sheet_with_plan(false);
+        let at = Fit::of(drawing.sheet.paper, bounds().size()).point([0.20, 0.15]);
+        let mut state = PaperState::default();
+        assert!(matches!(press_at(&drawing, &mut state, at), Some(Message::PickOnSheet(Some(SheetPick::View(0))))));
+        assert!(matches!(press_at(&drawing, &mut state, at), Some(Message::OpenPlan(path)) if path == drawing.placed[0].plan));
     }
 
     #[test]

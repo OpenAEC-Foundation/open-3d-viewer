@@ -521,7 +521,10 @@ mod tests {
         twin.grid.row = 2.0;
         project.add_system_type(twin).unwrap();
         assert_eq!(project.system_name("system.twin", Lang::Nl).unwrap(), "Vliesgevel aluminium 50×150 h.o.h. 1500 (2)");
-        assert_eq!(project.system_names(SystemGroup::Ceiling, Lang::En), vec![("system.ceiling-600x600", "Mineral fibre 15 600×600".to_string())]);
+        let ceilings = project.system_names(SystemGroup::Ceiling, Lang::En);
+        assert_eq!(ceilings.len(), 7);
+        assert_eq!(ceilings[0], ("system.ceiling-600x600", "Mineral fibre 15 600×600".to_string()));
+        assert!(ceilings.contains(&("system.ceiling-gypsum-1", "Gypsum board 1×12.5 steel 60×27 c/c 500".to_string())), "{ceilings:?}");
         let other = Library { system_types: vec![SystemType { id: "system.x".into(), ..project.system_types[0].clone() }], ..Library::default() };
         let mut bare = Library::default();
         assert_eq!(bare.merge(&other), 0, "a type of materials the library lacks is left out");

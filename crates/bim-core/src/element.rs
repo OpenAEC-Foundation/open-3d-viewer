@@ -328,23 +328,7 @@ pub struct SystemDef {
     pub division: Option<Division>,
 }
 
-/// How the bays of a system's face are divided along its line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Division {
-    /// Equal bays, as near the grid's as fit.
-    Equal,
-    /// Whole bays from the start, the last one cut to fit.
-    FromStart,
-    /// Whole bays up to the end, the first one cut to fit.
-    FromEnd,
-    /// Whole bays in the middle, an equal cut one at either end.
-    Centred,
-}
-
-impl Division {
-    pub const ALL: [Division; 4] = [Division::Equal, Division::FromStart, Division::FromEnd, Division::Centred];
-}
+pub use bim_library::system::Division;
 
 /// How a connection joins its members.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

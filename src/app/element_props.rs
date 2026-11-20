@@ -621,7 +621,7 @@ impl App {
         if let Shape::System(s) = &shape {
             let t = s.system_type.as_ref();
             if t.is_none_or(|t| t.framing.is_none() && t.pattern == bim_library::Pattern::Stack) {
-                let now = s.division.unwrap_or(if t.is_some_and(|t| t.whole) { bim_core::Division::FromStart } else { bim_core::Division::Equal });
+                let now = s.divided();
                 let name = |d: bim_core::Division| match d {
                     bim_core::Division::Equal => l.text("Gelijk verdeeld", "Equal bays"),
                     bim_core::Division::FromStart => l.text("Heel vanaf begin", "Whole from the start"),

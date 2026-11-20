@@ -103,6 +103,9 @@ pub struct SystemTypeDef {
     /// Its panels are hollow slabs with these cores, running across the system.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cores: Option<Cores>,
+    /// How its bays are divided, where not in equal ones (or, slabs, whole from the start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub division: Option<Division>,
 }
 
 fn is_upright(lying: &bool) -> bool {
@@ -118,6 +121,13 @@ fn is_stack(p: &Pattern) -> bool {
 }
 
 impl SystemDef {
+    /// How its bays are divided: as it is asked itself, else as its type is, else slabs whole
+    /// from the start and anything else in equal bays.
+    pub fn divided(&self) -> Division {
+        let t = self.system_type.as_ref();
+        self.division.or(t.and_then(|t| t.division)).unwrap_or(if t.is_some_and(|t| t.whole) { Division::FromStart } else { Division::Equal })
+    }
+
     /// Whether the system lies (a floor, a ceiling) rather than stands.
     pub fn lies(&self) -> bool {
         self.system_type.as_ref().is_some_and(|t| t.lying)
@@ -154,6 +164,7 @@ impl SystemDef {
             trimmer: t.trimmer,
             whole: t.whole,
             cores: t.cores,
+            division: t.division,
         });
         self
     }
@@ -202,8 +213,12 @@ impl Face<'_> {
         let rows = if self.whole { count(((height - LINEAR_TOLERANCE) / self.spacing.y).ceil()) } else { count((height / self.spacing.y).round()) };
         if self.divided() != Division::Equal {
             // (one more than fit whole: a cut one at either end at most)
-            let bays = count(((length - LINEAR_TOLERANCE) / self.spacing.x).ceil() + 1.0);
-            return (bays, rows, self.spacing.x.min(length), height / rows as f64);
+            let most = |extent: f64, pitch: f64| count(((extent - LINEAR_TOLERANCE) / pitch).ceil() + 1.0);
+            let bays = most(length, self.spacing.x);
+            if self.whole {
+                return (bays, rows, self.spacing.x.min(length), height / rows as f64);
+            }
+            return (bays, most(height, self.spacing.y), self.spacing.x.min(length), self.spacing.y.min(height));
         }
         let bays = count((length / self.spacing.x).round());
         (bays, rows, length / bays as f64, height / rows as f64)
@@ -217,14 +232,26 @@ impl Face<'_> {
     /// The lines between its bays along a face `length` long, from 0 to `length`. What is left
     /// beside the whole bays is wider than a member, or it goes with the bay next to it.
     fn lines(&self, length: f64) -> Vec<f64> {
-        let (tol, p, w) = (LINEAR_TOLERANCE, self.spacing.x, self.width());
+        self.cut(length, self.spacing.x, false)
+    }
+
+    /// The lines between its rows up (or, lying, across) a face `height` high, from 0 to
+    /// `height`: divided as its bays are, but rows of slabs equal and no longer than the grid's.
+    fn rows(&self, height: f64) -> Vec<f64> {
+        self.cut(height, self.spacing.y, true)
+    }
+
+    /// The lines that divide `length` in bays of `p` (its rows, when `up`).
+    fn cut(&self, length: f64, p: f64, up: bool) -> Vec<f64> {
+        let (tol, w) = (LINEAR_TOLERANCE, self.width());
         let from_start = || -> Vec<f64> {
             let whole = (((length - w - tol) / p).ceil().clamp(1.0, 1e9)) as usize;
             (0..whole).map(|i| i as f64 * p).chain(once(length)).collect()
         };
-        match self.divided() {
+        match if up && self.whole { Division::Equal } else { self.divided() } {
             Division::Equal => {
-                let (bays, _, bay, _) = self.division(length, 1.0);
+                let equal = Face { division: Division::Equal, ..*self };
+                let (bays, bay) = if up { let (_, n, _, d) = equal.division(1.0, length); (n, d) } else { let (n, _, d, _) = equal.division(length, 1.0); (n, d) };
                 (0..bays).map(|i| i as f64 * bay).chain(once(length)).collect()
             }
             Division::FromStart => from_start(),
@@ -235,8 +262,9 @@ impl Face<'_> {
                 if left <= tol || whole < 1.0 {
                     return from_start();
                 }
-                // halves no wider than a member go with a whole bay each
-                let (whole, side) = if left / 2.0 > w + tol { (whole, left / 2.0) } else { (whole - 1.0, (left + p) / 2.0) };
+                // what is left goes with a whole bay, halved over both ends: the cut bays are
+                // wider than half a bay, as a ceiling's border tiles are set out
+                let (whole, side) = (whole - 1.0, (left + p) / 2.0);
                 let inner = (0..=whole.clamp(0.0, 1e9) as usize).map(|i| side + i as f64 * p);
                 once(0.0).chain(inner.filter(|u| *u < length - tol)).chain(once(length)).collect()
             }
@@ -346,7 +374,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         framing: t.and_then(|t| t.framing),
         gauge: t.and_then(|t| t.gauge),
         whole: t.is_some_and(|t| t.whole),
-        division: s.division.unwrap_or(if t.is_some_and(|t| t.whole) { Division::FromStart } else { Division::Equal }),
+        division: s.divided(),
         panel: (s.panel, t.map(|t| t.panel_material.as_str())),
     };
     let layers = t.into_iter().flat_map(|t| &t.layers).map(|l| Face {
@@ -957,12 +985,15 @@ impl Line {
     /// Face `f` on a grid: its members on the grid's lines, joined, and its panels (or boards) in
     /// its bays, cut around `openings` and at the prefab units' `joints`.
     fn grid(&self, f: &Face, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
-        let (_, rows, bay, row) = f.division(self.length, self.height);
+        let (_, _, bay, row) = f.division(self.length, self.height);
         let w = f.width();
-        // where division `i` along is
+        // where division `i` along is, and row `j` up
         let lines = f.lines(self.length);
         let bays = lines.len() - 1;
         let line = |i: usize| lines[i];
+        let ups = f.rows(self.height);
+        let rows = ups.len() - 1;
+        let up = |j: usize| ups[j];
         // a panel between the lines `w` apart, up to the face's end and head (where boards are
         // cut), cut around the openings and left out of the face's gaps
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
@@ -1008,7 +1039,7 @@ impl Line {
                             if f.whole && edge_row {
                                 continue;
                             }
-                            pieces.push(self.horizontal(f, size, j as f64 * row, line(i), line(i + 1))?);
+                            pieces.push(self.horizontal(f, size, up(j), line(i), line(i + 1))?);
                             let h = pieces.len() - 1;
                             for (k, last) in [(i, i == 0), (i + 1, i + 1 == bays)] {
                                 if let Some(v) = verticals[k] {
@@ -1027,9 +1058,10 @@ impl Line {
                     None if f.member.is_some() => (0..bays).map(|i| (line(i), line(i + 1) - line(i))).collect(),
                     None => (0..bays).map(|i| (i as f64 * bay, bay)).collect(),
                 };
-                for (u, du) in columns {
+                // (an air cavity between the members is no part)
+                for (u, du) in columns.into_iter().filter(|_| f.panel.1 != Some("air")) {
                     for j in 0..rows {
-                        parts.extend(panel(u, j as f64 * row, du, row)?);
+                        parts.extend(panel(u, up(j), du, if f.member.is_some() { up(j + 1) - up(j) } else { row })?);
                     }
                 }
             }
@@ -1920,7 +1952,7 @@ mod tests {
         assert_eq!(widths(None), [1190, 1180, 1180, 1180, 1180, 1180, 1180, 390]);
         assert_eq!(widths(Some(Division::FromStart)), widths(None));
         assert_eq!(widths(Some(Division::FromEnd)), [390, 1180, 1180, 1180, 1180, 1180, 1180, 1190]);
-        assert_eq!(widths(Some(Division::Centred)), [190, 1180, 1180, 1180, 1180, 1180, 1180, 1180, 190]);
+        assert_eq!(widths(Some(Division::Centred)), [790, 1180, 1180, 1180, 1180, 1180, 1180, 790]);
         assert_eq!(widths(Some(Division::Equal)), [1247, 1237, 1237, 1237, 1237, 1237, 1247]);
         // a curtain wall: equal bays unless it is asked otherwise
         let wall = system(5.0, 3.0);
@@ -1928,7 +1960,7 @@ mod tests {
         assert_eq!(lines(None), [0, 1667, 3333, 5000]);
         assert_eq!(lines(Some(Division::FromStart)), [0, 1500, 3000, 4500, 5000]);
         assert_eq!(lines(Some(Division::FromEnd)), [0, 500, 2000, 3500, 5000]);
-        assert_eq!(lines(Some(Division::Centred)), [0, 250, 1750, 3250, 4750, 5000]);
+        assert_eq!(lines(Some(Division::Centred)), [0, 1000, 2500, 4000, 5000]);
         assert!(parts(&SystemDef { division: Some(Division::Centred), ..wall.clone() }).is_ok());
         // a row of slabs is no longer than the type's longest: 9 m for these
         let deep = SystemDef { height: 13.0, ..floor };
@@ -1959,6 +1991,31 @@ mod tests {
         let parts = super::parts(&ceiling).unwrap();
         assert_eq!(of(&parts, "mineral-fibre").len(), 20, "5 by 4 tiles");
         assert!(parts.iter().all(|p| p.solid.bounds().1.z <= 2.6 + 1e-9 && p.solid.bounds().0.z >= 2.6 - 0.038 - 1e-9));
+        // a room that is no whole number of tiles: laid out from its middle, both ways, so the
+        // cut tiles at either side are equal and more than half a tile (3.3 m: 450 either side
+        // of four; 2.5 m: 350 either side of three)
+        let ceiling = SystemDef { base: 2.6, ..system(3.3, 2.5) }.laid(library.system_type("system.ceiling-600x600").unwrap()).unwrap();
+        let f = &faces(&ceiling)[0];
+        let mm = |v: Vec<f64>| v.iter().map(|u| (u * 1000.0).round() as i64).collect::<Vec<_>>();
+        assert_eq!(mm(f.lines(3.3)), [0, 450, 1050, 1650, 2250, 2850, 3300]);
+        assert_eq!(mm(f.rows(2.5)), [0, 350, 950, 1550, 2150, 2500]);
+        assert_eq!(of(&super::parts(&ceiling).unwrap(), "mineral-fibre").len(), 6 * 5);
+        // tiles 600 by 1200
+        let long = SystemDef { base: 2.6, ..system(3.0, 2.4) }.laid(library.system_type("system.ceiling-600x1200").unwrap()).unwrap();
+        assert_eq!(of(&super::parts(&long).unwrap(), "mineral-fibre").len(), 5 * 2);
+        // a gypsum board ceiling: channels at 500 with nothing between them, two layers of board under them
+        let gypsum = SystemDef { base: 2.6, ..system(3.0, 2.4) }.laid(library.system_type("system.ceiling-gypsum-2").unwrap()).unwrap();
+        let made = super::parts(&gypsum).unwrap();
+        assert!(of(&made, "air").is_empty());
+        let boards = of(&made, "gypsum-board");
+        assert_eq!(boards.len(), 2 * 3, "three boards 1200 wide in either layer");
+        assert!(boards.iter().all(|p| p.solid.bounds().1.z <= 2.6 - 0.027 + 1e-9 && p.solid.bounds().0.z >= 2.6 - 0.027 - 0.025 - 1e-9), "under the channels");
+        assert!(of(&made, "steel").iter().all(|p| p.solid.bounds().0.z >= 2.6 - 0.027 - 1e-9 && p.solid.bounds().1.z <= 2.6 + 1e-9));
+        // slats at 90
+        let slats = SystemDef { base: 2.6, ..system(1.8, 1.2) }.laid(library.system_type("system.ceiling-timber-slats-90").unwrap()).unwrap();
+        let made = super::parts(&slats).unwrap();
+        assert!(made.iter().all(|p| p.material.as_deref() == Some("timber")));
+        assert_eq!(made.iter().filter(|p| p.solid.bounds().1.y - p.solid.bounds().0.y > 1.0).count(), 21, "a slat on every line");
     }
 
     #[test]

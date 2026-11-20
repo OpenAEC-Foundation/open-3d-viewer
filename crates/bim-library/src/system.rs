@@ -413,6 +413,25 @@ impl Trimmer {
     }
 }
 
+/// How the bays of a system's face are divided along its line (and, but for slabs, its rows
+/// across it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Division {
+    /// Equal bays, as near the grid's as fit.
+    Equal,
+    /// Whole bays from the start, the last one cut to fit.
+    FromStart,
+    /// Whole bays up to the end, the first one cut to fit.
+    FromEnd,
+    /// Whole bays in the middle, an equal cut one at either end, wider than half a bay.
+    Centred,
+}
+
+impl Division {
+    pub const ALL: [Division; 4] = [Division::Equal, Division::FromStart, Division::FromEnd, Division::Centred];
+}
+
 /// The cores of a hollow slab: `count` of them side by side over a whole slab's width, each
 /// `width` wide and `height` high with round ends up and down, running the slab's length.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -462,6 +481,9 @@ pub struct SystemType {
     /// Its panels are hollow slabs with these cores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cores: Option<Cores>,
+    /// How its bays are divided, where not in equal ones (or, slabs, whole from the start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub division: Option<Division>,
 }
 
 /// Whether a grid fits members `width` wide: positive bays and rows, wider than the members.
@@ -606,26 +628,36 @@ impl SystemType {
     pub fn rule_name(&self, materials: &[Material], lang: Lang) -> String {
         let material = |key: &str| materials.iter().find(|m| m.key == key).map_or(key.to_string(), |m| m.name(lang).to_string());
         let mm = |v: f64| millimetres(v, lang);
+        let spacing = match lang {
+            Lang::Nl => "h.o.h.",
+            Lang::En => "c/c",
+            Lang::De => "Achsabstand",
+            Lang::Fr => "entraxe",
+        };
+        let capital = |s: String| -> String {
+            let mut chars = s.chars();
+            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        };
         let mut name = if self.group.framed() {
             let group = self.group.name(lang);
             let made_of = material(&self.members.material);
-            let spacing = match lang {
-                Lang::Nl => "h.o.h.",
-                Lang::En => "c/c",
-                Lang::De => "Achsabstand",
-                Lang::Fr => "entraxe",
-            };
             let size = format!("{}×{} {spacing} {}", mm(self.members.width), mm(self.members.depth), mm(self.grid.bay));
             if group.to_lowercase().contains(&made_of.to_lowercase()) {
                 format!("{group} {size}")
             } else {
                 format!("{group} {made_of} {size}")
             }
+        } else if self.panels.material == "air" {
+            // open between its members (slats, a carrier of channels): by its members, and first
+            // by what hangs under them ("Gipsplaat 2×12.5 staal 60×27 h.o.h. 500")
+            let members = format!("{} {}×{} {spacing} {}", material(&self.members.material), mm(self.members.width), mm(self.members.depth), mm(self.grid.bay));
+            let under: Vec<&SystemLayer> = self.layers.iter().filter(|l| l.offset < 0.0).collect();
+            match under.first() {
+                Some(board) => format!("{} {}×{} {members}", capital(material(&board.panels.material)), under.len(), mm(board.panels.thickness)),
+                None => capital(members),
+            }
         } else {
-            let made_of = material(&self.panels.material);
-            let mut chars = made_of.chars();
-            let capitalised: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
-            format!("{capitalised} {} {}×{}", mm(self.panels.thickness), mm(self.grid.bay), mm(self.grid.row))
+            format!("{} {} {}×{}", capital(material(&self.panels.material)), mm(self.panels.thickness), mm(self.grid.bay), mm(self.grid.row))
         };
         // a metal stud partition also by its lining: the boards on one face ("2×12.5")
         if self.group == SystemGroup::MetalStud {
@@ -663,7 +695,7 @@ pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
     let glass = || Panels::new("glass", 0.024);
-    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, code: None, trimmer: None, whole: false, cores: None };
+    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None, code: None, trimmer: None, whole: false, cores: None, division: None };
     // aluminium and PVC frames are mitred at their corners
     let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
     // boards of `material` laid edge to edge, `bay` wide and `row` high; membranes come in rolls
@@ -825,7 +857,34 @@ pub fn starter() -> Vec<SystemType> {
     ];
     types.extend([0.15, 0.2, 0.26, 0.32, 0.4].map(hollow_core));
     types.extend([0.2, 0.26, 0.3].map(wide_slab));
-    types.push(SystemType { lying: Some(2.6), ..upright("system.ceiling-600x600", Ceiling, Grid::new(0.6, 0.6, Stack), Members::new(0.024, 0.038, "steel"), Panels::new("mineral-fibre", 0.015)) });
+    // suspended ceilings: tiles in a grid of T profiles 24 or 15 wide, laid out from the middle
+    // of the room so the cut tiles at either side are equal
+    let tiles = |id: &str, bay: f64, row: f64, profile: f64, material: &str, thickness: f64| SystemType {
+        lying: Some(2.6),
+        division: Some(Division::Centred),
+        ..upright(id, Ceiling, Grid::new(bay, row, Stack), Members::new(profile, 0.038, "steel"), Panels::new(material, thickness))
+    };
+    types.push(tiles("system.ceiling-600x600", 0.6, 0.6, 0.024, "mineral-fibre", 0.015));
+    types.push(tiles("system.ceiling-600x1200", 0.6, 1.2, 0.024, "mineral-fibre", 0.015));
+    types.push(tiles("system.ceiling-600x600-t15", 0.6, 0.6, 0.015, "mineral-fibre", 0.02));
+    types.push(tiles("system.ceiling-metal-600x600", 0.6, 0.6, 0.024, "steel", 0.0006));
+    // a gypsum board ceiling: furring channels 60 wide and 27 deep at 500, carried by channels
+    // across them every 1000, and under them one or two layers of board 12.5
+    for linings in [1_usize, 2] {
+        let (channel, board) = (0.027, 0.0125);
+        types.push(SystemType {
+            lying: Some(2.6),
+            division: Some(Division::FromStart),
+            layers: (0..linings).map(|k| boards(-(channel / 2.0 + board * (k as f64 + 0.5)), "gypsum-board", board, 1.2, 2.4)).collect(),
+            ..upright(&format!("system.ceiling-gypsum-{linings}"), Ceiling, Grid::new(0.5, 1.0, Stack), Members::new(0.06, channel, "steel"), Panels::new("air", channel))
+        });
+    }
+    // a slatted timber ceiling: slats 30 wide and 45 deep at 90, on battens across them every 600
+    types.push(SystemType {
+        lying: Some(2.6),
+        division: Some(Division::Centred),
+        ..upright("system.ceiling-timber-slats-90", Ceiling, Grid::new(0.09, 0.6, Stack), Members::new(0.03, 0.045, "timber"), Panels::new("air", 0.045))
+    });
     types
 }
 
@@ -840,7 +899,7 @@ mod tests {
     #[test]
     fn the_starter_types_check_and_have_names_of_their_own() {
         let types = starter();
-        assert_eq!(types.len(), 38);
+        assert_eq!(types.len(), 44);
         for t in &types {
             t.check(&materials()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
             // a floor or a ceiling lies, the others stand
@@ -874,6 +933,9 @@ mod tests {
         assert_eq!(name("system.masonry-dik-stretcher", Lang::De), "Mauerwerk 100 220×75 Läuferverband");
         assert_eq!(name("system.cladding-timber-boards-140", Lang::En), "Timber cladding 18 4000×140 staggered");
         assert_eq!(name("system.hollow-core-260", Lang::Nl), "Kanaalplaat 260 1200×10000");
+        assert_eq!(name("system.ceiling-gypsum-2", Lang::Nl), "Gipsplaat 2×12.5 staal 60×27 h.o.h. 500");
+        assert_eq!(name("system.ceiling-timber-slats-90", Lang::En), "Timber 30×45 c/c 90");
+        assert_eq!(name("system.ceiling-600x1200", Lang::Nl), "Mineraalvezel 15 600×1200");
         assert_eq!(name("system.wide-slab-260", Lang::Nl), "Breedplaat 60 2400×7200 opstort 200");
         assert_eq!(name("system.wide-slab-200", Lang::En), "Wide-slab plank 60 2400×7200 structural topping 140");
         assert_eq!(name("system.cladding-zinc-standing-seam-430", Lang::Fr), "Zinc 0,8 430×6000");

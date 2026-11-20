@@ -354,6 +354,7 @@ impl App {
 
     /// Opens the sketch of floor `element`: its outline and its openings as lines.
     pub(in crate::app) fn open_sketch(&mut self, element: ElementId) {
+        self.drop_grab();
         let Some(shape) = self.modeller.model.get(element).map(|e| e.shape_in_project(&self.modeller.model.grid)) else { return };
         let (outline, holes, top, bulges) = match shape {
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, bulges, .. }, .. }) => (outline, holes, top, bulges),
@@ -368,10 +369,7 @@ impl App {
         for hole in &holes {
             segments.extend((0..hole.len()).map(|i| Segment::line(hole[i], hole[(i + 1) % hole.len()])));
         }
-        self.modeller.tool = None;
-        self.modeller.points.clear();
-        self.modeller.refusal = None;
-        self.measure.tool = None;
+        self.select_tool();
         self.modeller.sketch = Some(Sketch { element, top, segments, tool: SketchTool::Pick, first: None, second: None, cursor: None, picked: None, held: None, error: None });
     }
 
@@ -588,6 +586,7 @@ impl App {
         let picked = sketch.picked.and_then(|i| sketch.segments.get(i));
         let lines = sketch.segments.iter().copied().chain(sketch.preview()).flat_map(|s| s.chords().windows(2).map(|w| [up(w[0]), up(w[1])]).collect::<Vec<_>>()).collect();
         Some(EditOverlay {
+            selected_sketch_line: Some(picked.map(|s| s.chords().into_iter().map(up).collect()).unwrap_or_default()),
             // the ends of the picked line, and the point held, show filled
             picked: points.iter().map(|p| sketch.held.is_some_and(|h| h.distance(*p) <= MEET) || picked.is_some_and(|s| [s.a, s.b].iter().any(|e| e.distance(*p) <= MEET))).collect(),
             points: points.iter().map(|p| up(*p)).collect(),
@@ -739,6 +738,23 @@ mod tests {
     fn slab_of(app: &App, id: ElementId) -> (Vec<DVec2>, Vec<Vec<DVec2>>, Vec<f64>) {
         let Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, bulges, .. }, .. }) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
         (outline, holes, bulges)
+    }
+
+    #[test]
+    fn tab_from_rotate_picks_the_floor_edge_on_mouse_down() {
+        use iced::{mouse, Point, Rectangle, Size};
+        use iced::widget::canvas::Program;
+        let (mut app, _) = floor();
+        let _ = app.update(Message::Transform(crate::app::transform::TransformKind::Rotate));
+        let _ = app.update(Message::EditMode);
+        assert!(app.modeller.transform.is_none());
+        let overlay = app.sketch_overlay(Color::BLACK, Color::WHITE).unwrap();
+        let (x, y) = app.on_screen(DVec3::new(2.0, 0.0, 0.0), 1000.0, 800.0).unwrap();
+        let action = overlay.update(&mut Default::default(), &iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Rectangle::new(Point::ORIGIN, Size::new(1000.0, 800.0)), mouse::Cursor::Available(Point::new(x, y))).unwrap();
+        let _ = app.update(action.into_inner().0.unwrap());
+        assert_eq!(app.modeller.sketch.as_ref().unwrap().picked, Some(0));
+        assert_eq!(app.sketch_overlay(Color::BLACK, Color::WHITE).unwrap().selected_sketch_line.unwrap().len(), 2);
     }
 
     #[test]

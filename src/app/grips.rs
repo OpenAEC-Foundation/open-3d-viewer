@@ -70,6 +70,7 @@ impl App {
             points.extend(self.height_grip(&shape));
         }
         Some(EditOverlay {
+            selected_sketch_line: None,
             picked: vec![false; points.len()],
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,

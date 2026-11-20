@@ -261,6 +261,7 @@ impl App {
         };
         let shown = self.slab_handles_shown(&shape);
         Some(EditOverlay {
+            selected_sketch_line: None,
             picked: shown.iter().map(|(h, _, _)| Some(*h) == dragged).collect(),
             points: shown.iter().map(|(_, at, _)| at.as_vec3()).collect(),
             closed: false,

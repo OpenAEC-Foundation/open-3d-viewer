@@ -135,6 +135,7 @@ impl App {
         points.push(middle);
         points.push(DVec3::new(middle.x, middle.y, base + self.dragged_height(&shape, dz)?));
         Some(EditOverlay {
+            selected_sketch_line: None,
             picked: (0..points.len()).map(|i| i == TOP_GRIP).collect(),
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,

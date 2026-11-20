@@ -576,16 +576,16 @@ impl App {
         let mut made = Vec::new();
         // below: right to left, so the line stands under what it measures
         for pair in below.windows(2) {
-            made.push(Dimension { from: [pair[1], lo[1]], to: [pair[0], lo[1]], style: 0, anchors: [None, None] });
+            made.push(Dimension { from: [pair[1], lo[1]], to: [pair[0], lo[1]], style: 0, anchors: [None, None], chain: None });
         }
         let out = if below.is_empty() { 0.0 } else { 1.0 };
-        made.push(Dimension { from: [hi[0], lo[1] - out], to: [lo[0], lo[1] - out], style: 0, anchors: [None, None] });
+        made.push(Dimension { from: [hi[0], lo[1] - out], to: [lo[0], lo[1] - out], style: 0, anchors: [None, None], chain: None });
         // on the left: upwards, so the line stands left of what it measures
         for pair in left.windows(2) {
-            made.push(Dimension { from: [lo[0], pair[0]], to: [lo[0], pair[1]], style: 0, anchors: [None, None] });
+            made.push(Dimension { from: [lo[0], pair[0]], to: [lo[0], pair[1]], style: 0, anchors: [None, None], chain: None });
         }
         let out = if left.is_empty() { 0.0 } else { 1.0 };
-        made.push(Dimension { from: [lo[0] - out, lo[1]], to: [lo[0] - out, hi[1]], style: 0, anchors: [None, None] });
+        made.push(Dimension { from: [lo[0] - out, lo[1]], to: [lo[0] - out, hi[1]], style: 0, anchors: [None, None], chain: None });
         let same = |a: &Dimension, b: &Dimension| {
             let close = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 0.001 && (p[1] - q[1]).abs() < 0.001;
             (close(a.from, b.from) && close(a.to, b.to)) || (close(a.from, b.to) && close(a.to, b.from))
@@ -808,8 +808,9 @@ impl ViewMarks {
     /// measures.
     fn dimension_line(&self, screen: &Screen, k: usize) -> Option<(Point, Point)> {
         let d = self.dimensions.get(k)?;
-        let offset = self.look(screen, d.from, d.style).offset;
-        let (a, b) = (self.px(screen, d.from)?, self.px(screen, d.to)?);
+        let offset = self.paper(screen, d.from) * d.paper_offset() as f32;
+        let [from,to] = d.measured_ends();
+        let (a, b) = (self.px(screen, from)?, self.px(screen, to)?);
         let run = a.distance(b);
         (run > 0.0).then(|| {
             let n = iced::Vector::new((b.y - a.y) / run * offset, -(b.x - a.x) / run * offset);
@@ -1140,11 +1141,15 @@ impl canvas::Program<Message> for ViewMarks {
             }
         }
         for (k, d) in self.dimensions.iter().enumerate() {
-            let (Some(a), Some(b)) = (self.px(&screen, d.from), self.px(&screen, d.to)) else { continue };
-            // an end whose element is gone: the dimension measures nothing that is, and shows it
-            let lost = d.anchors.iter().flatten().any(|a| a.lost);
+            let lost = d.references().filter_map(|(_, a)| a).any(|a| a.lost);
             let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else if lost { Color::from_rgb8(200, 40, 40) } else { ink };
-            draw_dimension_px(&mut frame, a, b, d.length(), color, self.look(&screen, d.from, d.style));
+            for (actual, [from, to]) in d.intervals() {
+                let [Some(a), Some(b)] = [from, to].map(|q| self.px(&screen, q)) else { continue };
+                let [Some(first), Some(last)] = actual.map(|q| self.px(&screen, q)) else { continue };
+                let mut look = self.look(&screen, from, d.style);
+                look.offset = look.paper * d.paper_offset() as f32;
+                draw_interval_px(&mut frame, a, b, [first, last], (to[0]-from[0]).hypot(to[1]-from[1]), color, look);
+            }
         }
         // the regions filled in one colour, under the lines: black is the ink of the drawing
         for fill in &self.fills {
@@ -1243,7 +1248,7 @@ impl canvas::Program<Message> for ViewMarks {
                 (None, Some(from)) if self.cutting => self.draw_section(&mut frame, &screen, from, aim, String::new(), p.accent),
                 (None, Some(from)) => {
                     if let Some(a) = self.px(&screen, from) {
-                        let length = Dimension { from, to: aim, style: 0, anchors: [None, None] }.length();
+                        let length = Dimension { from, to: aim, style: 0, anchors: [None, None], chain: None }.length();
                         draw_dimension_px(&mut frame, a, c, length, p.accent, self.look(&screen, from, 0));
                     }
                 }
@@ -1283,6 +1288,10 @@ pub(super) struct DimensionLook<'a> {
 /// a → b (as seen with y up), extension lines from just off the points to just past it, its
 /// style's mark at each end, and the length in its style's unit over the middle.
 pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f64, color: Color, look: DimensionLook) {
+    draw_interval_px(frame, a, b, [a,b], length, color, look);
+}
+
+pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses: [Point; 2], length: f64, color: Color, look: DimensionLook) {
     let run = a.distance(b);
     if run <= 0.0 {
         return;
@@ -1294,9 +1303,11 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
     let off = |q: Point, d: f32| Point::new(q.x + nx * d, q.y + ny * d);
     let (a2, b2) = (off(a, look.offset), off(b, look.offset));
     let lines = Path::new(|path| {
-        for q in [a, b] {
-            path.move_to(off(q, gap.min(look.offset)));
-            path.line_to(off(q, look.offset + extension));
+        for (q, mark) in witnesses.into_iter().zip([a2,b2]) {
+            let distance = (mark.x - q.x) * nx + (mark.y - q.y) * ny;
+            let side = if distance < 0.0 { -1.0 } else { 1.0 };
+            path.move_to(off(q, gap.min(distance.abs()) * side));
+            path.line_to(off(mark, extension * side));
         }
         path.move_to(a2);
         path.line_to(b2);

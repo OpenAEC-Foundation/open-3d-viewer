@@ -9,8 +9,6 @@ use std::sync::Arc;
 
 /// Text on paper: 2.5 mm capitals (metres).
 const TEXT: f64 = 0.0025;
-/// A dimension line stands this far beside what it measures, on paper (metres), as on a sheet.
-const DIMENSION_OFFSET: f64 = 0.006;
 /// Space between a placed view's lines and its frame (paper metres), as on a sheet.
 const FRAME: f64 = 0.005;
 /// Space around a view's drawing on its page (paper metres).
@@ -188,6 +186,9 @@ impl Text2d {
 /// in whole millimetres beside it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dim2d {
+    /// The actual reference points from which the witness lines start.
+    pub witnesses: [[f64; 2]; 2],
+    pub units_per_paper_metre: f64,
     pub from: [f64; 2],
     pub to: [f64; 2],
     pub value: f64,
@@ -215,11 +216,17 @@ impl Dim2d {
     /// and its two slashes, as a sheet draws them.
     pub fn lines(&self) -> Vec<[[f64; 2]; 2]> {
         let (Some((u, n)), Some((a, b))) = (self.axes(), self.line()) else { return Vec::new() };
-        let paper = self.offset / DIMENSION_OFFSET;
+        let paper = self.units_per_paper_metre;
         let tick = self.style.tick_size * paper;
         let gap = self.style.gap * paper;
         let extension = self.style.extension * paper;
-        let mut lines = vec![[add(self.from, n, gap), add(a, n, extension)], [add(self.to, n, gap), add(b, n, extension)], [a, b]];
+        let mut lines = Vec::new();
+        for (q, mark) in self.witnesses.into_iter().zip([a,b]) {
+            let distance = (mark[0] - q[0]) * n[0] + (mark[1] - q[1]) * n[1];
+            let side = if distance < 0.0 { -1.0 } else { 1.0 };
+            lines.push([add(q, n, side * gap.min(distance.abs())), add(mark, n, side * extension)]);
+        }
+        lines.push([a,b]);
         use crate::document::Tick;
         for (q, inward) in [(a, 1.0), (b, -1.0)] {
             match self.style.tick {
@@ -540,7 +547,11 @@ impl Drawing2d {
         }
         let (dimensions, notes) = marks;
         for d in dimensions {
-            self.dimensions.push(Dim2d { from: to(d.from), to: to(d.to), value: d.length(), offset: DIMENSION_OFFSET * unit, style: doc.dimension_style(d.style).clone(), text_height: rules.text * unit });
+            for (actual, [a,b]) in d.intervals() {
+                self.dimensions.push(Dim2d { from: to(a), to: to(b), witnesses: actual.map(to), units_per_paper_metre: unit,
+                    value: (b[0] - a[0]).hypot(b[1] - a[1]), offset: d.paper_offset() * unit,
+                    style: doc.dimension_style(d.style).clone(), text_height: rules.text * unit });
+            }
         }
         for n in notes {
             if crop_segment(n.at, n.at, crop).is_none() { continue; }
@@ -860,8 +871,23 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_draws_each_projected_interval_and_an_optional_separate_total() {
+        let (mut doc, plan) = plan();
+        assert!(doc.insert_dimension_reference(&plan, 0, [3.,1.], None));
+        let draw = |doc: &Document| view_drawing(doc, &plan, &room(), &Rules::default()).unwrap();
+        let d = draw(&doc);
+        assert_eq!(d.dimensions.iter().map(|d| d.value).collect::<Vec<_>>(), [3.,5.]);
+        assert_eq!(d.dimensions[0].witnesses[1], [3.,1.]);
+        assert!(doc.add_dimension_chain_total(&plan, 0));
+        assert!(!doc.add_dimension_chain_total(&plan, 0));
+        let d = draw(&doc);
+        assert_eq!(d.dimensions[2].value, 8.);
+        assert!(d.dimensions[2].offset > d.dimensions[0].offset);
+    }
+
+    #[test]
     fn a_dimension_has_its_line_to_the_left_with_slashes_and_its_text_beside_it() {
-        let dim = Dim2d { from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25, style: crate::document::DimensionStyle::standard() };
+        let dim = Dim2d { units_per_paper_metre: 100., witnesses: [[0.0, 0.0], [8.0, 0.0]], from: [0.0, 0.0], to: [8.0, 0.0], value: 8.0, offset: 0.6, text_height: 0.25, style: crate::document::DimensionStyle::standard() };
         let lines = dim.lines();
         // two extension lines, the dimension line, two slashes
         assert_eq!(lines.len(), 5);

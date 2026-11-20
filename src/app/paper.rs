@@ -837,10 +837,10 @@ impl PaperDrawing {
     /// The paper ends of the dimension line of dimension `k` on placed view `i`.
     fn dimension_line(&self, i: usize, k: usize) -> Option<([f64; 2], [f64; 2])> {
         let d = self.placed.get(i)?.dimensions.get(k)?;
-        let (from, to) = (self.to_paper(i, d.from), self.to_paper(i, d.to));
+        let [from,to] = d.measured_ends().map(|q| self.to_paper(i,q));
         let run = (to[0] - from[0]).hypot(to[1] - from[1]);
         (run > 0.0).then(|| {
-            let n = [-(to[1] - from[1]) / run * DIMENSION_OFFSET, (to[0] - from[0]) / run * DIMENSION_OFFSET];
+            let n = [-(to[1] - from[1]) / run * d.paper_offset(), (to[0] - from[0]) / run * d.paper_offset()];
             ([from[0] + n[0], from[1] + n[1]], [to[0] + n[0], to[1] + n[1]])
         })
     }
@@ -1197,7 +1197,14 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             for (k, d) in placed.dimensions.iter().enumerate() {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
-                draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color, &self.styles[d.style.min(self.styles.len() - 1)]);
+                let style = &self.styles[d.style.min(self.styles.len() - 1)];
+                let screen = |q| fit.point(self.to_paper(i, q));
+                for (actual, [a,b]) in d.intervals() {
+                    let mut look = dimension_look(&fit, style);
+                    look.offset = (fit.scale * d.paper_offset()) as f32;
+                    super::marks::draw_interval_px(&mut frame, screen(a), screen(b), actual.map(screen),
+                        (b[0] - a[0]).hypot(b[1] - a[1]), color, look);
+                }
             }
             super::marks::draw_detail_lines(&mut frame, &placed.lines, &placed.pens, placed.crop, ink, &|q| Some(fit.point(self.to_paper(i, q))), (fit.scale / 1000.0) as f32);
             for d in &placed.datums {
@@ -1259,7 +1266,7 @@ impl canvas::Program<Message> for PaperDrawing {
                     if self.section_tool {
                         draw_section_mark(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), String::new(), p.accent);
                     } else {
-                        let length = Dimension { from, to: q, style: 0, anchors: [None, None] }.length();
+                        let length = Dimension { from, to: q, style: 0, anchors: [None, None], chain: None }.length();
                         draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent, &self.styles[0]);
                     }
                 }
@@ -1327,9 +1334,12 @@ fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2],
 /// from → to, extension lines from the points to just past it, a slash at each end, and the
 /// length in millimetres over the middle.
 fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color, style: &crate::document::DimensionStyle) {
+    super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, dimension_look(fit, style));
+}
+
+fn dimension_look<'a>(fit: &Fit, style: &'a crate::document::DimensionStyle) -> super::marks::DimensionLook<'a> {
     let px = |m: f64| (m * fit.scale) as f32;
-    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.size), style };
-    super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, look);
+    super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.size), style }
 }
 
 /// The sheets of the document in the explorer's Views tab: each opens in its tab; New sheet.

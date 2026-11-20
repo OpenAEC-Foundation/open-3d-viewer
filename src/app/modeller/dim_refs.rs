@@ -109,51 +109,43 @@ impl App {
         if !self.modeller.in_modeller || self.modeller.model.is_empty() || self.document.plan(view).is_none() {
             return;
         }
-        let Some((ends, index)) = self.document.plan(view).and_then(|p| p.dimensions.last().map(|d| ([d.from, d.to], p.dimensions.len() - 1))) else { return };
-        let anchors = ends.map(|q| self.anchor_at(q));
+        let Some(plan) = self.document.plan(view) else { return };
+        let Some((index, d)) = plan.dimensions.iter().enumerate().next_back() else { return };
+        let anchors: Vec<_> = d.references().map(|(q,_)| self.anchor_at(q)).collect();
         if let Some(d) = self.document.dimension_mut(view, index) {
-            d.anchors = anchors;
+            for (i,a) in anchors.into_iter().enumerate() {
+                if let Some((_, anchor)) = d.reference_mut(i) { *anchor = a; }
+            }
         }
     }
 
     /// After a change of the model: every end of a floor plan's dimension that holds on to an
     /// element goes where the element has it now; one whose element is gone is marked.
     pub(in crate::app) fn follow_dimensions(&mut self) {
-        let model = &self.modeller.model;
-        if model.is_empty() && self.document.plans().iter().all(|p| p.dimensions.iter().all(|d| d.anchors == [None, None])) {
-            return;
-        }
-        // where every anchor is now, worked out before the document is changed
-        let mut moves: Vec<(usize, usize, Option<[f64; 2]>)> = Vec::new();
-        let dimensions: Vec<crate::document::Dimension> = self.document.plans().iter().flat_map(|p| p.dimensions.iter().copied()).collect();
-        for (k, d) in dimensions.iter().enumerate() {
-            for (end, anchor) in d.anchors.iter().enumerate() {
+        let mut moves = Vec::new();
+        for (k, d) in self.document.plans().iter().flat_map(|p| &p.dimensions).enumerate() {
+            for (i, (_,anchor)) in d.references().enumerate() {
                 if let Some(anchor) = anchor {
-                    moves.push((k, end, self.anchored(anchor)));
+                    moves.push((k, i, self.anchored(&anchor)));
                 }
             }
         }
-        let mut all: Vec<&mut crate::document::Dimension> = self.document.plan_dimensions_mut().collect();
-        for (k, end, at) in moves {
-            let Some(d) = all.get_mut(k) else { continue };
-            let Some(anchor) = d.anchors[end].as_mut() else { continue };
-            anchor.lost = at.is_none();
-            if let Some(at) = at {
-                if end == 0 {
-                    d.from = at;
-                } else {
-                    d.to = at;
-                }
-            }
+        if moves.is_empty() { return; }
+        let mut all: Vec<_> = self.document.plan_dimensions_mut().collect();
+        for (k, i, resolved) in moves {
+            let Some((at, Some(anchor))) = all[k].reference_mut(i) else { continue };
+            anchor.lost = resolved.is_none();
+            if let Some(q) = resolved { *at = q; }
         }
+        for d in all { d.order_references(); }
     }
 
     /// Gives dimension `index` of floor plan `view` the length `length` (metres): the element its
     /// last end holds on to moves along the dimension (else the one its first end holds on to).
     /// False when it holds on to nothing that is, or the length is not above zero.
     pub(crate) fn set_dimension_length(&mut self, view: &str, index: usize, length: f64) -> bool {
-        let Some(d) = self.document.plan(view).and_then(|p| p.dimensions.get(index)).copied() else { return false };
-        if !(length.is_finite() && length > 0.0) {
+        let Some(d) = self.document.plan(view).and_then(|p| p.dimensions.get(index)) else { return false };
+        if d.chain.is_some() || !(length.is_finite() && length > 0.0) {
             return false;
         }
         let (from, to) = (DVec2::from_array(d.from), DVec2::from_array(d.to));
@@ -184,6 +176,7 @@ impl App {
     /// `None` when it holds on to no element, so no length can move anything.
     pub(in crate::app) fn dimension_value_field(&self, view: &str, index: usize) -> Option<Element<'_, Message>> {
         let d = self.document.plan(view)?.dimensions.get(index)?;
+        if d.chain.is_some() { return None; }
         d.anchors.iter().flatten().find(|a| !a.lost)?;
         let value = self.modeller.dimension_value.clone().unwrap_or_else(|| format!("{:.3}", d.length()));
         Some(text_input("", &value).on_input(Message::DimensionValue).on_submit(Message::DimensionValueApply).size(12).padding([3, 6]).width(72).into())
@@ -218,7 +211,7 @@ mod tests {
     }
 
     fn dimension(app: &App, plan: &str) -> crate::document::Dimension {
-        app.document.plan(plan).unwrap().dimensions[0]
+        app.document.plan(plan).unwrap().dimensions[0].clone()
     }
 
     #[test]
@@ -294,7 +287,7 @@ mod tests {
         let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
         let mut back = App::default();
         back.set_model(Arc::new(loaded));
-        let read = back.document.plans()[0].dimensions[0];
+        let read = &back.document.plans()[0].dimensions[0];
         assert_eq!(read.anchors, dimension(&app, &plan).anchors);
     }
 }

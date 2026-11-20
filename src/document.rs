@@ -520,14 +520,23 @@ impl Fill {
 
 /// A dimension on a drawing: the distance between two of its points (a floor plan's x, y in the
 /// model's frame, a section's u, v; metres).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Dimension {
+    pub chain: Option<DimensionChain>,
     pub from: [f64; 2],
     pub to: [f64; 2],
     /// Which of the document's dimension styles it has (0: the standard one).
     pub style: usize,
     /// What its ends hold on to, `from` then `to`: an end with an anchor follows its element.
     pub anchors: [Option<Anchor>; 2],
+}
+
+/// Direction of a continuous dimension and its model references between the ends.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimensionChain {
+    offset: f64,
+    axis: [f64; 2],
+    inner: Vec<([f64; 2], Option<Anchor>)>,
 }
 
 /// What an end of a dimension holds on to: a point of a modelled element (a wall's start or end,
@@ -555,10 +564,99 @@ impl Anchor {
 }
 
 impl Dimension {
+    pub fn references(&self) -> impl Iterator<Item = ([f64; 2], Option<Anchor>)> + '_ {
+        std::iter::once((self.from, self.anchors[0]))
+            .chain(self.chain.iter().flat_map(|c| c.inner.iter().copied()))
+            .chain(std::iter::once((self.to, self.anchors[1])))
+    }
+
+    pub fn paper_offset(&self) -> f64 { self.chain.as_ref().map_or(0.006, |c| c.offset) }
+
+    pub fn measured_ends(&self) -> [[f64; 2]; 2] {
+        let Some(c) = &self.chain else { return [self.from, self.to] };
+        let t = self.station(self.to);
+        [self.from, [self.from[0] + t * c.axis[0], self.from[1] + t * c.axis[1]]]
+    }
+
+    fn axis(&self) -> [f64; 2] {
+        self.chain.as_ref().map_or_else(|| {
+            let length = self.length();
+            [(self.to[0] - self.from[0]) / length, (self.to[1] - self.from[1]) / length]
+        }, |c| c.axis)
+    }
+
+    fn station(&self, q: [f64; 2]) -> f64 {
+        let u = self.axis();
+        (q[0] - self.from[0]) * u[0] + (q[1] - self.from[1]) * u[1]
+    }
+
+    /// Actual references and their perpendicular projections onto the measurement axis.
+    pub fn intervals(&self) -> impl Iterator<Item = ([[f64; 2]; 2], [[f64; 2]; 2])> + '_ {
+        self.references().zip(self.references().skip(1)).map(|((a, _), (b, _))| {
+            let actual = [a, b];
+            let projected = if self.chain.is_none() { actual } else {
+                let u = self.axis();
+                actual.map(|q| {
+                    let t = self.station(q);
+                    [self.from[0] + t * u[0], self.from[1] + t * u[1]]
+                })
+            };
+            (actual, projected)
+        })
+    }
+
+    pub(crate) fn reference_mut(&mut self, index: usize) -> Option<(&mut [f64; 2], &mut Option<Anchor>)> {
+        let count = self.chain.as_ref().map_or(0, |c| c.inner.len());
+        if index == 0 { return Some((&mut self.from, &mut self.anchors[0])); }
+        if index == count + 1 { return Some((&mut self.to, &mut self.anchors[1])); }
+        let (at, anchor) = self.chain.as_mut()?.inner.get_mut(index - 1)?;
+        Some((at, anchor))
+    }
+
+    pub(crate) fn order_references(&mut self) {
+        let Some(chain) = &self.chain else { return };
+        let axis = chain.axis;
+        let mut refs = self.references().collect::<Vec<_>>();
+        refs.sort_by(|a,b| self.station(a.0).total_cmp(&self.station(b.0)));
+        self.set_references(&refs, axis);
+    }
+
+    fn set_references(&mut self, refs: &[([f64; 2], Option<Anchor>)], axis: [f64; 2]) {
+        (self.from, self.anchors[0]) = refs[0];
+        (self.to, self.anchors[1]) = refs[refs.len() - 1];
+        let offset = self.paper_offset();
+        let end = self.to;
+        let off_axis = ((end[0]-self.from[0])*axis[1] - (end[1]-self.from[1])*axis[0]).abs() > 1e-9;
+        self.chain = (refs.len() > 2 || offset != 0.006 || off_axis).then(|| DimensionChain { axis, offset, inner: refs[1..refs.len() - 1].to_vec() });
+    }
+
     /// Its length (metres).
     pub fn length(&self) -> f64 {
-        (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1])
+        if self.chain.is_some() { self.station(self.to).abs() }
+        else { (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1]) }
     }
+}
+
+/// Adjacent legacy segments form one axis only when they touch, point in the same
+/// direction and use the same style and shared object reference.
+fn join_legacy_dimensions(dimensions: Vec<Dimension>) -> Vec<Dimension> {
+    let mut out: Vec<Dimension> = Vec::new();
+    for next in dimensions {
+        let prev = out.last_mut();
+        if let Some(d) = prev.filter(|d| d.to == next.from && d.style == next.style
+                && d.anchors[1] == next.anchors[0] && next.chain.is_none()) {
+            let axis = d.axis();
+            let u = next.axis();
+            if axis[0] * u[0] + axis[1] * u[1] > 0.999999999999 {
+                let mut refs = d.references().collect::<Vec<_>>();
+                refs.push((next.to, next.anchors[1]));
+                d.set_references(&refs, axis);
+                continue;
+            }
+        }
+        out.push(next);
+    }
+    out
 }
 
 /// A text on a drawing, standing on a point of it (see [`Align`]; a floor plan's x, y, a
@@ -739,6 +837,10 @@ impl Document {
         let dims = |d: &[Dimension]| {
             let one = |d: &Dimension| {
                 let style = if d.style == 0 { Value::Null } else { json!(self.dimension_style(d.style).name) };
+                if let Some(chain) = &d.chain {
+                    let refs: Vec<_> = d.references().map(|(at, anchor)| json!([at, anchor.map(Anchor::to_ifcx)])).collect();
+                    return json!({"references":refs, "axis":chain.axis, "offset":chain.offset, "style":style});
+                }
                 match (d.style, d.anchors) {
                     (0, [None, None]) => json!([d.from, d.to]),
                     (_, [None, None]) => json!([d.from, d.to, style]),
@@ -780,7 +882,7 @@ impl Document {
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
             let fills = |all: &[Fill]| all.iter().map(Fill::to_ifcx).collect::<Vec<_>>();
             let view = json!({
-                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
+                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimension_format": 2, "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
             let mut view = shaped(view, &p.shapes);
             if !p.presentation.is_null() { view["presentation"] = p.presentation.clone(); }
@@ -864,7 +966,23 @@ impl Document {
             Some((pair(v.get(0)?)?, pair(v.get(1)?)?))
         };
         let dims = |v: Option<&Value>| -> Vec<Dimension> {
-            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)?, style: style(d.get(2)), anchors: [d.get(3).and_then(Anchor::from_ifcx), d.get(4).and_then(Anchor::from_ifcx)] })).collect()
+            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| {
+                if let Some(refs) = d.get("references").and_then(Value::as_array) {
+                    let refs = refs.iter().map(|r| Some((pair(r.get(0)?)?, r.get(1).and_then(Anchor::from_ifcx)))).collect::<Option<Vec<_>>>()?;
+                    if refs.len() < 2 { return None; }
+                    let axis = pair(d.get("axis")?)?;
+                    let length = axis[0].hypot(axis[1]);
+                    if !length.is_finite() || length < 1e-12 { return None; }
+                    let mut dimension = Dimension { from: refs[0].0, to: refs.last()?.0, style: style(d.get("style")), anchors: [None, None], chain: None };
+                    let axis = axis.map(|x| x / length);
+                    let offset = d.get("offset").and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).unwrap_or(0.006);
+                    dimension.chain = Some(DimensionChain { axis, offset, inner: Vec::new() });
+                    dimension.set_references(&refs, axis);
+                    Some(dimension)
+                } else {
+                    Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)?, style: style(d.get(2)), anchors: [d.get(3).and_then(Anchor::from_ifcx), d.get(4).and_then(Anchor::from_ifcx)], chain: None })
+                }
+            }).collect()
         };
         let notes = |v: Option<&Value>| -> Vec<Note> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
@@ -941,6 +1059,9 @@ impl Document {
                     layers: layers(p.get("layers")),
                     hidden: hidden(p),
                 };
+                if plan.drawing.as_deref() == Some("pile-plan") && p.get("dimension_format").is_none() {
+                    plan.dimensions = join_legacy_dimensions(plan.dimensions);
+                }
                 plan.append_sounding_marks();
                 self.plans.push(plan);
             } else if let Some(s) = attributes.get("o3v::view::section") {
@@ -1340,12 +1461,61 @@ impl Document {
     /// Adds a dimension between two points to a view's drawing; two points less than a
     /// millimetre apart, or not finite, measure nothing.
     pub fn add_dimension(&mut self, view: &str, from: [f64; 2], to: [f64; 2]) -> bool {
-        let dimension = Dimension { from, to, style: 0, anchors: [None, None] };
+        let dimension = Dimension { from, to, style: 0, anchors: [None, None], chain: None };
         if !(from.iter().chain(&to).all(|v| v.is_finite()) && dimension.length() >= 0.001) {
             return false;
         }
         let Some((dimensions, _)) = self.marks_mut(view) else { return false };
         dimensions.push(dimension);
+        true
+    }
+
+    /// Adds an ordered chain, with one measured interval per pair of adjacent references.
+    pub fn add_dimension_chain(&mut self, view: &str, points: &[[f64; 2]]) -> bool {
+        let (Some(&from), Some(&to)) = (points.first(), points.last()) else { return false };
+        if points.len() < 2 || points.iter().flatten().any(|x| !x.is_finite()) { return false; }
+        let mut d = Dimension { from, to, style: 0, anchors: [None, None], chain: None };
+        if d.length() < 0.001 || points.windows(2).any(|p| d.station(p[1]) - d.station(p[0]) < 0.001) { return false; }
+        let refs = points.iter().map(|&q| (q, None)).collect::<Vec<_>>();
+        d.set_references(&refs, d.axis());
+        let Some((dims, _)) = self.marks_mut(view) else { return false };
+        dims.push(d);
+        true
+    }
+
+    pub fn insert_dimension_reference(&mut self, view: &str, index: usize, at: [f64; 2], anchor: Option<Anchor>) -> bool {
+        let Some(d) = self.dimension_mut(view, index) else { return false };
+        let pos = d.station(at);
+        if !pos.is_finite() || d.references().any(|(q, _)| (d.station(q) - pos).abs() < 0.001) { return false; }
+        let mut refs = d.references().collect::<Vec<_>>();
+        refs.push((at, anchor));
+        refs.sort_by(|a,b| d.station(a.0).total_cmp(&d.station(b.0)));
+        d.set_references(&refs, d.axis());
+        true
+    }
+
+    /// An independent overall dimension of the two outside references, one row further out.
+    pub fn add_dimension_chain_total(&mut self, view: &str, index: usize) -> bool {
+        let Some((dims,_)) = self.marks_mut(view) else { return false };
+        let Some(d) = dims.get(index) else { return false };
+        if d.references().count() < 3 { return false; }
+        let axis = d.axis();
+        let offset = d.paper_offset() + 0.008;
+        if dims.iter().any(|other| other.from == d.from && other.to == d.to && other.paper_offset() == offset) {
+            return false;
+        }
+        let total = Dimension { from: d.from, to: d.to, style: d.style, anchors: d.anchors,
+            chain: Some(DimensionChain { axis, offset, inner: Vec::new() }) };
+        dims.push(total);
+        true
+    }
+
+    pub fn remove_dimension_reference(&mut self, view: &str, index: usize, reference: usize) -> bool {
+        let Some(d) = self.dimension_mut(view, index) else { return false };
+        let mut refs = d.references().collect::<Vec<_>>();
+        if refs.len() <= 2 || reference >= refs.len() { return false; }
+        refs.remove(reference);
+        d.set_references(&refs, d.axis());
         true
     }
 
@@ -1398,6 +1568,10 @@ impl Document {
         let Some(d) = self.marks_mut(view).and_then(|(d, _)| d.get_mut(index)) else { return false };
         std::mem::swap(&mut d.from, &mut d.to);
         d.anchors.swap(0, 1);
+        if let Some(c) = &mut d.chain {
+            c.inner.reverse();
+            c.axis = c.axis.map(|x| -x);
+        }
         true
     }
 
@@ -2386,6 +2560,28 @@ mod tests {
     }
 
     #[test]
+    fn dimension_chain_edits_keep_order_anchors_and_independent_totals_on_reopen() {
+        let model = model_with(&[("00", 0.0)]);
+        let mut doc = Document::from_model(&model);
+        let plan = doc.add_plan(&doc.levels()[0].path.clone()).unwrap();
+        assert!(doc.add_dimension_chain(&plan, &[[0.,0.], [2.,0.], [6.,0.]]));
+        let anchor = Some(Anchor { element: 15, point: 0, offset: [0.,0.], lost: false });
+        assert!(doc.insert_dimension_reference(&plan, 0, [3.,1.], anchor));
+        assert!(!doc.insert_dimension_reference(&plan, 0, [3.,2.], None));
+        assert!(doc.remove_dimension_reference(&plan, 0, 1));
+        assert!(doc.add_dimension_chain_total(&plan, 0));
+        assert!(doc.flip_dimension(&plan, 0));
+        let ds = &doc.plan(&plan).unwrap().dimensions;
+        assert_eq!(ds[0].references().collect::<Vec<_>>(), [([6.,0.],None), ([3.,1.],anchor), ([0.,0.],None)]);
+        let nodes = doc.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut again = Document::from_model(&model);
+        again.adopt_ifcx(&nodes);
+        assert_eq!(&again.plan(&plan).unwrap().dimensions, ds);
+        assert!(again.remove_dimension_reference(&plan, 0, 1));
+        assert!(!again.remove_dimension_reference(&plan, 0, 1));
+    }
+
+    #[test]
     fn floor_plans_keep_their_dimensions() {
         let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
         let level = document.levels()[0].path.clone();
@@ -2398,7 +2594,7 @@ mod tests {
         let lengths: Vec<f64> = document.plan(&plan).unwrap().dimensions.iter().map(Dimension::length).collect();
         assert_eq!(lengths, [3.6, 5.0]);
         assert!(document.flip_dimension(&plan, 1));
-        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0], style: 0, anchors: [None, None] });
+        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0], style: 0, anchors: [None, None], chain: None });
         assert!(!document.flip_dimension(&plan, 9));
         assert!(document.remove_dimension(&plan, 0));
         assert!(!document.remove_dimension(&plan, 5));

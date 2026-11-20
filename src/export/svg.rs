@@ -54,28 +54,14 @@ pub fn svg(d: &Drawing2d) -> String {
     for pen in Pen::ALL {
         // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
         // what is seen beyond it a width of its own
-        let mut widths = d.widths(pen);
-        let plain = |width: f64| (width - pen.weight_mm()).abs() < 1e-9;
-        if pen == Pen::Dimension && !d.dimensions.is_empty() && !widths.iter().any(|w| plain(*w)) {
-            widths.push(pen.weight_mm());
-        }
-        for width in widths {
+        for (width, [r, g, b], segments) in d.strokes(pen) {
             let mut path = String::new();
-            let mut segment = |a: [f64; 2], b: [f64; 2]| {
+            for [a, b] in segments {
                 let ((ax, ay), (bx, by)) = (at(a), at(b));
                 let _ = write!(path, "M{ax} {ay}L{bx} {by}");
-            };
-            for l in d.lines.iter().filter(|l| l.pen == pen && (l.width - width).abs() < 1e-9) {
-                segment(l.a, l.b);
             }
-            if pen == Pen::Dimension && plain(width) {
-                for [a, b] in d.dimensions.iter().flat_map(|dim| dim.lines()) {
-                    segment(a, b);
-                }
-            }
-            if !path.is_empty() {
-                let _ = write!(s, r##"<path d="{path}" fill="none" stroke="#000" stroke-width="{}" stroke-linecap="round"/>"##, num(width));
-            }
+            let color = if [r,g,b] == [0; 3] { "#000".to_string() } else { format!("#{r:02x}{g:02x}{b:02x}") };
+            let _ = write!(s, r##"<path d="{path}" fill="none" stroke="{color}" stroke-width="{}" stroke-linecap="round"/>"##, num(width));
         }
     }
     let labels: Vec<Text2d> = d.dimensions.iter().map(|dim| dim.label()).collect();

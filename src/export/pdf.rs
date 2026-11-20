@@ -70,19 +70,10 @@ fn content(d: &Drawing2d) -> String {
     for pen in Pen::ALL {
         // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
         // what is seen beyond it a width of its own
-        let mut groups: Vec<(f64, Vec<([f64; 2], [f64; 2])>)> =
-            d.widths(pen).into_iter().map(|width| (width, d.lines.iter().filter(|l| l.pen == pen && (l.width - width).abs() < 1e-9).map(|l| (l.a, l.b)).collect())).collect();
-        if pen == Pen::Dimension {
-            let marks: Vec<([f64; 2], [f64; 2])> = d.dimensions.iter().flat_map(|dim| dim.lines()).map(|[a, b]| (a, b)).collect();
-            match groups.iter_mut().find(|(width, _)| (*width - pen.weight_mm()).abs() < 1e-9) {
-                Some((_, segments)) => segments.extend(marks),
-                None if !marks.is_empty() => groups.push((pen.weight_mm(), marks)),
-                None => {}
-            }
-        }
-        for (width, segments) in groups {
-            let _ = writeln!(s, "{} w", num(width * POINTS));
-            for (a, b) in segments {
+        for (width, rgb, segments) in d.strokes(pen) {
+            let [r, g, b] = rgb.map(|c| num(f64::from(c) / 255.0));
+            let _ = writeln!(s, "{r} {g} {b} RG {} w", num(width * POINTS));
+            for [a, b] in segments {
                 let _ = writeln!(s, "{} m {} l", at(a), at(b));
             }
             s.push_str("S\n");

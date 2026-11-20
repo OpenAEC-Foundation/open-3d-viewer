@@ -2848,6 +2848,7 @@ impl App {
             Message::LetGoView => self.dragging_view = None,
             Message::CropPlan(plan, crop) => {
                 if self.document.set_crop(&plan, crop) {
+                    self.tag_plans();
                     self.fit_plan_section(&plan);
                 }
             }

@@ -217,7 +217,13 @@ impl App {
     pub(super) fn cut_job(&mut self, path: &str) -> Option<super::precut::CutJob> {
         use super::precut::{CutJob, CutKind};
         let model = self.model.clone()?;
-        let layers = self.view_visibility(path);
+        let mut layers = self.view_visibility(path);
+        // Pile heads are projected independently of the cut depth on these plans.
+        if self.document.plan(path).is_some_and(|plan| plan.pile_symbols && plan.kind.structural()) {
+            for (shown, layer) in layers.iter_mut().zip(&model.layers) {
+                if layer.name == "IfcPile" { *shown = false; }
+            }
+        }
         // the elements hidden in the view, by the unit of a triangle's first vertex
         let mut units = self.document.view_hidden(path).map(|h| self.hidden_units(h)).unwrap_or_default();
         // a structural plan leaves out what carries nothing
@@ -435,6 +441,7 @@ impl App {
                     image: self.document.plan(&v.plan).and_then(|p| p.orthophoto.as_ref()).and_then(|p| p.image.placed(marks.and_then(|(_, c)| c), |q| q)),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
                     notes: self.document.view_notes(&v.plan).unwrap_or(&[]).iter().chain(self.document.view_tags(&v.plan)).cloned().collect(),
+                    pens: self.document.detail_pens(&v.plan),
                     lines: self.document.view_lines(&v.plan).iter().chain(self.document.view_symbols(&v.plan)).copied().collect(),
                     crop: marks.and_then(|(_, c)| c),
                     datums: self.view_datums(&v.plan),
@@ -451,6 +458,7 @@ impl App {
         Some(PaperDrawing {
             block: crate::title_block::title_block(&self.document, sheet, &self.house),
             sheet: sheet.clone(),
+            styles: self.document.dimension_styles().to_vec(),
             placed,
             palette: p,
             key: Arc::from(path.as_str()),
@@ -596,6 +604,7 @@ struct Placed {
     notes: Vec<crate::document::Note>,
     /// The lines of the view's tags: their shapes and leaders.
     lines: Vec<[[f64; 2]; 2]>,
+    pens: Vec<(std::ops::Range<usize>, [u8; 3], f64)>,
     crop: Option<([f64; 2], [f64; 2])>,
     /// The grid lines and levels of the view, as its own tab shows them.
     datums: Vec<crate::drawing2d::Datum2>,
@@ -623,6 +632,7 @@ enum Side {
 
 struct PaperDrawing {
     block: crate::title_block::TitleBlock,
+    styles: Vec<crate::document::DimensionStyle>,
     sheet: Sheet,
     /// Per placed view, in the order of the sheet's views.
     placed: Vec<Placed>,
@@ -1048,17 +1058,9 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             for (k, d) in placed.dimensions.iter().enumerate() {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
-                draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color);
+                draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color, &self.styles[d.style.min(self.styles.len() - 1)]);
             }
-            if !placed.lines.is_empty() {
-                let lines = Path::new(|path| {
-                    for line in &placed.lines {
-                        path.move_to(fit.point(self.to_paper(i, line[0])));
-                        path.line_to(fit.point(self.to_paper(i, line[1])));
-                    }
-                });
-                frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.8));
-            }
+            super::marks::draw_detail_lines(&mut frame, &placed.lines, &placed.pens, ink, &|q| Some(fit.point(self.to_paper(i, q))), (fit.scale / 1000.0) as f32);
             for d in &placed.datums {
                 let (a, b) = (fit.point(self.to_paper(i, d.a)), fit.point(self.to_paper(i, d.b)));
                 super::marks::draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), ink, Color::WHITE);
@@ -1120,7 +1122,7 @@ impl canvas::Program<Message> for PaperDrawing {
                         draw_section_mark(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), String::new(), p.accent);
                     } else {
                         let length = Dimension { from, to: q, style: 0, anchors: [None, None] }.length();
-                        draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
+                        draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent, &self.styles[0]);
                     }
                 }
             }
@@ -1186,10 +1188,9 @@ fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2],
 /// A dimension between two paper points: the dimension line [`DIMENSION_OFFSET`] to the left of
 /// from → to, extension lines from the points to just past it, a slash at each end, and the
 /// length in millimetres over the middle.
-fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color) {
+fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color, style: &crate::document::DimensionStyle) {
     let px = |m: f64| (m * fit.scale) as f32;
-    let style = crate::document::DimensionStyle::standard();
-    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: 10.0, style: &style };
+    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.size).max(6.0), style };
     super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, look);
 }
 

@@ -131,12 +131,13 @@ pub struct Line2d {
     /// Its width on paper (millimetres): its pen's, unless its view's kind of drawing gives
     /// what is cut or what is seen beyond a width of its own.
     pub width: f64,
+    pub color: Option<[u8; 3]>,
 }
 
 impl Line2d {
     /// A line in `pen`, as wide as that pen draws.
     pub fn new(pen: Pen, a: [f64; 2], b: [f64; 2]) -> Self {
-        Line2d { pen, a, b, width: pen.weight_mm() }
+        Line2d { pen, a, b, width: pen.weight_mm(), color: None }
     }
 }
 
@@ -388,7 +389,7 @@ impl Drawing2d {
 
     /// A line in `pen`, `width` millimetres wide on paper.
     fn line_wide(&mut self, pen: Pen, a: [f64; 2], b: [f64; 2], width: f64) {
-        self.lines.push(Line2d { pen, a, b, width });
+        self.lines.push(Line2d { pen, a, b, width, color: None });
     }
 
     /// The widths its lines of `pen` have (millimetres on paper), the narrowest first: a
@@ -420,6 +421,34 @@ impl Drawing2d {
         for [a, b] in lines {
             self.line(Pen::Detail, to(*a), to(*b));
         }
+    }
+
+    fn view_details(&mut self, doc: &Document, view: &str, to: &dyn Fn([f64; 2]) -> [f64; 2]) {
+        let start = self.lines.len();
+        self.detail(doc.view_lines(view), to);
+        for (range, rgb, width) in doc.detail_pens(view) {
+            for l in &mut self.lines[start+range.start..start+range.end] {
+                l.color = Some(rgb);
+                l.width = width;
+            }
+        }
+        self.detail(doc.view_symbols(view), to);
+    }
+
+    /// Coloured strokes for a writer that emits one path per width and colour.
+    pub fn strokes(&self, pen: Pen) -> Vec<(f64, [u8; 3], Vec<[[f64; 2]; 2]>)> {
+        let mut groups = Vec::new();
+        for width in self.widths(pen) {
+            let mut colors = std::collections::BTreeMap::<_, Vec<_>>::new();
+            for l in self.lines.iter().filter(|l| l.pen == pen && (l.width - width).abs() < 1e-9) {
+                colors.entry(l.color.unwrap_or_default()).or_default().push([l.a, l.b]);
+            }
+            groups.extend(colors.into_iter().map(|(color, lines)| (width, color, lines)));
+        }
+        if pen == Pen::Dimension && !self.dimensions.is_empty() {
+            groups.push((pen.weight_mm(), [0; 3], self.dimensions.iter().flat_map(Dim2d::lines).collect()));
+        }
+        groups
     }
 
     /// A view's lines (cut back to its crop), dimensions and texts, through `to` (a point of the
@@ -566,8 +595,7 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut, rules: &Rules) -> Opt
     let mut d = Drawing2d { images: Vec::new(), name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     if let Some(photo) = doc.plan(path).and_then(|p| p.orthophoto.as_ref()) { d.images.extend(photo.image.placed(crop, |q| q)); }
     d.view(Some(cut), crop, (dimensions, &notes), doc, &|q| q, scale, scale, rules);
-    d.detail(doc.view_lines(path), &|q| q);
-    d.detail(doc.view_symbols(path), &|q| q);
+    d.view_details(doc, path, &|q| q);
     Some(d)
 }
 
@@ -605,8 +633,7 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
         let drawn = c.as_ref().is_some_and(|c| crate::drawing::drawn(c).next().is_some());
         d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, &notes), doc, &to, 1.0, v.scale, &rules(&v.plan));
         // the lines drawn on the view that are no model, and those the model draws by itself
-        d.detail(doc.view_lines(&v.plan), &to);
-        d.detail(doc.view_symbols(&v.plan), &to);
+        d.view_details(doc, &v.plan, &to);
         // its grid lines and levels, as its own tab shows them
         let placed: Vec<Datum2> = datums(&v.plan).into_iter().map(|m| Datum2 { a: to(m.a), b: to(m.b), ..m }).collect();
         d.datums(&placed);
@@ -675,8 +702,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
         };
         let per_metre = if ratio > 0.0 { 1.0 / ratio } else { SHEET_SCALE };
         d.view(c.as_deref(), crop, (dimensions, &notes), doc, &to, 1.0, per_metre, &Rules::default());
-        d.detail(doc.view_lines(path), &to);
-        d.detail(doc.view_symbols(path), &to);
+        d.view_details(doc, path, &to);
         // its title, where the sheet has it
         if let Some(label) = v.label {
             let title = v.written.clone().unwrap_or_else(|| format!("{}  {}", v.title, v.scale));

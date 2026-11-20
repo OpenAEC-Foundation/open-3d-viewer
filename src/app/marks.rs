@@ -336,6 +336,7 @@ impl App {
             datums: if self.drawing_on_paper { self.view_datums(view) } else { Vec::new() },
             drawing: self.draw_tool.filter(|_| self.annotates && !self.dimension_tool && !self.section_tool && !self.note_tool),
             own_lines: self.document.view_lines(view).len(),
+            pens: self.document.detail_pens(view),
             shapes: self.document.view_shapes(view).to_vec(),
             transforming: self.modeller.transform.is_some() || self.modeller.offset.is_some() || self.modeller.pair_edit.is_some(),
             selected: self.sel.items().iter().filter_map(|item| if let super::Pickable::Element(id) = item { Some(*id) } else { None }).collect(),
@@ -677,6 +678,7 @@ pub(super) struct ViewMarks {
     drawing: Option<DrawKind>,
     /// How many of `lines` are the view's own (the first ones): those can be picked.
     own_lines: usize,
+    pens: Vec<(std::ops::Range<usize>, [u8; 3], f64)>,
     /// The shapes among the view's own lines: a click on a line of one picks all of it.
     shapes: Vec<crate::document::Shape>,
     /// A move, copy, turn or mirror is under way: its clicks are points, and pick nothing here.
@@ -1127,16 +1129,7 @@ impl canvas::Program<Message> for ViewMarks {
             frame.fill(&picked, canvas::Fill { style: canvas::Style::Solid(Color { a: 0.35, ..p.accent }), rule: canvas::fill::Rule::EvenOdd });
             frame.stroke(&picked, Stroke::default().with_color(p.accent).with_width(2.0));
         }
-        if !self.lines.is_empty() {
-            let lines = Path::new(|path| {
-                for line in &self.lines {
-                    let (Some(a), Some(b)) = (self.px(&screen, line[0]), self.px(&screen, line[1])) else { continue };
-                    path.move_to(a);
-                    path.line_to(b);
-                }
-            });
-            frame.stroke(&lines, Stroke::default().with_color(ink).with_width(1.0));
-        }
+        draw_detail_lines(&mut frame, &self.lines, &self.pens, ink, &|q| self.px(&screen, q), self.paper(&screen, [0.0, 0.0]) / 1000.0);
         // the line picked, with the shape it is part of, and what a drawing tool would draw to
         // where the pointer is
         let through = |lines: &[[[f64; 2]; 2]]| {
@@ -1291,6 +1284,28 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
         font: openaec_ui::fonts::MEDIUM,
         ..canvas::Text::default()
     });
+}
+
+pub(super) fn draw_detail_lines(frame: &mut Frame, lines: &[[[f64; 2]; 2]], pens: &[(std::ops::Range<usize>, [u8; 3], f64)], ink: Color, to: &dyn Fn([f64; 2]) -> Option<Point>, px_per_mm: f32) {
+    let mut draw = |range: std::ops::Range<usize>, color, width| {
+        if range.is_empty() { return; }
+        let path = Path::new(|p| {
+            for [a, b] in &lines[range] {
+                if let (Some(a), Some(b)) = (to(*a), to(*b)) {
+                    p.move_to(a);
+                    p.line_to(b);
+                }
+            }
+        });
+        frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
+    };
+    let mut start = 0;
+    for (range, [r, g, b], width) in pens {
+        draw(start..range.start, ink, 1.0);
+        draw(range.clone(), Color::from_rgb8(*r, *g, *b), (*width as f32 * px_per_mm).max(0.4));
+        start = range.end;
+    }
+    draw(start..lines.len(), ink, 1.0);
 }
 
 /// A grid line or a level of a view on its drawing, from `a` to `b` on screen: a dash-dot line;

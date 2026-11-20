@@ -47,7 +47,7 @@ pub(super) fn draw(model: &Model, plan: &mut PlanView, elevation: f64, source: u
             add(lines, centre + along * radius, centre + offset - along * plan.scale * 0.0008);
         }
         plan.pile_tags.push((notes.len(), e.id.0, centre.to_array()));
-        let text = e.pile_mark.as_ref().filter(|s| !s.is_empty()).map_or_else(|| format!("{number:02}"), |mark| format!("{number:02} {mark}"));
-        notes.push(Note { at: (centre + offset).to_array(), text, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
+        let text = e.pile_mark.as_ref().filter(|s| !s.is_empty() && plan.pile_tag_marks).map_or_else(|| format!("{number:02}"), |mark| format!("{number:02} {mark}"));
+        notes.push(Note { at: (centre + offset).to_array(), text, size: NOTE_HEIGHT, align: Align::Center, angle: 0.0, level: false, face: Default::default() });
     }
 }

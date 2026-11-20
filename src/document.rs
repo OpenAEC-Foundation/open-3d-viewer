@@ -171,6 +171,8 @@ pub struct PlanView {
     /// The kind of drawing it is, by the key the project's drawing standard has it under: it is
     /// drawn by that kind's rules. `None`: the kind usual for what it is.
     pub drawing: Option<String>,
+    /// Authored line pens, grid visibility and view placement.
+    pub presentation: Value,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
     /// Its texts, shown wherever it is placed.
@@ -184,6 +186,7 @@ pub struct PlanView {
     pub tags: Vec<Note>,
     /// Generate plan symbols from the actual piles. Existing authored plans opt in explicitly.
     pub pile_symbols: bool,
+    pub pile_tag_marks: bool,
     /// Per-element tag offset in model metres, relative to the pile head.
     pub pile_offsets: std::collections::BTreeMap<u64, [f64; 2]>,
     /// Regenerated tag index, element identity, and head used by drag editing.
@@ -257,6 +260,8 @@ pub struct SectionView {
     /// The kind of drawing it is, by the key the project's drawing standard has it under: it is
     /// drawn by that kind's rules. `None`: the kind usual for what it is.
     pub drawing: Option<String>,
+    /// Authored line pens, grid visibility and view placement.
+    pub presentation: Value,
     /// Its dimensions, in its drawing's (u, v).
     pub dimensions: Vec<Dimension>,
     /// Its texts, in its drawing's (u, v).
@@ -641,7 +646,6 @@ pub struct Document {
     /// Sheets, in the order they were made.
     sheets: Vec<Sheet>,
     project_fields: TitleFields,
-    view_origins: HashMap<String, [f64; 2]>,
     /// How dimensions look; a dimension names one by its place here.
     dimension_styles: DimensionStyles,
     /// Levels and views made so far, for the paths of new ones.
@@ -738,10 +742,7 @@ impl Document {
             n.iter().map(note).collect::<Vec<_>>()
         };
         // the shapes of a view's lines, where it has any: kind, first line, how many
-        let shaped = |mut view: Value, path: &str, shapes: &[Shape]| -> Value {
-            if let Some(origin) = self.view_origin(path) {
-                view["presentation"]["origin"] = json!(origin);
-            }
+        let shaped = |mut view: Value, shapes: &[Shape]| -> Value {
             if !shapes.is_empty() {
                 view["shapes"] = shapes.iter().map(|s| json!([s.kind.key(), s.first, s.count])).collect::<Vec<_>>().into();
             }
@@ -756,7 +757,9 @@ impl Document {
             let view = json!({
                 "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
-            let mut view = shaped(view, &p.path, &p.shapes);
+            let mut view = shaped(view, &p.shapes);
+            if !p.presentation.is_null() { view["presentation"] = p.presentation.clone(); }
+            if p.pile_tag_marks { view["pile_tag_marks"] = true.into(); }
             if let Some(photo) = &p.orthophoto { photo.write(&mut view["presentation"]); }
             if p.pile_symbols { view["pile_symbols"] = true.into(); }
             if !p.pile_offsets.is_empty() { view["pile_offsets"] = json!(p.pile_offsets); }
@@ -768,7 +771,8 @@ impl Document {
             let view = json!({
                 "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "fills": fills(&s.fills), "layers": s.layers,
             });
-            let view = shaped(view, &s.path, &s.shapes);
+            let mut view = shaped(view, &s.shapes);
+            if !s.presentation.is_null() { view["presentation"] = s.presentation.clone(); }
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(with_drawing(view, &s.drawing), &s.hidden)}}));
         }
         for (i, v) in self.views_3d.iter().enumerate() {
@@ -873,10 +877,6 @@ impl Document {
             if known(self, path) {
                 continue;
             }
-            let presentation = attributes.get("o3v::view::plan").or_else(|| attributes.get("o3v::view::section")).and_then(|v| v.get("presentation"));
-            if let Some(origin) = presentation.and_then(|p| p.get("origin")).and_then(pair) {
-                self.view_origins.insert(path.clone(), origin);
-            }
             if let Some(p) = attributes.get("o3v::view::plan") {
                 let Some(level) = self.levels.iter().find(|l| same_name(&l.name, &text(p, "level"))).map(|l| l.path.clone()) else { continue };
                 let kind = PlanKind::from_key(&text(p, "kind"));
@@ -890,8 +890,10 @@ impl Document {
                     cut: number(p, "cut", cut),
                     depth: number(p, "depth", depth),
                     scale: scale(p),
+                    presentation: p["presentation"].clone(),
                     drawing: p.get("drawing").and_then(Value::as_str).map(String::from),
                     tags: Vec::new(),
+                    pile_tag_marks: p.get("pile_tag_marks").and_then(Value::as_bool).unwrap_or(false),
                     pile_symbols: p.get("pile_symbols").and_then(Value::as_bool).unwrap_or(false),
                     pile_offsets: p.get("pile_offsets").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
                     pile_tags: Vec::new(),
@@ -915,6 +917,7 @@ impl Document {
                     to,
                     depth: number(s, "depth", 100.0),
                     scale: scale(s),
+                    presentation: s["presentation"].clone(),
                     drawing: s.get("drawing").and_then(Value::as_str).map(String::from),
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
@@ -1053,7 +1056,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), pile_symbols: kind.structural(), pile_offsets: Default::default(), pile_tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, presentation: Value::Null, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), pile_symbols: kind.structural(), pile_tag_marks: false, pile_offsets: Default::default(), pile_tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1106,7 +1109,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, drawing: None, presentation: Value::Null, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1431,6 +1434,23 @@ impl Document {
         self.section(path).map_or(&[], |s| &s.fills[..])
     }
 
+    pub fn view_presentation(&self, path: &str) -> &Value {
+        self.plan(path).map(|p| &p.presentation).or_else(|| self.section(path).map(|s| &s.presentation)).unwrap_or(&Value::Null)
+    }
+
+    /// Consecutive detail lines with a common colour and width in millimetres.
+    pub fn detail_pens(&self, path: &str) -> Vec<(std::ops::Range<usize>, [u8; 3], f64)> {
+        let count = self.view_lines(path).len();
+        let mut starts: Vec<_> = self.view_presentation(path)["pens"].as_array().into_iter().flatten().filter_map(|p| {
+            let at = usize::try_from(p.get(0)?.as_u64()?).ok()?;
+            let rgb: [u8; 3] = serde_json::from_value(p.get(1)?.clone()).ok()?;
+            let width = p.get(2)?.as_f64()?;
+            (at < count && width.is_finite() && width > 0.0).then_some((at, rgb, width))
+        }).collect();
+        starts.sort_by_key(|p| p.0);
+        starts.iter().enumerate().map(|(i, &(at, rgb, width))| (at..starts.get(i+1).map_or(count, |p| p.0), rgb, width)).collect()
+    }
+
     /// The lines of a view that are no model: the shapes and leaders of its tags.
     pub fn view_lines(&self, path: &str) -> &[[[f64; 2]; 2]] {
         if let Some(p) = self.plan(path) {
@@ -1630,7 +1650,8 @@ impl Document {
     }
 
     pub fn view_origin(&self, path: &str) -> Option<[f64; 2]> {
-        self.view_origins.get(path).copied()
+        let origin = self.view_presentation(path).get("origin")?;
+        Some([origin.get(0)?.as_f64()?, origin.get(1)?.as_f64()?])
     }
 
     pub fn title_value<'a>(&'a self, sheet: &'a Sheet, field: Field) -> &'a str {

@@ -68,6 +68,7 @@ pub fn cad_document(d: &Drawing2d) -> Document {
     for l in &d.lines {
         let mut line = Line::from_points(mm(l.a), mm(l.b));
         line.common.layer = layer_of(l.pen, l.width);
+        if let Some([r, g, b]) = l.color { line.common.color = opencaddocument::Color::from_rgb(r, g, b); }
         let _ = doc.add_entity(EntityType::Line(line));
     }
     for t in &d.texts {

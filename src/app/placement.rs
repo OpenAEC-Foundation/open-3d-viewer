@@ -93,12 +93,14 @@ pub struct Settings {
     pub grade: Option<String>,
     /// What the Slab tool makes: a floor, a roof or a ceiling.
     pub role: bim_core::SlabRole,
+    /// The service a duct, pipe or cable tray is drawn in; `None`: not given.
+    pub service: Option<bim_core::Service>,
 }
 
 impl Settings {
     /// What a tool places when nothing was typed.
     pub fn default_for(tool: ModelTool) -> Self {
-        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, grade: None, role: bim_core::SlabRole::Floor };
+        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, grade: None, role: bim_core::SlabRole::Floor, service: None };
         use super::element_props::{DOOR, WINDOW};
         use super::modeller::{BEAM, CABLE_TRAY, COLUMN, DUCT, OBJECT, PIPE, ROUND_DUCT, SERVICE_HEIGHT, SLAB_THICKNESS, WALL_THICKNESS};
         match tool {
@@ -145,6 +147,8 @@ pub enum PlaceMessage {
     Grade(Option<String>),
     /// What the Slab tool makes; its type goes, as types are per role.
     Role(bim_core::SlabRole),
+    /// The service a run is drawn in (`None`: not given).
+    Service(Option<bim_core::Service>),
     Chain(bool),
     /// The Wall tool draws a rectangle, or single walls.
     Rectangle(bool),
@@ -223,7 +227,7 @@ impl App {
                         (_, bim_core::ProfileDef::Catalogue { shape: P::Rhs { h, b, .. }, .. }) => (ModelTool::Duct, *b, *h),
                         _ => (ModelTool::Duct, of(ModelTool::Duct).width, of(ModelTool::Duct).depth),
                     };
-                    (tool, Settings { width, depth, ..of(tool) })
+                    (tool, Settings { width, depth, service: e.service.filter(|v| Some(v.role()) == tool.service()), ..of(tool) })
                 } else {
                 let tool = if e.class() == "IfcColumn" { ModelTool::Column } else { ModelTool::Beam };
                 let mut s = of(tool);
@@ -272,6 +276,35 @@ struct Choice {
 impl std::fmt::Display for Choice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.name)
+    }
+}
+
+/// A service in the strip (`None`: not given), named in the interface language.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Served(Option<bim_core::Service>, &'static str);
+
+impl std::fmt::Display for Served {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+
+/// The name of a service in the interface language.
+pub fn service_label(service: bim_core::Service, l: Language) -> &'static str {
+    use bim_core::Service as S;
+    match service {
+        S::SupplyAir => l.text("Toevoerlucht", "Supply air"),
+        S::ReturnAir => l.text("Retourlucht", "Return air"),
+        S::ExhaustAir => l.text("Afvoerlucht", "Exhaust air"),
+        S::HeatingSupply => l.text("Verwarming aanvoer", "Heating supply"),
+        S::HeatingReturn => l.text("Verwarming retour", "Heating return"),
+        S::ColdWater => l.text("Koud water", "Cold water"),
+        S::HotWater => l.text("Warm water", "Hot water"),
+        S::Waste => l.text("Vuilwater", "Waste water"),
+        S::RainWater => l.text("Hemelwater", "Rain water"),
+        S::Gas => l.text("Gas", "Gas"),
+        S::Power => l.text("Elektra", "Power"),
+        S::Data => l.text("Data", "Data"),
     }
 }
 
@@ -357,6 +390,7 @@ impl App {
             PlaceMessage::Kind(kind) => s.kind = kind,
             PlaceMessage::Location(location) => s.location = location,
             PlaceMessage::Grade(grade) => s.grade = grade,
+            PlaceMessage::Service(service) => s.service = service,
             PlaceMessage::Role(role) => {
                 if s.role != role {
                     s.role = role;
@@ -509,6 +543,13 @@ impl App {
             let picked = choices.iter().find(|c| c.id == s.grade).cloned();
             let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Grade(c.id))).text_size(12).padding([2, 6]).width(150);
             bar = bar.push(pair(label(l.text("Sterkteklasse", "Grade")), pick));
+        }
+        if let Some(role) = tool.service() {
+            // the service the run is of: it is coloured by it and joins only runs of its own
+            let options: Vec<Served> = std::iter::once(Served(None, "-")).chain(bim_core::Service::ALL.into_iter().filter(|v| v.role() == role).map(|v| Served(Some(v), service_label(v, l)))).collect();
+            let picked = options.iter().find(|o| o.0 == s.service).copied();
+            let pick = pick_list(options, picked, |o: Served| Message::Place(PlaceMessage::Service(o.0))).text_size(12).padding([2, 6]).width(170);
+            bar = bar.push(pair(label(l.text("Systeem", "System")), pick));
         }
         if matches!(tool, ModelTool::Wall | ModelTool::Beam) {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(tool, l))).collect();

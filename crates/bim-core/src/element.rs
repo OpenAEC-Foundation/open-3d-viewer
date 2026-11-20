@@ -132,6 +132,86 @@ impl LinearRole {
     }
 }
 
+/// The service an element of a building's installations belongs to: what flows through a run, a
+/// fitting, a terminal or an appliance. Elements joined to each other in one service are one
+/// system (IfcDistributionSystem); two runs of different services are never joined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Service {
+    SupplyAir,
+    ReturnAir,
+    ExhaustAir,
+    HeatingSupply,
+    HeatingReturn,
+    ColdWater,
+    HotWater,
+    Waste,
+    RainWater,
+    Gas,
+    Power,
+    Data,
+}
+
+impl Service {
+    pub const ALL: [Service; 12] = [
+        Service::SupplyAir,
+        Service::ReturnAir,
+        Service::ExhaustAir,
+        Service::HeatingSupply,
+        Service::HeatingReturn,
+        Service::ColdWater,
+        Service::HotWater,
+        Service::Waste,
+        Service::RainWater,
+        Service::Gas,
+        Service::Power,
+        Service::Data,
+    ];
+
+    /// The role of the runs that carry it.
+    pub fn role(self) -> LinearRole {
+        match self {
+            Service::SupplyAir | Service::ReturnAir | Service::ExhaustAir => LinearRole::Duct,
+            Service::Power | Service::Data => LinearRole::CableTray,
+            _ => LinearRole::Pipe,
+        }
+    }
+
+    /// Its name (English).
+    pub fn name(self) -> &'static str {
+        match self {
+            Service::SupplyAir => "Supply air",
+            Service::ReturnAir => "Return air",
+            Service::ExhaustAir => "Exhaust air",
+            Service::HeatingSupply => "Heating supply",
+            Service::HeatingReturn => "Heating return",
+            Service::ColdWater => "Cold water",
+            Service::HotWater => "Hot water",
+            Service::Waste => "Waste water",
+            Service::RainWater => "Rain water",
+            Service::Gas => "Gas",
+            Service::Power => "Power",
+            Service::Data => "Data",
+        }
+    }
+
+    /// The predefined type of its IfcDistributionSystem (IFC4).
+    pub fn ifc_system(self) -> &'static str {
+        match self {
+            Service::SupplyAir | Service::ReturnAir => "VENTILATION",
+            Service::ExhaustAir => "EXHAUST",
+            Service::HeatingSupply | Service::HeatingReturn => "HEATING",
+            Service::ColdWater => "DOMESTICCOLDWATER",
+            Service::HotWater => "DOMESTICHOTWATER",
+            Service::Waste => "WASTEWATER",
+            Service::RainWater => "RAINWATER",
+            Service::Gas => "GAS",
+            Service::Power => "ELECTRICAL",
+            Service::Data => "DATA",
+        }
+    }
+}
+
 /// A rectangular opening in a wall: `along` the axis from its start to the opening's near side,
 /// `sill` above the wall's base, `width` × `height`. An opening with no sill (a door) cuts the
 /// wall's bottom edge; any other keeps wall below, above and on both sides.
@@ -481,6 +561,9 @@ pub struct Element {
     /// concrete class (C30/37), a timber class (C24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// The service it belongs to, when it is part of an installation (see [`Service`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<Service>,
     pub shape: Shape,
 }
 
@@ -491,12 +574,12 @@ impl Element {
     pub fn in_project(grid: &TileGrid, name: impl Into<String>, level: Option<String>, mut shape: Shape) -> Self {
         let tile = shape.placement().map_or(TileKey::default(), |p| grid.tile_of(p));
         shape.translate(-grid.origin(tile));
-        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, shape }
+        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, service: None, shape }
     }
 
-    /// The same element (its id, name, level, top and grade) with `shape`, given in project coordinates.
+    /// The same element (its id, name, level, top, grade and service) with `shape`, given in project coordinates.
     pub fn reshaped(&self, grid: &TileGrid, shape: Shape) -> Self {
-        Self { id: self.id, top: self.top.clone(), grade: self.grade.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
+        Self { id: self.id, top: self.top.clone(), grade: self.grade.clone(), service: self.service, ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
     }
 
     /// Its definition in project coordinates.

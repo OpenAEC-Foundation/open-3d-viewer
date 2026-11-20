@@ -634,15 +634,16 @@ impl App {
         }
         let name = self.placed_name(tool, name);
         // a run of a service starting where one ends at another height: a riser between them
-        if let Some(riser) = self.riser_to(tool, &shape) {
-            let _ = self.add_element_reaching(name, level.clone(), None, riser);
+        let service = self.modeller.placement.of(tool).service.filter(|v| Some(v.role()) == tool.service());
+        if let Some(riser) = self.riser_to(tool, service, &shape) {
+            let _ = self.add_element_served(name, level.clone(), None, service, riser);
         }
         // with no height typed, what stands reaches the level above, when there is one
         let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
         let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
         // a column or a beam takes the strip's strength class
         let grade = self.modeller.placement.of(tool).grade.filter(|_| matches!(tool, ModelTool::Column | ModelTool::Beam));
-        let added = self.add_element_reaching(name, level, top, shape);
+        let added = self.add_element_served(name, level, top, service, shape);
         if let (Ok(id), Some(grade)) = (&added, grade) {
             if let Some(mut graded) = self.modeller.model.get(*id).cloned() {
                 graded.grade = Some(grade);
@@ -667,18 +668,26 @@ impl App {
     }
 
     /// The riser a run of a building service needs before it: when `shape`, a run `tool` is
-    /// about to place, starts straight above or below the end of a run of the same service (and
-    /// none ends where it starts), a vertical run of that one's profile from that end to the
+    /// about to place, starts straight above or below the end of a run of the same kind and
+    /// service (and it starts on none), a vertical run of that one's profile from that end to the
     /// start. A rectangular riser keeps its width across the run it comes from.
-    fn riser_to(&self, tool: ModelTool, shape: &Shape) -> Option<Shape> {
+    fn riser_to(&self, tool: ModelTool, service: Option<bim_core::Service>, shape: &Shape) -> Option<Shape> {
         let role = tool.service()?;
         let Shape::Linear(run) = shape else { return None };
+        // a run that is a riser itself needs none before it
+        if (run.end - run.start).truncate().length() < 1e-6 {
+            return None;
+        }
         let grid = self.modeller.model.grid;
         let mut found: Option<(DVec3, DVec3, ProfileDef)> = None;
         for e in self.modeller.model.iter() {
             let Shape::Linear(l) = e.shape_in_project(&grid) else { continue };
-            if l.role != role {
+            if l.role != role || e.service != service {
                 continue;
+            }
+            // it starts on a run (a riser passing by, say): that is where it joins
+            if bim_core::join::to_segment(run.start, l.start, l.end) < 1e-3 {
+                return None;
             }
             for (end, other) in [(l.start, l.end), (l.end, l.start)] {
                 let apart = end - run.start;
@@ -708,9 +717,16 @@ impl App {
 
     /// As [`App::add_element`], the element reaching `top` with its top (see `tops`).
     pub(super) fn add_element_reaching(&mut self, name: &str, level: Option<String>, top: Option<bim_core::Top>, shape: Shape) -> Result<ElementId, Refusal> {
+        self.add_element_served(name, level, top, None, shape)
+    }
+
+    /// As [`App::add_element_reaching`], the element of `service` when one is given: it joins
+    /// only what is of its own service or of none.
+    pub(super) fn add_element_served(&mut self, name: &str, level: Option<String>, top: Option<bim_core::Top>, service: Option<bim_core::Service>, shape: Shape) -> Result<ElementId, Refusal> {
         let grid = self.modeller.model.grid;
         let mut element = Element::in_project(&grid, name, level, shape);
         element.top = top;
+        element.service = service;
         // numbered per IFC class: Wall 1, Wall 2, Slab 1
         let number = self.modeller.model.iter().filter(|e| e.class() == element.class()).count() + 1;
         element.name = format!("{name} {number}");
@@ -1097,6 +1113,25 @@ impl App {
     }
 }
 
+/// The colour of what belongs to a service (sRGB): supply warm or fresh, return and waste dull.
+fn service_colour(service: bim_core::Service) -> [f32; 3] {
+    use bim_core::Service as S;
+    match service {
+        S::SupplyAir => [0.30, 0.58, 0.90],
+        S::ReturnAir => [0.80, 0.50, 0.72],
+        S::ExhaustAir => [0.56, 0.70, 0.36],
+        S::HeatingSupply => [0.86, 0.26, 0.22],
+        S::HeatingReturn => [0.24, 0.36, 0.72],
+        S::ColdWater => [0.30, 0.74, 0.86],
+        S::HotWater => [0.94, 0.52, 0.20],
+        S::Waste => [0.52, 0.42, 0.32],
+        S::RainWater => [0.28, 0.62, 0.58],
+        S::Gas => [0.92, 0.82, 0.24],
+        S::Power => [0.88, 0.72, 0.28],
+        S::Data => [0.58, 0.46, 0.80],
+    }
+}
+
 /// The colour of a layer of modelled elements, by IFC class (sRGB).
 fn class_colour(class: &str) -> [f32; 3] {
     match class {
@@ -1162,7 +1197,9 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
             let origin = grid.origin(part.tile);
             let base = (layer.positions.len() / 3) as u32;
             let material = part.material.as_deref().and_then(|key| library.material(key));
-            let colour = material.map_or_else(|| class_colour(part.class).map(|c| (c * 255.0).round() as u8), |m| m.colour);
+            // of a service: in its colour, so the systems are told apart
+            let plain = element.service.map_or_else(|| class_colour(part.class), service_colour);
+            let colour = material.map_or_else(|| plain.map(|c| (c * 255.0).round() as u8), |m| m.colour);
             let colours = layer.colors.get_or_insert_with(Vec::new);
             colours.extend(std::iter::repeat_n([colour[0], colour[1], colour[2], 255], mesh.positions.len()));
             for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
@@ -1221,6 +1258,11 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
     put("id", e.id.0.to_string());
     if let Some(level) = level {
         put("level", level.into());
+    }
+    // the service it is of, and the kind of system that is in IFC
+    if let Some(service) = e.service {
+        put("Service", service.name().into());
+        put("System type", service.ifc_system().into());
     }
     // the definitions an IFCX file keeps and gives back: the element's, and those of the
     // connections it is the primary member of (a connection has no body, so no node of its own)
@@ -1398,9 +1440,27 @@ mod tests {
         assert!((pipes[0].start - DVec3::new(0.0, 20.0, 0.3)).length() < 1e-9 && (pipes[0].end - DVec3::new(0.0, 20.0, 2.8)).length() < 1e-9, "{:?}", pipes[0]);
         assert!((pipes[1].start.z - 2.8).abs() < 1e-9 && (pipes[1].end.z - 2.8).abs() < 1e-9, "{:?}", pipes[1]);
         assert_eq!(app.modeller.model.iter().filter(|e| e.class() == "IfcPipeFitting").count(), 1);
+        // a pipe drawn in a service is of it, as is the fitting to the next; one of another service
+        // ending at the same point is not joined to them
+        use bim_core::Service;
+        app.place_message(PlaceMessage::Field(PlaceField::Offset, "0".into()));
+        app.modeller.points.clear();
+        app.place_message(PlaceMessage::Service(Some(Service::HeatingSupply)));
+        click(&mut app, 0.0, 40.0);
+        click(&mut app, 6.0, 40.0);
+        click(&mut app, 6.0, 46.0);
+        app.modeller.points.clear();
+        app.place_message(PlaceMessage::Service(Some(Service::ColdWater)));
+        click(&mut app, 6.0, 46.0);
+        click(&mut app, 12.0, 46.0);
+        let served: Vec<(&str, Option<Service>)> = app.modeller.model.iter().filter(|e| e.service.is_some()).map(|e| (e.class(), e.service)).collect();
+        let (pipe, fitting) = ("IfcPipeSegment", "IfcPipeFitting");
+        assert_eq!(served, [(pipe, Some(Service::HeatingSupply)), (pipe, Some(Service::HeatingSupply)), (fitting, Some(Service::HeatingSupply)), (pipe, Some(Service::ColdWater))]);
+        let scene = app.model.as_ref().unwrap();
+        assert_eq!(scene.elements_with("System type", "HEATING").len(), 3);
         // fittings are named for what they are, and have no mark over them: they are picked by their body
         let names: Vec<&str> = app.modeller.model.iter().filter(|e| matches!(e.shape, Shape::Connection(_))).map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["Bend 1", "Bend 2", "Transition 1", "Bend 3"]);
+        assert_eq!(names, ["Bend 1", "Bend 2", "Transition 1", "Bend 3", "Bend 4"]);
         app.set_model_tool(None);
         assert!(app.join_marks(iced::Color::BLACK, iced::Color::WHITE).is_none());
     }

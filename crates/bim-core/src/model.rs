@@ -131,6 +131,7 @@ impl Model {
     ///   join, named `name` and a number: a mitre between two of one profile meeting end to end at
     ///   an angle; a butt where it ends on the other's side (the other runs through), or where two
     ///   profiles meet end to end (the larger runs through). Members in one straight line get none.
+    ///   Two elements of different services are not joined; a fitting takes its runs' service.
     ///   Only meetings that involve an element of `changed` are joined (all, when `None`), so a join
     ///   taken away stays away until one of its members changes.
     ///
@@ -174,6 +175,8 @@ impl Model {
                 if changed.is_some_and(|c| !c.contains(id) && !c.contains(&other)) {
                     continue;
                 }
+                let service = |id: &ElementId| self.elements.get(id).and_then(|e| e.service);
+                let (mine, theirs) = (service(id), service(&other));
                 let Some(kind) = auto_kind(me, &def, other_end) else { continue };
                 let (primary, secondary) = match (kind, other_end) {
                     // in a butt end to end, the larger profile runs through
@@ -182,7 +185,9 @@ impl Model {
                 };
                 let number = self.elements.values().filter(|e| e.base() == crate::element::BaseKind::Connection).count() + 1;
                 let level = self.elements.get(id).and_then(|e| e.level.clone());
-                let joint = Element::in_project(&self.grid, format!("{name} {number}"), level, Shape::Connection(ConnectionDef { kind, primary, secondary }));
+                let mut joint = Element::in_project(&self.grid, format!("{name} {number}"), level, Shape::Connection(ConnectionDef { kind, primary, secondary }));
+                // a fitting is of the service of its runs
+                joint.service = mine.or(theirs).filter(|_| kind.is_fitting());
                 if let Ok(joint) = self.add(joint) {
                     added.push(joint);
                     paired.insert((primary.min(secondary), primary.max(secondary)));
@@ -205,7 +210,11 @@ impl Model {
         linear: &[(ElementId, LinearDef)],
         paired: &std::collections::HashSet<(ElementId, ElementId)>,
     ) -> Option<(ElementId, Option<MemberEnd>, LinearDef)> {
-        let others = linear.iter().filter(|(o, _)| *o != id && !paired.contains(&(id.min(*o), id.max(*o))));
+        // two runs of different services are never joined
+        let service = |id: ElementId| self.elements.get(&id).and_then(|e| e.service);
+        let mine = service(id);
+        let apart = |o: ElementId| mine.is_some_and(|mine| service(o).is_some_and(|theirs| theirs != mine));
+        let others = linear.iter().filter(|(o, _)| *o != id && !paired.contains(&(id.min(*o), id.max(*o))) && !apart(*o));
         let mut side = None;
         for (o, def) in others {
             if def.start.distance(at) <= JOIN_TOLERANCE {
@@ -1041,5 +1050,29 @@ mod tests {
         // the bend turns in the duct's height (0.2): the riser starts 0.2 above the level run
         let (lo, _) = m.evaluate(riser).unwrap()[0].solid.bounds();
         assert!((lo.z - 2.8).abs() < 1e-9, "{lo}");
+    }
+
+    #[test]
+    fn runs_of_different_services_are_not_joined_and_a_fitting_takes_its_runs_service() {
+        use crate::element::Service;
+        let mut m = Model::new(TileGrid::default());
+        let grid = m.grid;
+        let mut of = |m: &mut Model, service: Option<Service>, start: DVec3, end: DVec3| {
+            let mut e = Element::in_project(&grid, "e", None, duct(start, end));
+            e.service = service;
+            m.add(e).unwrap()
+        };
+        let (at, x, y) = (DVec3::new(4.0, 0.0, 2.6), DVec3::new(0.0, 0.0, 2.6), DVec3::new(4.0, 4.0, 2.6));
+        of(&mut m, Some(Service::ReturnAir), at, y);
+        of(&mut m, Some(Service::SupplyAir), x, at);
+        assert!(m.update_joins("Fitting", None).0.is_empty(), "supply and return do not join");
+        // a third of the supply's own service, and one of none: each joins the supply run
+        of(&mut m, Some(Service::SupplyAir), at, DVec3::new(4.0, -4.0, 2.6));
+        let (added, _) = m.update_joins("Fitting", None);
+        assert_eq!(added.len(), 1);
+        assert_eq!(m.get(added[0]).unwrap().service, Some(Service::SupplyAir));
+        // it is kept when the element is written and read
+        let read: Element = serde_json::from_str(&serde_json::to_string(m.get(added[0]).unwrap()).unwrap()).unwrap();
+        assert_eq!(read.service, Some(Service::SupplyAir));
     }
 }

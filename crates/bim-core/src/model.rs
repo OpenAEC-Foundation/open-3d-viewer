@@ -152,6 +152,11 @@ impl Model {
         for id in &broken {
             self.elements.remove(id);
         }
+        // New automatic joins require a changed linear member. Broken connections were
+        // still checked above, including those between systems.
+        if changed.is_some_and(|ids| !ids.iter().any(|id| self.member(*id).is_ok())) {
+            return (Vec::new(), broken);
+        }
         // the ends joined already, and the pairs joined already
         let mut taken: std::collections::HashSet<(ElementId, MemberEnd)> = Default::default();
         let mut paired: std::collections::HashSet<(ElementId, ElementId)> = Default::default();
@@ -167,13 +172,14 @@ impl Model {
             }
         }
         let linear: Vec<(ElementId, LinearDef)> = self.elements.values().filter_map(|e| Some((e.id, self.member(e.id).ok()?))).collect();
+        let radii: Vec<std::cell::OnceCell<f64>> = (0..linear.len()).map(|_| Default::default()).collect();
         let mut added = Vec::new();
         for (id, me) in &linear {
             for (end, at) in [(MemberEnd::Start, me.start), (MemberEnd::End, me.end)] {
                 if taken.contains(&(*id, end)) {
                     continue;
                 }
-                let Some((other, other_end, def)) = self.partner(*id, at, &linear, &paired) else { continue };
+                let Some((other, other_end, def)) = self.partner(*id, at, &linear, &radii, &paired) else { continue };
                 if changed.is_some_and(|c| !c.contains(id) && !c.contains(&other)) {
                     continue;
                 }
@@ -206,11 +212,12 @@ impl Model {
         id: ElementId,
         at: glam::DVec3,
         linear: &[(ElementId, LinearDef)],
+        radii: &[std::cell::OnceCell<f64>],
         paired: &std::collections::HashSet<(ElementId, ElementId)>,
     ) -> Option<(ElementId, Option<MemberEnd>, LinearDef)> {
-        let others = linear.iter().filter(|(o, _)| *o != id && !paired.contains(&(id.min(*o), id.max(*o))));
+        let others = linear.iter().zip(radii).filter(|((o, _), _)| *o != id && !paired.contains(&(id.min(*o), id.max(*o))));
         let mut side = None;
-        for (o, def) in others {
+        for ((o, def), radius) in others {
             if def.start.distance(at) <= JOIN_TOLERANCE {
                 return Some((*o, Some(MemberEnd::Start), def.clone()));
             }
@@ -220,9 +227,12 @@ impl Model {
             let axis = def.end - def.start;
             let t = (at - def.start).dot(axis) / axis.length_squared().max(1e-300);
             let length = axis.length();
-            let radius = def.profile.profile().map_or(0.0, |p| p.outer().iter().map(|q| q.length()).fold(0.0, f64::max));
-            if t * length > JOIN_TOLERANCE && (1.0 - t) * length > JOIN_TOLERANCE && join::to_segment(at, def.start, def.end) <= radius + JOIN_TOLERANCE {
-                let d = join::to_segment(at, def.start, def.end);
+            if t * length <= JOIN_TOLERANCE || (1.0 - t) * length <= JOIN_TOLERANCE {
+                continue;
+            }
+            let radius = radius.get_or_init(|| def.profile.profile().map_or(0.0, |p| p.outer().iter().map(|q| q.length()).fold(0.0, f64::max)));
+            let d = join::to_segment(at, def.start, def.end);
+            if d <= *radius + JOIN_TOLERANCE {
                 if side.as_ref().is_none_or(|(_, best, _): &(ElementId, f64, LinearDef)| d < *best) {
                     side = Some((*o, d, def.clone()));
                 }

@@ -34,6 +34,11 @@ fn within(a: DVec2, b: DVec2, c: DVec2) -> bool {
 /// Whether the closed segments `a`–`b` and `c`–`d` share a point (crossing, touching or
 /// overlapping). Exact.
 pub fn segments_meet(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
+    // Disjoint closed intervals cannot intersect. Keep touching intervals for the exact test.
+    if a.x.max(b.x) < c.x.min(d.x) || c.x.max(d.x) < a.x.min(b.x)
+        || a.y.max(b.y) < c.y.min(d.y) || c.y.max(d.y) < a.y.min(b.y) {
+        return false;
+    }
     let opposite = |p: Ordering, q: Ordering| p != Ordering::Equal && q != Ordering::Equal && p != q;
     let (d1, d2) = (orient2d(a, b, c), orient2d(a, b, d));
     let (d3, d4) = (orient2d(c, d, a), orient2d(c, d, b));

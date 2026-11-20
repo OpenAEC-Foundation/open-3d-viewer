@@ -330,14 +330,16 @@ impl Library {
         self.code(code).map(|c| c.name(lang).to_string()).or_else(|| nlsfb::group_name(code, lang).map(str::to_string))
     }
 
-    /// The types that have `code`, by their ids: build-ups, linear types and system types. With
+    /// The types that have `code`, by their ids: build-ups, linear types, system types and
+    /// object types. With
     /// `deeper`, also those of a code under it ("21" has the types of "21.22").
     pub fn coded(&self, code: &str, deeper: bool) -> Vec<&str> {
         let has = |of: String| of == code || deeper && of.strip_prefix(code).is_some_and(|rest| rest.starts_with('.') || code.contains('.'));
         let buildups = self.buildups.iter().filter(|b| has(b.nlsfb(&self.materials))).map(|b| b.id.as_str());
         let linear = self.linear_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
         let systems = self.system_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
-        buildups.chain(linear).chain(systems).collect()
+        let objects = self.object_types.iter().filter(|o| has(o.nlsfb())).map(|o| o.id.as_str());
+        buildups.chain(linear).chain(systems).chain(objects).collect()
     }
 
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:

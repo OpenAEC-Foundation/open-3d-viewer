@@ -1668,6 +1668,13 @@
     "Click the line to extend to · Esc: stop": "Fai clic sulla linea fino a cui estendere · Esc: interrompi",
     "Click the line that is extended · Esc: start again": "Fai clic sulla linea da estendere · Esc: ricomincia",
     "Click the first line, on the side that stays · Esc: stop": "Fai clic sulla prima linea, sul lato che resta · Esc: interrompi",
-    "Click the second line, on the side that stays · Esc: start again": "Fai clic sulla seconda linea, sul lato che resta · Esc: ricomincia"
+    "Click the second line, on the side that stays · Esc: start again": "Fai clic sulla seconda linea, sul lato che resta · Esc: ricomincia",
+    "Depth (mm)": "Profondità (mm)",
+    "Underside above floor (mm)": "Lato inferiore sopra il pavimento (mm)",
+    "IFC predefined type": "Tipo predefinito IFC",
+    "+ Property": "+ Proprietà",
+    "Remove property": "Rimuovi proprietà",
+    "value": "valore",
+    "+ Object": "+ Oggetto"
   }
 }

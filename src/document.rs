@@ -6,6 +6,9 @@
 //! Headless: no GUI or GPU, so the MCP server and a later BIM kernel crate can use it as it is.
 
 use crate::model::Model;
+use bim_library::house::Field;
+use std::collections::HashMap;
+type TitleFields = HashMap<Field, String>;
 use crate::units::UnitKeySet;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -585,6 +588,7 @@ pub struct Sheet {
     /// The IfcX path, a UUID.
     pub path: String,
     pub number: String,
+    fields: TitleFields,
     pub name: String,
     /// Number and name, as a tab shows them.
     pub title: String,
@@ -629,6 +633,8 @@ pub struct Document {
     views_3d: Vec<View3d>,
     /// Sheets, in the order they were made.
     sheets: Vec<Sheet>,
+    project_fields: TitleFields,
+    view_origins: HashMap<String, [f64; 2]>,
     /// How dimensions look; a dimension names one by its place here.
     dimension_styles: DimensionStyles,
     /// Levels and views made so far, for the paths of new ones.
@@ -725,7 +731,10 @@ impl Document {
             n.iter().map(note).collect::<Vec<_>>()
         };
         // the shapes of a view's lines, where it has any: kind, first line, how many
-        let shaped = |mut view: Value, shapes: &[Shape]| -> Value {
+        let shaped = |mut view: Value, path: &str, shapes: &[Shape]| -> Value {
+            if let Some(origin) = self.view_origin(path) {
+                view["presentation"]["origin"] = json!(origin);
+            }
             if !shapes.is_empty() {
                 view["shapes"] = shapes.iter().map(|s| json!([s.kind.key(), s.first, s.count])).collect::<Vec<_>>().into();
             }
@@ -740,7 +749,7 @@ impl Document {
             let view = json!({
                 "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
-            let view = shaped(view, &p.shapes);
+            let view = shaped(view, &p.path, &p.shapes);
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(with_drawing(view, &p.drawing), &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
@@ -749,7 +758,7 @@ impl Document {
             let view = json!({
                 "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "fills": fills(&s.fills), "layers": s.layers,
             });
-            let view = shaped(view, &s.shapes);
+            let view = shaped(view, &s.path, &s.shapes);
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(with_drawing(view, &s.drawing), &s.hidden)}}));
         }
         for (i, v) in self.views_3d.iter().enumerate() {
@@ -767,10 +776,10 @@ impl Document {
         for (i, s) in self.sheets.iter().enumerate() {
             children.insert(format!("sheet {}", i + 1), s.path.clone().into());
             let views: Vec<Value> = s.views.iter().map(|v| json!({"view": v.plan, "at": v.at, "scale": v.scale})).collect();
-            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "paper": s.paper, "views": views}}}));
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "fields": s.fields, "paper": s.paper, "views": views}}}));
         }
-        if !nodes.is_empty() || self.pile_high_water > 0 {
-            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "pile_high_water": self.pile_high_water, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
+        if !nodes.is_empty() || self.pile_high_water > 0 || !self.project_fields.is_empty() {
+            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "pile_high_water": self.pile_high_water, "project_fields": self.project_fields, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
         }
         nodes
     }
@@ -787,6 +796,13 @@ impl Document {
         let hidden = |v: &Value| Arc::new(hidden(v));
         for high in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("pile_high_water")?.as_u64()) {
             self.pile_high_water = self.pile_high_water.max(high);
+        }
+        for fields in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("project_fields")) {
+            if let Ok(values) = serde_json::from_value::<TitleFields>(fields.clone()) {
+                for (field, value) in values {
+                    self.project_fields.entry(field).or_insert(value);
+                }
+            }
         }
         // the styles first: the dimensions name them
         for style in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("dimension_styles")?.as_array()).flatten().filter_map(DimensionStyle::from_ifcx) {
@@ -846,6 +862,10 @@ impl Document {
         for (path, attributes) in nodes {
             if known(self, path) {
                 continue;
+            }
+            let presentation = attributes.get("o3v::view::plan").or_else(|| attributes.get("o3v::view::section")).and_then(|v| v.get("presentation"));
+            if let Some(origin) = presentation.and_then(|p| p.get("origin")).and_then(pair) {
+                self.view_origins.insert(path.clone(), origin);
             }
             if let Some(p) = attributes.get("o3v::view::plan") {
                 let Some(level) = self.levels.iter().find(|l| same_name(&l.name, &text(p, "level"))).map(|l| l.path.clone()) else { continue };
@@ -920,12 +940,12 @@ impl Document {
             let views = s.get("views").and_then(Value::as_array).into_iter().flatten().filter_map(|v| {
                 let view = v.get("view")?.as_str()?.to_string();
                 (self.plan(&view).is_some() || self.section(&view).is_some()).then_some(())?;
-                Some(PlacedView { plan: view, at: pair(v.get("at")?)?, scale: number(v, "scale", SHEET_SCALE) })
+                Some(PlacedView { plan: view, at: pair(v.get("at")?)?, scale: v.get("scale").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(SHEET_SCALE) })
             });
             let views: Vec<PlacedView> = views.collect();
             let (number, name) = (text(s, "number"), text(s, "name"));
             let paper = s.get("paper").and_then(pair).unwrap_or(A3_LANDSCAPE);
-            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, paper, views });
+            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, fields: s.get("fields").and_then(|f| serde_json::from_value(f.clone()).ok()).unwrap_or_default(), paper, views });
         }
     }
 
@@ -1585,6 +1605,37 @@ impl Document {
         self.sheets.iter().find(|s| s.path == path)
     }
 
+    pub fn view_origin(&self, path: &str) -> Option<[f64; 2]> {
+        self.view_origins.get(path).copied()
+    }
+
+    pub fn title_value<'a>(&'a self, sheet: &'a Sheet, field: Field) -> &'a str {
+        match field {
+            Field::Number => &sheet.number,
+            Field::Title => &sheet.name,
+            Field::Project | Field::ProjectNumber | Field::Client => self.project_fields.get(&field).map_or("", String::as_str),
+            _ => sheet.fields.get(&field).map_or("", String::as_str),
+        }
+    }
+
+    pub fn set_title_value(&mut self, path: &str, field: Field, value: String) {
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == path) else { return };
+        match field {
+            Field::Number => sheet.number = value,
+            Field::Title => sheet.name = value,
+            Field::Project | Field::ProjectNumber | Field::Client => {
+                self.project_fields.insert(field, value);
+                return;
+            }
+            Field::Logo | Field::Company | Field::Address | Field::Format | Field::Scale => return,
+            _ => {
+                sheet.fields.insert(field, value);
+                return;
+            }
+        }
+        sheet.title = format!("{} {}", sheet.number, sheet.name);
+    }
+
     /// Makes an empty A3 sheet numbered after the last (`A01`, `A02`, ..) and named `name`, and
     /// gives its path.
     pub fn add_sheet(&mut self, name: &str) -> String {
@@ -1596,7 +1647,7 @@ impl Document {
         let path = uuid(&format!("sheet/{}/{n}", self.added));
         let number = format!("A{n:02}");
         let title = format!("{number} {name}");
-        self.sheets.push(Sheet { path: path.clone(), number, name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
+        self.sheets.push(Sheet { path: path.clone(), number, fields: TitleFields::new(), name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
         path
     }
 

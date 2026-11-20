@@ -57,6 +57,7 @@ pub mod section;
 mod selection;
 pub mod shell;
 pub mod sheet_layout;
+mod title_block;
 pub mod structural;
 mod swipe;
 mod theme;

@@ -3,7 +3,7 @@
 //! where the dialog says (desktop) or downloaded (browser).
 
 use super::{App, Message};
-use crate::drawing2d::{sheet_drawing, view_drawing, Datum2, Drawing2d};
+use crate::drawing2d::{sheet_drawing_with_style, view_drawing, Datum2, Drawing2d};
 use crate::export::drawing::{file_name, write, DrawingFormat};
 use crate::theme::Palette;
 use iced::widget::{button, text, Row};
@@ -37,7 +37,7 @@ impl App {
             for view in &views {
                 self.cut_view(view);
             }
-            return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned(), &|path| self.view_datums(path), &|path| self.view_rules(path));
+            return sheet_drawing_with_style(&self.document, &self.house, &sheet, &|path| self.cuts.get(path).cloned(), &|path| self.view_datums(path), &|path| self.view_rules(path));
         }
         // a sheet read from the file, with the views it places cut first
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i).cloned()) {

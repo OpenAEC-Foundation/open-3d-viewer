@@ -768,6 +768,7 @@ pub enum Message {
     SetScale(Arc<str>, usize, f64),
     /// Give a sheet another paper (width, height in metres).
     SetPaper(Arc<str>, [f64; 2]),
+    SheetField(Arc<str>, bim_library::house::Field, String),
     /// The cut height being typed, and its use.
     CutText(String),
     ApplyCut,
@@ -2658,7 +2659,7 @@ impl App {
             }
             Message::PlaceOnSheet(sheet, plan) => self.place_on_sheet(&sheet, &plan),
             Message::MoveOnSheet(sheet, i, at) => {
-                self.document.move_placed(&sheet, i, at);
+                self.document.put_placed(&sheet, i, at);
             }
             Message::DimensionTool(on) => {
                 self.dimension_tool = on;
@@ -2848,8 +2849,9 @@ impl App {
             }
             Message::RemovePicked => self.remove_picked(),
             Message::SetScale(sheet, i, scale) => {
-                self.document.set_scale(&sheet, i, scale);
+                self.scale_placed_view(&sheet, i, scale);
             }
+            Message::SheetField(sheet, field, value) => self.document.set_title_value(&sheet, field, value),
             Message::SetPaper(sheet, paper) => {
                 self.document.set_paper(&sheet, paper);
             }

@@ -538,25 +538,28 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut, rules: &Rules) -> Opt
 /// sections on the floor plans, its name and scale. `rules` gives how a view is drawn, by its
 /// path.
 pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, datums: &dyn Fn(&str) -> Vec<Datum2>, rules: &dyn Fn(&str) -> Rules) -> Option<Drawing2d> {
+    sheet_drawing_with_style(doc, &bim_library::house::HouseStyle::starter(), path, cut, datums, rules)
+}
+
+pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::HouseStyle, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, datums: &dyn Fn(&str) -> Vec<Datum2>, rules: &dyn Fn(&str) -> Rules) -> Option<Drawing2d> {
     let sheet = doc.sheet(path)?;
     let [w, h] = sheet.paper;
     let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.rectangle(Pen::Frame, [0.0, 0.0], [w, h]);
     d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
-    let title = 0.004;
-    // at the lower right, just above the border, as the sheet's tab shows it
-    d.text([w - 0.013, 0.013], title, format!("{}  {}", sheet.number, sheet.name), Align::Right);
+    let block = crate::title_block::title_block(doc, sheet, style);
+    d.lines.extend(block.lines);
+    d.texts.extend(block.texts);
     for v in &sheet.views {
         let c = cut(&v.plan);
         let (dimensions, notes, crop) = marks(doc, &v.plan);
         let extent = c.as_ref().and_then(|c| c.extent);
-        let middle = extent.map_or([0.0, 0.0], |(lo, hi)| [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0]);
+        let middle = doc.view_origin(&v.plan).or_else(|| extent.map(|(lo, hi)| [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0])).unwrap_or_default();
         let to = |q: [f64; 2]| [v.at[0] + (q[0] - middle[0]) / v.scale, v.at[1] + (q[1] - middle[1]) / v.scale];
         let (lo, hi) = match (crop, extent) {
             (Some((lo, hi)), _) => (to(lo), to(hi)),
             (None, Some((lo, hi))) => {
-                let half = [(hi[0] - lo[0]) as f64 / 2.0 / v.scale + FRAME, (hi[1] - lo[1]) as f64 / 2.0 / v.scale + FRAME];
-                ([v.at[0] - half[0], v.at[1] - half[1]], [v.at[0] + half[0], v.at[1] + half[1]])
+                (to(lo.map(f64::from)).map(|x| x - FRAME), to(hi.map(f64::from)).map(|x| x + FRAME))
             }
             (None, None) => ([v.at[0] - 0.02, v.at[1] - 0.015], [v.at[0] + 0.02, v.at[1] + 0.015]),
         };
@@ -579,7 +582,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
         }
         let name = doc.view_name(&v.plan).unwrap_or_default().to_string();
         d.text([lo[0], lo[1] - 0.009], 0.003, name, Align::Left);
-        d.text([lo[0], lo[1] - 0.0135], 0.0022, format!("1:{}", v.scale.round()), Align::Left);
+        d.text([lo[0], lo[1] - 0.0135], 0.0022, format!("1:{}", v.scale), Align::Left);
     }
     Some(d)
 }
@@ -777,10 +780,9 @@ mod tests {
         assert_eq!(d.paper, Some(A3_LANDSCAPE));
         let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 1e-12 && (p[1] - q[1]).abs() < 1e-12;
         assert!(d.lines.iter().any(|l| l.pen == Pen::Frame && near(l.a, [0.02, 0.01]) && near(l.b, [0.41, 0.01])), "{:?}", d.lines);
-        let title = d.texts.iter().find(|t| t.text == "A01  Plattegronden").unwrap();
-        assert_eq!(title.align, Align::Right);
-        // at the lower right, just above the border, as the sheet's tab shows it
-        assert!(title.at[0] > 0.40 && title.at[1] > 0.01 && title.at[1] < 0.02, "{title:?}");
+        for value in ["A01", "Plattegronden", "A3", "OpenAEC"] {
+            assert!(d.texts.iter().any(|t| t.text == value), "{value}");
+        }
         assert_eq!(d.page(), ([0.0, 0.0], A3_LANDSCAPE));
     }
 

@@ -72,6 +72,9 @@ impl Model {
     pub fn add(&mut self, mut element: Element) -> Result<ElementId, Refusal> {
         let id = ElementId(self.next.max(1));
         element.id = id;
+        // A copy is a new pile. Zero requests the next issued number on refresh.
+        element.pile_number = element.pile_number.map(|_| 0);
+        element.pile_mark = None;
         element.rehome(&self.grid);
         self.evaluate_element(&element)?;
         self.elements.insert(id, element);

@@ -416,6 +416,13 @@ pub struct Element {
     /// concrete class (C30/37), a timber class (C24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// Issued pile mark, retained through changes of shape or position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pile_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pile_mark: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reinforcing_bar: bool,
     pub shape: Shape,
 }
 
@@ -426,12 +433,12 @@ impl Element {
     pub fn in_project(grid: &TileGrid, name: impl Into<String>, level: Option<String>, mut shape: Shape) -> Self {
         let tile = shape.placement().map_or(TileKey::default(), |p| grid.tile_of(p));
         shape.translate(-grid.origin(tile));
-        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, shape }
+        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, pile_number: None, pile_mark: None, reinforcing_bar: false, shape }
     }
 
     /// The same element (its id, name, level, top and grade) with `shape`, given in project coordinates.
     pub fn reshaped(&self, grid: &TileGrid, shape: Shape) -> Self {
-        Self { id: self.id, top: self.top.clone(), grade: self.grade.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
+        Self { id: self.id, pile_number: self.pile_number, pile_mark: self.pile_mark.clone(), reinforcing_bar: self.reinforcing_bar, top: self.top.clone(), grade: self.grade.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
     }
 
     /// Its definition in project coordinates.
@@ -452,6 +459,8 @@ impl Element {
             Shape::Point(PointDef { opening: Some(OpeningKind::Door), .. }) => "IfcDoor",
             Shape::Point(PointDef { opening: Some(OpeningKind::Window), .. }) => "IfcWindow",
             Shape::Point(_) => "IfcBuildingElementProxy",
+            Shape::Linear(_) if self.pile_number.is_some() => "IfcPile",
+            Shape::Linear(_) if self.reinforcing_bar => "IfcReinforcingBar",
             Shape::Linear(l) => linear_class(l.end - l.start),
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, .. }) => "IfcWall",
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { role: SlabRole::Roof, .. }, .. }) => "IfcRoof",

@@ -42,6 +42,16 @@ pub enum MarkPick {
     Line(usize),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ReferenceChoice(usize, [f64; 2]);
+
+impl std::fmt::Display for ReferenceChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [x, y] = self.1;
+        write!(f, "{}  ({x:.3}, {y:.3}) m", self.0 + 1)
+    }
+}
+
 /// What a drawing tool draws on a view with its clicks: lines that are no model. In the order
 /// of the Draw group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -323,6 +333,8 @@ impl App {
             cut: self.cuts.get(view).cloned(),
             crop,
             measuring: self.dimension_tool,
+            reference_index: self.reference_target.as_ref().and_then(|(path, i)|
+                (path.as_ref() == view && self.mark_pick == Some(MarkPick::Dimension(*i))).then_some(*i)),
             noting: self.note_tool.then(|| self.note_to_place(l)),
             levelling: self.note_tool && self.level_tool && !is_plan,
             cutting: self.section_tool && is_plan,
@@ -413,7 +425,7 @@ impl App {
                         .push(text(format!("{:.1} mm", style.size * 1000.0)).size(12).color(p.text_secondary))
                         .push(named("A+".to_string(), LookEdit::Larger)),
                 );
-                rows = rows.push(self.dimension_value_field(view, k));
+                rows = rows.push(self.dimension_value_field(view, k)).push(self.reference_controls(view, k, l));
                 rows = rows.push(choices(vec![tool(l.text("Andere kant", "Other side"), false, Message::FlipDimension), tool(l.text("Maat verwijderen", "Remove dimension"), false, Message::RemoveMark)]));
             }
             Some(MarkPick::Line(k)) => {
@@ -454,8 +466,32 @@ impl App {
         Some(container(rows).padding([2, 8]).into())
     }
 
+    pub(super) fn reference_controls(&self, view: &str, index: usize, l: Language) -> Element<'static, Message> {
+        use iced::widget::{column, pick_list};
+        let path: Arc<str> = Arc::from(view);
+        let target = (path.clone(), index);
+        let armed = self.reference_target.as_ref() == Some(&target);
+        let caption = if armed {
+            l.text("Klik de referentie in de tekening (Esc annuleert)", "Click the reference in the drawing (Esc cancels)")
+        } else {
+            l.text("Referentie toevoegen", "Add reference")
+        };
+        let mut controls = column![button(text(caption).size(12))
+            .on_press(Message::ArmDimensionReference((!armed).then_some(target)))].spacing(4);
+        if let Some(dimension) = self.document.view_marks(view).and_then(|(dims, _)| dims.get(index)) {
+            let choices: Vec<_> = dimension.references().enumerate().map(|(i, (at, _))| ReferenceChoice(i, at)).collect();
+            if choices.len() > 2 {
+                controls = controls.push(pick_list(choices, None::<ReferenceChoice>, move |r|
+                    Message::RemoveDimensionReference(path.clone(), index, r.0))
+                    .placeholder(l.text("Referentie verwijderen…", "Remove reference…")).text_size(12));
+            }
+        }
+        controls.into()
+    }
+
     /// Picks a dimension or text of the view shown; a picked text's wording can then be edited.
     pub(super) fn pick_mark(&mut self, pick: Option<MarkPick>) {
+        self.reference_target = None;
         self.mark_pick = pick;
         self.modeller.dimension_value = None;
         if let (Some(MarkPick::Note(k)), Some(view)) = (pick, self.shown_view()) {
@@ -655,6 +691,7 @@ pub(super) struct ViewMarks {
     crop: Option<([f64; 2], [f64; 2])>,
     /// The dimension tool is on.
     measuring: bool,
+    reference_index: Option<usize>,
     /// The text tool is on, with the text a click places.
     noting: Option<String>,
     /// The text tool places level marks: a click marks the height there.
@@ -954,6 +991,9 @@ impl canvas::Program<Message> for ViewMarks {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if self.transforming => None,
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let p = pointer?;
+                if let Some(i) = self.reference_index {
+                    return Some(canvas::Action::publish(Message::InsertDimensionReference(self.view.clone(), i, self.snap(&screen, p)?)).and_capture());
+                }
                 if let Some(kind) = self.drawing {
                     let q = self.draw_snap(&screen, p)?;
                     // a polyline: a click on its last point ends it, one on its first closes it
@@ -1015,6 +1055,7 @@ impl canvas::Program<Message> for ViewMarks {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) if self.drawing == Some(DrawKind::Polyline) && !state.points.is_empty() && pointer.is_some() => self.end_polyline(state, false),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Enter), .. }) if self.drawing == Some(DrawKind::Polyline) && !state.points.is_empty() => self.end_polyline(state, false),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
+                if self.reference_index.is_some() { return Some(canvas::Action::publish(Message::ArmDimensionReference(None)).and_capture()); }
                 // Esc keeps the polyline drawn so far, and lets go of any other shape begun
                 if self.drawing == Some(DrawKind::Polyline) && state.points.len() >= 2 {
                     return self.end_polyline(state, false);

@@ -76,6 +76,7 @@ impl App {
     /// Picks a placed view or a dimension on the sheet shown; a view's cut height can then be
     /// typed.
     pub(super) fn pick_on_sheet(&mut self, pick: Option<SheetPick>) {
+        self.reference_target = None;
         self.sheet_pick = pick;
         self.cut_edit = match pick {
             Some(SheetPick::View(i)) => self.placed_plan(i).and_then(|plan| {
@@ -481,6 +482,11 @@ impl App {
             palette: p,
             key: Arc::from(path.as_str()),
             tool: self.dimension_tool,
+            reference_pick: match (self.sheet_pick, &self.reference_target) {
+                (Some(SheetPick::Dimension(i, k)), Some((path, index)))
+                    if k == *index && sheet.views.get(i).is_some_and(|v| v.plan == path.as_ref()) => Some((i, k)),
+                _ => None,
+            },
             section_tool: self.section_tool,
             word: l.text("Doorsnede", "Section"),
             pick: self.sheet_pick,
@@ -577,7 +583,8 @@ impl App {
         } else if let Some(SheetPick::Note(..)) = self.sheet_pick {
             rows = rows.push(iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
             rows = rows.push(small(l.text("Tekst verwijderen", "Remove text").to_string(), false, Message::RemovePicked));
-        } else if let Some(SheetPick::Dimension(..)) = self.sheet_pick {
+        } else if let Some(SheetPick::Dimension(i,k)) = self.sheet_pick {
+            if let Some(v) = sheet.views.get(i) { rows = rows.push(self.reference_controls(&v.plan, k, l)); }
             rows = rows.push(choices(vec![
                 small(l.text("Andere kant", "Other side").to_string(), false, Message::FlipDimension),
                 small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked),
@@ -690,6 +697,7 @@ struct PaperDrawing {
     key: Arc<str>,
     /// The dimension tool is on: clicks measure instead of dragging.
     tool: bool,
+    reference_pick: Option<(usize, usize)>,
     /// The section tool is on: two clicks on a floor plan draw a section.
     section_tool: bool,
     /// What a new section is called before its letter.
@@ -940,6 +948,10 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let at = fit.paper(cursor.position_in(bounds)?);
+                if let Some((i, k)) = self.reference_pick {
+                    if self.view_at(at) != Some(i) { return Some(canvas::Action::request_redraw().and_capture()); }
+                    return Some(canvas::Action::publish(Message::InsertDimensionReference(self.placed[i].plan.clone(), k, self.snap(i, at, &fit))).and_capture());
+                }
                 if let Some(wording) = &self.noting {
                     let i = self.view_at(at)?;
                     let view = self.placed.get(i)?.plan.clone();
@@ -992,6 +1004,7 @@ impl canvas::Program<Message> for PaperDrawing {
                 state.drag.take().or(crop.map(|(i, _)| (i, [0.0; 2]))).map(|_| canvas::Action::request_redraw())
             }
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
+                if self.reference_pick.is_some() { return Some(canvas::Action::publish(Message::ArmDimensionReference(None)).and_capture()); }
                 if state.first.take().is_some() {
                     return Some(canvas::Action::request_redraw().and_capture());
                 }
@@ -1430,6 +1443,24 @@ mod tests {
         let bytes = crate::export::to_bytes(current.model.as_ref().unwrap(), &current.document_now(), "roundtrip.ifcx").unwrap();
         std::fs::write(&saved, bytes).unwrap();
         assert_eq!(inspect(&mut open(&saved)), tags);
+    }
+
+    #[test]
+    fn a_picked_sheet_dimension_accepts_and_removes_an_individual_reference() {
+        let (mut app, sheet, view, _) = sheet_with_plan(false);
+        let _ = app.update(Message::AddDimension(view.clone(), [0., 0.], [8., 0.]));
+        app.pick_on_sheet(Some(SheetPick::Dimension(0, 0)));
+        let _ = app.update(Message::ArmDimensionReference(Some((view.clone(), 0))));
+        let paper = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        assert_eq!(paper.reference_pick, Some((0, 0)));
+        let _ = app.update(Message::InsertDimensionReference(view.clone(), 0, [3., 0.]));
+        let points = |app: &App| app.document.view_marks(&view).unwrap().0[0].references()
+            .map(|(at, _)| at).collect::<Vec<_>>();
+        assert_eq!(points(&app), [[0., 0.], [3., 0.], [8., 0.]]);
+        assert!(app.reference_target.is_none());
+        let _ = app.update(Message::RemoveDimensionReference(view.clone(), 0, 1));
+        assert_eq!(points(&app), [[0., 0.], [8., 0.]]);
+        assert_eq!(app.active_doc_sheet.as_deref(), Some(sheet.as_ref()));
     }
 
     #[test]

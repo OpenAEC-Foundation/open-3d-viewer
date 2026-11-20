@@ -353,6 +353,7 @@ pub struct App {
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
+    reference_target: Option<(Arc<str>, usize)>,
     /// The view's bar offers its tools to dimension, write and cut (the Modeller and the
     /// Validator; the Viewer only looks).
     pub annotates: bool,
@@ -717,6 +718,9 @@ pub enum Message {
     PairSize(String),
     /// Put the picked dimension on the other side of what it measures.
     FlipDimension,
+    ArmDimensionReference(Option<(Arc<str>, usize)>),
+    InsertDimensionReference(Arc<str>, usize, [f64; 2]),
+    RemoveDimensionReference(Arc<str>, usize, usize),
     /// The picked dimension looks otherwise: another style, or its style changed.
     DimensionLook(marks::LookEdit),
     /// Give a view (its path) its standard dimensions.
@@ -1135,6 +1139,7 @@ impl Default for App {
             views_3d_labels: Vec::new(),
             export_menu: false,
             dimension_tool: false,
+            reference_target: None,
             annotates: true,
             drawing_on_paper: true,
             section_tool: false,
@@ -2745,6 +2750,16 @@ impl App {
                     *text = typed;
                 }
             }
+            Message::ArmDimensionReference(target) => self.reference_target = target,
+            Message::InsertDimensionReference(view, index, at) => {
+                let anchor = self.document.plan(&view).and_then(|_| self.anchor_at(at));
+                self.document.insert_dimension_reference(&view, index, at, anchor);
+                self.reference_target = None;
+            }
+            Message::RemoveDimensionReference(view, index, reference) => {
+                self.document.remove_dimension_reference(&view, index, reference);
+                self.reference_target = None;
+            }
             Message::FlipDimension => self.flip_dimension(),
             Message::DimensionLook(edit) => self.edit_dimension_look(edit),
             Message::StandardDimensions(view) => {
@@ -3133,6 +3148,7 @@ impl App {
             Message::HideSelection => self.hide_selection(),
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
+            Message::Escape if self.reference_target.is_some() => self.reference_target = None,
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape if self.moving_model.is_some() => {
                 self.moving_model = None;

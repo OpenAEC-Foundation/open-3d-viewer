@@ -268,7 +268,8 @@ mod tests {
         ]);
         let d = app.drawing_to_export().unwrap();
         assert!(d.texts.iter().any(|t| t.text == "A") && d.texts.iter().any(|t| t.text == "1"), "{:?}", d.texts);
-        assert!(d.lines.iter().any(|l| l.pen == crate::drawing2d::Pen::Grids && l.a == [-2.0, 2.5] && l.b == [10.0, 2.5]), "the grid in plan");
+        let dash = 0.008 / d.paper_per_unit();
+        assert!(d.lines.iter().any(|l| l.pen == crate::drawing2d::Pen::Grids && l.a == [-2.0, 2.5] && l.b == [-2.0 + dash, 2.5]), "the first dash of the horizontal grid");
         // a section across: grid 1 upright where it crosses, the levels across
         let _ = app.update(Message::NewSection([0.0, 2.0], [8.0, 2.0], "Section"));
         let d = app.drawing_to_export().unwrap();

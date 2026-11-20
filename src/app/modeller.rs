@@ -197,6 +197,13 @@ pub struct Modeller {
     /// `structure::PILE_WORDS`), and the name the schedule has now.
     pub pile_words: [&'static str; 10],
     pub pile_schedule: String,
+    /// What the bar schedule, its columns and its kinds of bar are called, in the interface
+    /// language (see `structure::BAR_WORDS`), and the name the schedule has now.
+    pub bar_words: [&'static str; 11],
+    pub bar_schedule: String,
+    /// The same of the precast schedule (see `structure::PLANK_WORDS`).
+    pub plank_words: [&'static str; 8],
+    pub plank_schedule: String,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
     /// The length being typed for what a tool draws, in millimetres (see `typed_length`).
@@ -692,7 +699,7 @@ impl App {
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
             ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
-            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Splice(_) | ConnectionKind::BasePlate(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -806,6 +813,8 @@ impl App {
         // and the floor plans say their spaces and draw their doors' swings again
         self.tag_plans();
         self.list_piles();
+        self.list_bars();
+        self.list_planks();
     }
 
     /// Puts `model` in the place of the scene shown, keeping the camera, the views and the
@@ -1112,6 +1121,9 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 put("Grade", grade.clone());
             }
             put("Length", m((l.end - l.start).length()));
+            if let Some(r) = &e.reinforcement {
+                put("Reinforcement", crate::app::element_props::bars_text(r));
+            }
         }
         Shape::Planar(p) => {
             put("Thickness", m(p.total_thickness()));
@@ -1132,6 +1144,11 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Parts", parts.len().to_string());
             if let Some(t) = &s.system_type {
                 put("Type", library.system_name(&t.id, bim_library::Lang::En).unwrap_or_else(|| t.id.clone()));
+                // a system is a curtain wall by class, which carries nothing: its type's group
+                // says whether it does, and so whether a structural plan draws it
+                if let Some(group) = library.system_type(&t.id).map(|t| t.group) {
+                    put("LoadBearing", group.carries().to_string());
+                }
             }
         }
         Shape::Connection(c) => {
@@ -1141,6 +1158,8 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
                 ConnectionKind::FinPlate(_) => "Fin plate",
+                ConnectionKind::Splice(_) => "Splice",
+                ConnectionKind::BasePlate(_) => "Base plate",
                 ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());

@@ -8,6 +8,8 @@
 //! - **Dimensions**: its length and its height (a slab's two sizes), and for a wall with
 //!   openings a chain along its foot through their sides and one up through the first one's
 //!   sill and head.
+//! - **Reinforcement**: of a reinforced beam or column, its bars and stirrups in the elevation
+//!   and beside it its section with the bars in it and what they are ("3Ø16", "Ø8-150").
 //! - **Alone**: the other elements of the model are hidden in the view.
 //! - **A text block** under it: its name, its type or profile, its sizes in millimetres, its
 //!   strength class and its volume.
@@ -16,7 +18,7 @@
 //! The view and the sheet are ordinary ones: they follow the model and can be changed as any.
 
 use super::App;
-use crate::document::{PlanKind, SectionKind, NOTE_HEIGHT};
+use crate::document::{PlanKind, SectionKind, ShapeKind, NOTE_HEIGHT};
 use bim_core::element::PlanarForm;
 use bim_core::{Element, PlanarDef, Shape};
 use glam::DVec2;
@@ -109,6 +111,90 @@ pub(super) fn scale_for(size: DVec2) -> f64 {
     SCALES.into_iter().find(|s| size.x / s <= ROOM[0] && size.y / s <= ROOM[1]).unwrap_or(SCALES[SCALES.len() - 1])
 }
 
+/// A line of a view's drawing.
+type Line = [[f64; 2]; 2];
+
+/// What the drawing of a reinforced member adds to its elevation.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(super) struct BarDrawing {
+    /// Its bars and its stirrups in the elevation, each a line.
+    pub lines: Vec<Line>,
+    /// Its section beside the elevation: its outline, its stirrup, and a circle per bar.
+    pub shapes: Vec<(ShapeKind, Vec<Line>)>,
+    /// What the bars are, beside the section.
+    pub notes: Vec<([f64; 2], String)>,
+    /// How far all of it reaches to the right.
+    pub right: f64,
+}
+
+/// The four sides of the rectangle from `lo` to `hi`.
+fn rectangle(lo: DVec2, hi: DVec2) -> Vec<Line> {
+    let c = [[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]];
+    (0..4).map(|i| [c[i], c[(i + 1) % 4]]).collect()
+}
+
+/// The reinforcement of `e` in its drawing at 1 : `scale`: the bars and stirrups of a level
+/// beam or a standing column with a rectangular section, drawn in the elevation `frame`, and
+/// its section `gap` to the right of it. `None` for what has none, or lies sloping.
+pub(super) fn bar_drawing(e: &Element, shape: &Shape, frame: &Frame, scale: f64, gap: f64) -> Option<BarDrawing> {
+    const SEGMENTS: usize = 24;
+    let (Some(r), Shape::Linear(l)) = (&e.reinforcement, shape) else { return None };
+    let profile = l.profile.profile().ok()?;
+    let centres = r.centres(&profile).ok()?;
+    let (min, max) = (profile.outer().iter().copied().reduce(DVec2::min)?, profile.outer().iter().copied().reduce(DVec2::max)?);
+    let length = (l.end - l.start).length();
+    let standing = (l.end - l.start).truncate().length() < 1e-6;
+    if !standing && (l.end.z - l.start.z).abs() > 1e-6 {
+        return None;
+    }
+    let (lo, hi) = (frame.lo, frame.hi);
+    let leg = r.cover + r.stirrup / 2.0;
+    let mut drawing = BarDrawing::default();
+    // the levels (a column: the places across) the bars are seen at, each once
+    let mut seen: Vec<f64> = centres.iter().map(|(c, _)| if standing { c.x } else { c.y }).collect();
+    seen.sort_by(f64::total_cmp);
+    seen.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    // where the section's own axes stand in the drawing: beside the elevation, at its foot
+    let origin = DVec2::new(hi.x + gap - min.x, lo.y - min.y);
+    if standing {
+        let x = lo.x - min.x;
+        drawing.lines.extend(seen.iter().map(|at| [[x + at, lo.y + r.cover], [x + at, hi.y - r.cover]]));
+        drawing.lines.extend(r.stirrups(length).iter().map(|s| [[lo.x + leg, lo.y + s], [hi.x - leg, lo.y + s]]));
+    } else {
+        let y = lo.y - min.y;
+        drawing.lines.extend(seen.iter().map(|at| [[lo.x + r.cover, y + at], [hi.x - r.cover, y + at]]));
+        drawing.lines.extend(r.stirrups(length).iter().map(|s| [[lo.x + s, lo.y + leg], [lo.x + s, hi.y - leg]]));
+    }
+    drawing.shapes.push((ShapeKind::Rectangle, rectangle(origin + min, origin + max)));
+    drawing.shapes.push((ShapeKind::Rectangle, rectangle(origin + min + DVec2::splat(leg), origin + max - DVec2::splat(leg))));
+    for (c, d) in &centres {
+        let point = |i: usize| {
+            let a = std::f64::consts::TAU * i as f64 / SEGMENTS as f64;
+            (origin + *c + DVec2::new(a.cos(), a.sin()) * d / 2.0).to_array()
+        };
+        drawing.shapes.push((ShapeKind::Circle, (0..SEGMENTS).map(|i| [point(i), point(i + 1)]).collect()));
+    }
+    // what they are, beside the section and under each other: the top bars, the stirrups, the
+    // bottom bars, about the middle of its height
+    let mm = |v: f64| (v * 1000.0).round() as i64;
+    let letter = scale * NOTE_HEIGHT;
+    let x = origin.x + max.x + gap / 2.0;
+    let mut texts = Vec::new();
+    if r.top.count > 0 {
+        texts.push(format!("{}Ø{}", r.top.count, mm(r.top.diameter)));
+    }
+    texts.push(format!("Ø{}-{}", mm(r.stirrup), mm(r.spacing)));
+    if r.bottom.count > 0 {
+        texts.push(format!("{}Ø{}", r.bottom.count, mm(r.bottom.diameter)));
+    }
+    let line = letter * 1.6;
+    let top = origin.y + (min.y + max.y) / 2.0 + (texts.len() as f64 / 2.0 - 1.0) * line;
+    let longest = texts.iter().map(|t| t.chars().count()).max().unwrap_or(0);
+    drawing.notes.extend(texts.into_iter().enumerate().map(|(k, text)| ([x, top - k as f64 * line], text)));
+    drawing.right = x + longest as f64 * letter * 0.7;
+    Some(drawing)
+}
+
 impl App {
     /// The lines of the text block of `e`'s drawing.
     fn element_text(&self, e: &Element, shape: &Shape, frame: &Frame, l: Language) -> Vec<String> {
@@ -128,6 +214,11 @@ impl App {
         }
         if frame.volume > 0.0 {
             lines.push(format!("{}: {:.3} m³", l.text("Volume", "Volume"), frame.volume));
+        }
+        if let (Some(r), Some(Ok(bars))) = (&e.reinforcement, super::element_props::bars_of(e)) {
+            let weight: f64 = bars.iter().map(|b| b.weight()).sum();
+            lines.push(format!("{}: {}", l.text("Wapening", "Reinforcement"), super::element_props::bars_text(r)));
+            lines.push(format!("{}: {weight:.0} kg", l.text("Wapeningsstaal", "Reinforcing steel")));
         }
         lines
     }
@@ -157,10 +248,26 @@ impl App {
             }
         };
         let Some(view) = view else { return };
-        let scale = scale_for(frame.hi - frame.lo);
+        // a reinforced member: its section stands beside it, so the scale leaves room for both
+        let mut scale = scale_for(frame.hi - frame.lo);
+        let mut bars = bar_drawing(&e, &shape, &frame, scale, 3.0 * scale * STEP);
+        if let Some(b) = &bars {
+            scale = scale_for(DVec2::new(b.right - frame.lo.x, frame.hi.y - frame.lo.y));
+            bars = bar_drawing(&e, &shape, &frame, scale, 3.0 * scale * STEP);
+        }
         self.document.set_view_scale(&view, scale);
         let step = scale * STEP;
         let (lo, hi) = (frame.lo, frame.hi);
+        let right = bars.as_ref().map_or(hi.x, |b| b.right);
+        if let Some(b) = &bars {
+            self.document.add_view_lines(&view, &b.lines);
+            for (kind, lines) in &b.shapes {
+                self.document.add_view_shape(&view, *kind, lines);
+            }
+            for (at, text) in &b.notes {
+                self.document.add_note(&view, *at, text);
+            }
+        }
         // a dimension's line lies to the left of the way it is measured, a step from its points:
         // along the foot it is measured from the end back, so its line lies under the element
         // along its foot: through its openings, then its whole length
@@ -196,7 +303,7 @@ impl App {
             self.document.add_note(&view, [lo.x, top - (k + 1) as f64 * line], row);
         }
         let low = top - (text.len() + 1) as f64 * line;
-        self.document.set_crop(&view, Some(([lo.x - (columns + 2.0) * step, low], [hi.x + 2.0 * step, hi.y + 2.0 * step])));
+        self.document.set_crop(&view, Some(([lo.x - (columns + 2.0) * step, low], [right + 2.0 * step, hi.y + 2.0 * step])));
         // the element alone: the others of the model are hidden in this view (those drawn later
         // are not, as in any view)
         let entry = if self.models.len() <= 1 { 0 } else { self.models.iter().position(|m| Some(m.model.id) == self.modeller.shown).unwrap_or(0) as u32 };
@@ -264,6 +371,60 @@ mod tests {
         assert!(f.side.is_none() && (f.volume - 2.88).abs() < 1e-9, "{f:?}");
         let object = Shape::Point(bim_core::PointDef { at: DVec3::ZERO, rotation: 0.0, size: DVec3::ONE, opening: None });
         assert!(frame(&object).is_none());
+    }
+
+    #[test]
+    fn a_reinforced_beam_is_drawn_with_its_bars_its_stirrups_and_its_section() {
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 3.0), end: DVec3::new(6.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0 });
+        let id = app.add_element("Beam", None, beam).unwrap();
+        app.select_modelled(id);
+        let _ = app.update(Message::Reinforce(true));
+        app.select_modelled(id);
+        let _ = app.update(Message::ElementDrawing(Language::English));
+        let [view] = app.document.sections() else { panic!() };
+        // two levels of bars along it and 40 stirrups up it; then the section: its outline,
+        // its stirrup and five bars
+        let level = |l: &&Line| (l[0][1] - l[1][1]).abs() < 1e-9;
+        let own = &view.lines[..42];
+        assert_eq!((own.iter().filter(level).count(), own.iter().filter(|l| !level(l)).count()), (2, 40));
+        assert!(own.iter().filter(level).all(|l| ((l[1][0] - l[0][0]).abs() - 5.94).abs() < 1e-9), "bars as long as the beam less its cover");
+        assert_eq!(view.shapes.iter().map(|s| s.kind).collect::<Vec<_>>(), [ShapeKind::Rectangle, ShapeKind::Rectangle, ShapeKind::Circle, ShapeKind::Circle, ShapeKind::Circle, ShapeKind::Circle, ShapeKind::Circle]);
+        // the section stands to the right of the beam, at its height, and the crop keeps it
+        let section = &view.lines[42..46];
+        let (left, right) = (section.iter().flatten().map(|p| p[0]).fold(f64::INFINITY, f64::min), section.iter().flatten().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max));
+        assert!(left > 6.0 && (right - left - 0.3).abs() < 1e-9, "{left} {right}");
+        let (_, high) = view.crop.unwrap();
+        assert!(high[0] > right);
+        let text: Vec<&str> = view.notes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(&text[..3], ["2Ø12", "Ø8-150", "3Ø16"]);
+        assert!(text.contains(&"Reinforcement: 2Ø12 + 3Ø16, Ø8-150"), "{text:?}");
+        // without reinforcement: no lines of its own
+        app.select_modelled(id);
+        let _ = app.update(Message::Reinforce(false));
+        app.select_modelled(id);
+        let _ = app.update(Message::ElementDrawing(Language::English));
+        assert!(app.document.sections()[1].lines.is_empty());
+    }
+
+    #[test]
+    fn a_reinforced_column_has_its_bars_upright_and_its_stirrups_across() {
+        let column = Shape::Linear(LinearDef { start: DVec3::new(4.0, 4.0, 0.0), end: DVec3::new(4.0, 4.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0 });
+        let mut e = Element::in_project(&bim_core::TileGrid::default(), "Column", None, column.clone());
+        e.reinforcement = Some(Default::default());
+        let f = frame(&column).unwrap();
+        let b = bar_drawing(&e, &column, &f, 20.0, 0.1).unwrap();
+        // seen across its width: the bars at 44, 46, 150, 254 and 256 from its side, upright
+        let upright: Vec<&Line> = b.lines.iter().filter(|l| (l[0][0] - l[1][0]).abs() < 1e-9).collect();
+        assert_eq!(upright.len(), 5);
+        assert!(upright.iter().all(|l| (l[0][1] - 0.03).abs() < 1e-9 && (l[1][1] - 2.97).abs() < 1e-9));
+        assert_eq!(b.lines.len() - 5, 20, "a stirrup every 150 over 2.94");
+        // a sloping member has none drawn, nor one without reinforcement
+        let rafter = Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 2.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.5 }, roll: 0.0 });
+        assert!(bar_drawing(&e, &rafter, &frame(&rafter).unwrap(), 20.0, 0.1).is_none());
+        e.reinforcement = None;
+        assert!(bar_drawing(&e, &column, &f, 20.0, 0.1).is_none());
     }
 
     #[test]

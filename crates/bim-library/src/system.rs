@@ -72,6 +72,13 @@ impl SystemGroup {
         matches!(self, SystemGroup::Floor | SystemGroup::Ceiling)
     }
 
+    /// Whether a type of it carries load, so that a structural plan draws it: a floor, a
+    /// timber or steel frame and masonry do; a curtain wall, a partition, cladding and a
+    /// ceiling hang on the structure.
+    pub fn carries(self) -> bool {
+        matches!(self, SystemGroup::Floor | SystemGroup::TimberFrame | SystemGroup::SteelFrame | SystemGroup::Masonry)
+    }
+
     /// The IFC class of its type and its predefined type.
     pub fn ifc_type(self) -> (&'static str, &'static str) {
         match self {

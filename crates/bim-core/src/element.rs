@@ -341,6 +341,12 @@ pub enum ConnectionKind {
     /// A steel fin plate: the secondary stops a gap short of the primary's face, and a plate
     /// welded to that face is bolted through the secondary's web (see [`crate::join::FinPlate`]).
     FinPlate(crate::join::FinPlate),
+    /// A steel splice: two members in one line each stop a plate's thickness short of where they
+    /// meet, and the plates on their ends are bolted together (sizes as [`crate::join::EndPlate`]).
+    Splice(crate::join::EndPlate),
+    /// A steel base plate: the secondary (a column) stands on the primary on a plate, a bed of
+    /// grout and four anchors (see [`crate::join::BasePlate`]).
+    BasePlate(crate::join::BasePlate),
     /// The two are not joined where they meet: two building systems that would meet at a corner
     /// or a T junction are each made as they are alone, and two linear members get no join.
     Apart,
@@ -357,12 +363,12 @@ pub enum Fixity {
 
 impl ConnectionKind {
     /// What a steel connection is to the analysis model: a fin plate is a hinge, an end plate
-    /// passes moments on. `None` for a join that is no connection of its own (a butt, a mitre,
+    /// and a splice pass moments on, and a base plate with its four anchors is taken as a hinge. `None` for a join that is no connection of its own (a butt, a mitre,
     /// a cut).
     pub fn fixity(&self) -> Option<Fixity> {
         match self {
-            ConnectionKind::FinPlate(_) => Some(Fixity::Pinned),
-            ConnectionKind::EndPlate(_) => Some(Fixity::Rigid),
+            ConnectionKind::FinPlate(_) | ConnectionKind::BasePlate(_) => Some(Fixity::Pinned),
+            ConnectionKind::EndPlate(_) | ConnectionKind::Splice(_) => Some(Fixity::Rigid),
             _ => None,
         }
     }
@@ -416,6 +422,9 @@ pub struct Element {
     /// concrete class (C30/37), a timber class (C24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// The reinforcement of a concrete member with a rectangular section, when it is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reinforcement: Option<crate::reinforcement::Reinforcement>,
     pub shape: Shape,
 }
 
@@ -426,12 +435,12 @@ impl Element {
     pub fn in_project(grid: &TileGrid, name: impl Into<String>, level: Option<String>, mut shape: Shape) -> Self {
         let tile = shape.placement().map_or(TileKey::default(), |p| grid.tile_of(p));
         shape.translate(-grid.origin(tile));
-        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, shape }
+        Self { id: ElementId(0), name: name.into(), tile, level, top: None, grade: None, reinforcement: None, shape }
     }
 
     /// The same element (its id, name, level, top and grade) with `shape`, given in project coordinates.
     pub fn reshaped(&self, grid: &TileGrid, shape: Shape) -> Self {
-        Self { id: self.id, top: self.top.clone(), grade: self.grade.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
+        Self { id: self.id, top: self.top.clone(), grade: self.grade.clone(), reinforcement: self.reinforcement, ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
     }
 
     /// Its definition in project coordinates.
@@ -459,7 +468,7 @@ impl Element {
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { .. }, .. }) => "IfcSlab",
             Shape::System(_) => "IfcCurtainWall",
             // a join with parts of its own is an assembly of them; one without is a relation only
-            Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_), .. }) => "IfcElementAssembly",
+            Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Splice(_) | ConnectionKind::BasePlate(_), .. }) => "IfcElementAssembly",
             Shape::Connection(_) => "IfcRelConnectsElements",
         }
     }

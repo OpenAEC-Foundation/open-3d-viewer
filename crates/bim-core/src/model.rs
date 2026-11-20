@@ -404,7 +404,7 @@ impl Model {
             return Err(Refusal::SameMember);
         }
         match c.kind {
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Splice(_) | ConnectionKind::BasePlate(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
             ConnectionKind::Cut => {
                 let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
                 let parts = self.body(target)?;
@@ -474,6 +474,8 @@ impl Model {
             ConnectionKind::Mitre => JoinKind::Mitre,
             ConnectionKind::EndPlate(plate) => JoinKind::EndPlate(plate),
             ConnectionKind::FinPlate(plate) => JoinKind::FinPlate(plate),
+            ConnectionKind::Splice(plate) => JoinKind::Splice(plate),
+            ConnectionKind::BasePlate(plate) => JoinKind::BasePlate(plate),
             // two members kept apart: no join
             ConnectionKind::Apart => {
                 self.member(c.primary)?;
@@ -812,6 +814,43 @@ mod tests {
         let json = serde_json::to_string(m.get(joint).unwrap()).unwrap();
         assert!(json.contains("fin_plate"), "{json}");
         assert_eq!(&serde_json::from_str::<Element>(&json).unwrap(), m.get(joint).unwrap());
+    }
+
+    #[test]
+    fn a_splice_and_a_base_plate_are_assemblies_with_their_fixity() {
+        let mut m = Model::new(TileGrid::default());
+        let steel = |a: DVec3, b: DVec3, name: &str| Shape::Linear(LinearDef { start: a, end: b, profile: ProfileDef::steel(name).unwrap(), roll: 0.0 });
+        // two beams in one line: joined by nothing of themselves, spliced on request
+        let a = add(&mut m, steel(DVec3::new(0.0, 0.0, 3.0), DVec3::new(4.0, 0.0, 3.0), "IPE 300"));
+        let b = add(&mut m, steel(DVec3::new(4.0, 0.0, 3.0), DVec3::new(9.0, 0.0, 3.0), "IPE 300"));
+        assert!(joints(&m).is_empty());
+        let before = m.evaluate(a).unwrap()[0].solid.volume();
+        let kind = ConnectionKind::Splice(crate::join::EndPlate::default());
+        assert_eq!(kind.fixity(), Some(crate::Fixity::Rigid));
+        let splice = add(&mut m, Shape::Connection(ConnectionDef { kind, primary: a, secondary: b }));
+        assert_eq!(m.get(splice).unwrap().class(), "IfcElementAssembly");
+        assert_eq!(m.evaluate(splice).unwrap().len(), 6, "two plates and four bolts");
+        assert!(m.evaluate(a).unwrap()[0].solid.volume() < before, "the beam makes room for its plate");
+        // a steel column on a concrete pile: a base plate, a hinge to the analysis
+        let pile = add(&mut m, Shape::Linear(LinearDef { start: DVec3::new(20.0, 0.0, -8.0), end: DVec3::new(20.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }));
+        let column = add(&mut m, steel(DVec3::new(20.0, 0.0, 0.0), DVec3::new(20.0, 0.0, 3.0), "HEA 200"));
+        let kind = ConnectionKind::BasePlate(crate::join::BasePlate::default());
+        assert_eq!(kind.fixity(), Some(crate::Fixity::Pinned));
+        let base = add(&mut m, Shape::Connection(ConnectionDef { kind, primary: pile, secondary: column }));
+        let parts = m.evaluate(base).unwrap();
+        assert_eq!(parts.iter().filter(|p| p.class == "IfcMechanicalFastener").count(), 4);
+        assert!(parts.iter().any(|p| p.material.as_deref() == Some("grout")));
+        let (lo, _) = m.evaluate(column).unwrap()[0].solid.bounds();
+        assert!((lo.z - 0.05).abs() < 1e-9, "the column stands on grout and plate: {lo}");
+        let json = serde_json::to_string(m.get(base).unwrap()).unwrap();
+        assert!(json.contains("base_plate"), "{json}");
+        assert_eq!(&serde_json::from_str::<Element>(&json).unwrap(), m.get(base).unwrap());
+        // a splice of members at an angle is refused
+        let c = add(&mut m, steel(DVec3::new(30.0, 0.0, 3.0), DVec3::new(34.0, 0.0, 3.0), "IPE 300"));
+        let d = add(&mut m, steel(DVec3::new(34.0, 0.0, 3.0), DVec3::new(34.0, 4.0, 3.0), "HEA 200"));
+        let grid = m.grid;
+        let bent = Element::in_project(&grid, "c", None, Shape::Connection(ConnectionDef { kind: ConnectionKind::Splice(Default::default()), primary: c, secondary: d }));
+        assert_eq!(m.add(bent).map(|_| ()), Err(Refusal::NotInLine));
     }
 
     fn joints(m: &Model) -> Vec<ConnectionDef> {

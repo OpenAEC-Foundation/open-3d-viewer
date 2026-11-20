@@ -928,6 +928,8 @@ pub enum Message {
     AddOpening(bool),
     /// Make the element drawing of the element selected, on a sheet of its own, and show it.
     ElementDrawing(Language),
+    /// Give the selected member its reinforcement (true), or take it away.
+    Reinforce(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
     /// Give an opening (its index) of the selected timber frame its type's framing again.
@@ -2241,6 +2243,7 @@ impl App {
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::ElementDrawing(l) => self.element_drawing(l),
+            Message::Reinforce(on) => self.reinforce(on),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),
             Message::AddBreak => self.add_break(),

@@ -24,6 +24,7 @@ pub mod mesh;
 pub mod model;
 pub mod predicates;
 pub mod profile;
+pub mod reinforcement;
 pub mod solid;
 pub mod system;
 pub mod tile;
@@ -88,6 +89,12 @@ pub enum Refusal {
     TwoMembers,
     /// An end plate's bolts do not fit beside the member's profile or along it.
     BoltsDoNotFit,
+    /// A splice takes two members in one line, end to end.
+    NotInLine,
+    /// Reinforcement is given to a member with a rectangular section.
+    NotRectangular,
+    /// The bars do not fit beside each other in the section, inside its cover.
+    BarsDoNotFit,
     /// A build-up has no layer that is not a cavity.
     NoLayers,
     /// A system would be generated as more parts than [`system::MAX_PARTS`].
@@ -128,6 +135,9 @@ impl Refusal {
             Refusal::NoBody => "A connection has no body to cut with.",
             Refusal::TwoMembers => "This join takes two members.",
             Refusal::BoltsDoNotFit => "The bolts do not fit on the plate.",
+            Refusal::NotInLine => "The members do not lie in one line.",
+            Refusal::NotRectangular => "Only a rectangular section takes this reinforcement.",
+            Refusal::BarsDoNotFit => "The bars do not fit in the section.",
             Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
             Refusal::TooManyParts => "A system would have more than 50000 parts.",
             Refusal::OpeningNotFramed => "Only a framed system, such as a timber frame, can have openings.",

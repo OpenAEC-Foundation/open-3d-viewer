@@ -1444,6 +1444,15 @@ impl Studio {
             Command::new("model.end-plate", l.text("Kopplaat", "End plate"), go(Message::Connect(bim_core::ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), l.text("Kopplaat", "End plate"))))
                 .icon(small("frame.combination"), large("frame.combination"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.fin-plate", l.text("Lip", "Fin plate"), go(Message::Connect(bim_core::ConnectionKind::FinPlate(bim_core::join::FinPlate::default()), l.text("Lip", "Fin plate"))))
+                .icon(small("frame.combination"), large("frame.combination"))
+                .enabled(app.selected_linear() == 2),
+            Command::new("model.splice", l.text("Stuik", "Splice"), go(Message::Connect(bim_core::ConnectionKind::Splice(bim_core::join::EndPlate::default()), l.text("Stuik", "Splice"))))
+                .icon(small("frame.combination"), large("frame.combination"))
+                .enabled(app.selected_linear() == 2),
+            Command::new("model.base-plate", l.text("Voetplaat", "Base plate"), go(Message::Connect(bim_core::ConnectionKind::BasePlate(bim_core::join::BasePlate::default()), l.text("Voetplaat", "Base plate"))))
+                .icon(small("frame.combination"), large("frame.combination"))
+                .enabled(app.selected_linear() == 2),
             Command::new("model.cut", l.text("Uitsparen", "Cut"), go(Message::Connect(bim_core::ConnectionKind::Cut, l.text("Uitsparing", "Cut-out"))))
                 .icon(small("edit.cut"), large("edit.cut"))
                 .enabled(app.selected_bodies() == 2),
@@ -1847,6 +1856,29 @@ impl Studio {
                     self.l().text("Afhakhoogte", "Cut-off level"),
                     self.l().text("Paalpunt", "Pile tip"),
                     self.l().text("Lengte (mm)", "Length (mm)"),
+                ];
+                self.app.modeller.bar_words = [
+                    self.l().text("Wapeningsstaat", "Bar schedule"),
+                    self.l().text("Element", "Element"),
+                    self.l().text("Merk", "Mark"),
+                    self.l().text("Staaf", "Bar"),
+                    "Ø (mm)",
+                    self.l().text("Aantal", "Number"),
+                    self.l().text("Lengte (mm)", "Length (mm)"),
+                    self.l().text("Gewicht (kg)", "Weight (kg)"),
+                    self.l().text("boven", "top"),
+                    self.l().text("onder", "bottom"),
+                    self.l().text("beugel", "stirrup"),
+                ];
+                self.app.modeller.plank_words = [
+                    self.l().text("Elementenstaat prefab", "Precast schedule"),
+                    self.l().text("Peil", "Level"),
+                    self.l().text("Merk", "Mark"),
+                    self.l().text("Type", "Type"),
+                    self.l().text("Lengte (mm)", "Length (mm)"),
+                    self.l().text("Breedte (mm)", "Width (mm)"),
+                    self.l().text("Dikte (mm)", "Thickness (mm)"),
+                    self.l().text("Aantal", "Number"),
                 ];
                 self.app.modeller.snap_words = crate::app::modeller::snaps::Snap::ALL.map(|s| s.label(self.l()));
                 let opened = match &message {
@@ -2615,7 +2647,7 @@ impl Studio {
                 (l.text("Systeem", "System"), vec![large("model.system")]),
                 (l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
-                (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
+                (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"]), smalls(&["model.fin-plate", "model.splice", "model.base-plate"])]),
                 (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), smalls(&["model.align"]), large("model.delete")]),
             ],
             // the project as its IFCX file has it: the ways to look at it, and saving it

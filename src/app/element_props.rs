@@ -62,6 +62,18 @@ pub enum ElementField {
     Bolt,
     Hole,
     BoltRows,
+    /// A concrete member's reinforcement: its cover, the number and diameter of its top and
+    /// bottom bars, and its stirrups' diameter and spacing.
+    Cover,
+    TopBars,
+    TopBar,
+    BottomBars,
+    BottomBar,
+    Stirrup,
+    StirrupSpacing,
+    /// A base plate's bed of grout, and how deep its anchors reach.
+    Grout,
+    AnchorLength,
     /// How a slab rises from its eave (degrees), and which edge of its outline the eave is
     /// (counted from 1).
     Slope,
@@ -75,6 +87,52 @@ pub(super) const WINDOW: (f64, f64, f64) = (1.2, 1.2, 0.9);
 /// A number typed: metres (a comma or a point, `m` after it allowed), or degrees (`°` allowed).
 fn number(typed: &str) -> Option<f64> {
     parse_elevation(typed.trim().trim_end_matches('°'))
+}
+
+/// The value of a reinforcement field.
+fn rebar_value(r: &bim_core::reinforcement::Reinforcement, field: ElementField) -> Option<f64> {
+    use ElementField as F;
+    Some(match field {
+        F::Cover => r.cover,
+        F::TopBars => f64::from(r.top.count),
+        F::TopBar => r.top.diameter,
+        F::BottomBars => f64::from(r.bottom.count),
+        F::BottomBar => r.bottom.diameter,
+        F::Stirrup => r.stirrup,
+        F::StirrupSpacing => r.spacing,
+        _ => return None,
+    })
+}
+
+/// The reinforcement with `field` set to `v`, when `field` is one of its own and `v` can be it.
+fn rebar_with(mut r: bim_core::reinforcement::Reinforcement, field: ElementField, v: f64) -> Option<bim_core::reinforcement::Reinforcement> {
+    use ElementField as F;
+    let whole = v >= 0.0 && v.fract() == 0.0 && v <= 64.0;
+    match field {
+        F::Cover if v > 0.0 => r.cover = v,
+        F::TopBars if whole => r.top.count = v as u32,
+        F::TopBar if v > 0.0 => r.top.diameter = v,
+        F::BottomBars if whole => r.bottom.count = v as u32,
+        F::BottomBar if v > 0.0 => r.bottom.diameter = v,
+        F::Stirrup if v > 0.0 => r.stirrup = v,
+        F::StirrupSpacing if v > 0.0 => r.spacing = v,
+        _ => return None,
+    }
+    Some(r)
+}
+
+/// The bars a member's reinforcement makes in it: `None` when it has none.
+pub(super) fn bars_of(e: &Element) -> Option<Result<Vec<bim_core::reinforcement::BarRow>, bim_core::Refusal>> {
+    let (Some(r), Shape::Linear(l)) = (&e.reinforcement, &e.shape) else { return None };
+    Some(l.profile.profile().and_then(|profile| r.bars(&profile, (l.end - l.start).length())))
+}
+
+/// A member's reinforcement in a line: "2Ø12 + 3Ø16, Ø8-150".
+pub(super) fn bars_text(r: &bim_core::reinforcement::Reinforcement) -> String {
+    let mm = |v: f64| (v * 1000.0).round() as i64;
+    let row = |b: bim_core::reinforcement::Bars| format!("{}Ø{}", b.count, mm(b.diameter));
+    let along: Vec<String> = [r.top, r.bottom].into_iter().filter(|b| b.count > 0).map(row).collect();
+    format!("{}, Ø{}-{}", along.join(" + "), mm(r.stirrup), mm(r.spacing))
 }
 
 /// The value of `field` in `shape` (scene coordinates), if the shape has it.
@@ -137,7 +195,16 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
             F::BoltRows => Some(f64::from(e.rows)),
             _ => None,
         },
-        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::BasePlate(e), .. }), f) => match f {
+            F::PlateThickness => Some(e.thickness),
+            F::PlateMargin => Some(e.margin),
+            F::Bolt => Some(e.bolt),
+            F::Hole => Some(e.hole),
+            F::Grout => Some(e.grout),
+            F::AnchorLength => Some(e.length),
+            _ => None,
+        },
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e) | ConnectionKind::Splice(e), .. }), f) => match f {
             F::PlateThickness => Some(e.thickness),
             F::PlateMargin => Some(e.margin),
             F::Bolt => Some(e.bolt),
@@ -232,7 +299,16 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
             F::BoltRows if v >= 1.0 && v.fract() == 0.0 && v <= 64.0 => e.rows = v as u32,
             _ => return None,
         },
-        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::BasePlate(e), .. }), f) => match f {
+            F::PlateThickness => set(&mut e.thickness),
+            F::PlateMargin => set(&mut e.margin),
+            F::Bolt => set(&mut e.bolt),
+            F::Hole => set(&mut e.hole),
+            F::Grout => set(&mut e.grout),
+            F::AnchorLength => set(&mut e.length),
+            _ => return None,
+        },
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e) | ConnectionKind::Splice(e), .. }), f) => match f {
             F::PlateThickness => set(&mut e.thickness),
             F::PlateMargin => set(&mut e.margin),
             F::Bolt => set(&mut e.bolt),
@@ -268,9 +344,12 @@ impl App {
         }
         let digits = match field {
             ElementField::Turn | ElementField::Slope => 1,
-            ElementField::BoltRows | ElementField::Eave => 0,
+            ElementField::BoltRows | ElementField::Eave | ElementField::TopBars | ElementField::BottomBars => 0,
             _ => 3,
         };
+        if let Some(v) = e.reinforcement.as_ref().and_then(|r| rebar_value(r, field)) {
+            return format!("{v:.digits$}");
+        }
         value(&e.shape_in_project(&self.modeller.model.grid), field).map_or(String::new(), |v| format!("{v:.digits$}"))
     }
 
@@ -293,6 +372,16 @@ impl App {
                 graded.grade = grade;
                 self.change_element(graded);
             }
+        } else if let Some(r) = e.reinforcement.filter(|r| rebar_value(r, field).is_some()) {
+            // used when the bars still fit in the section
+            if let Some(changed) = number(&typed).and_then(|v| rebar_with(r, field, v)).filter(|c| *c != r) {
+                let mut reinforced = e.clone();
+                reinforced.reinforcement = Some(changed);
+                match bars_of(&reinforced) {
+                    Some(Err(refusal)) => self.modeller.refusal = Some(refusal),
+                    _ => self.change_element(reinforced),
+                }
+            }
         } else if let Some(shape) = number(&typed).and_then(|v| with_value(&e.shape_in_project(&self.modeller.model.grid), field, v)) {
             if field == ElementField::Height && e.top.is_some() {
                 // a height typed is the element's own: its top lets its level go
@@ -304,6 +393,20 @@ impl App {
             }
         }
         self.modeller.typing = Some((e.id, field, typed));
+    }
+
+    /// Gives the selected member the usual reinforcement, or takes its reinforcement away. Refused
+    /// when its section is no rectangle or the bars do not fit in it.
+    pub(super) fn reinforce(&mut self, on: bool) {
+        let Some(e) = self.defined().cloned() else { return };
+        self.modeller.refusal = None;
+        let mut changed = e.clone();
+        changed.reinforcement = on.then(Default::default);
+        match bars_of(&changed) {
+            Some(Err(refusal)) => self.modeller.refusal = Some(refusal),
+            _ if changed != e => self.change_element(changed),
+            _ => {}
+        }
     }
 
     /// Adds a door (with no sill) or a window in the middle of the selected wall or timber frame,
@@ -544,6 +647,23 @@ impl App {
         if matches!(shape, Shape::Linear(_)) {
             rows = rows.push(field(l.text("Sterkteklasse", "Grade"), F::Grade));
         }
+        // a member's reinforcement: given and taken away, its sizes, and what it weighs
+        if matches!(&shape, Shape::Linear(_)) {
+            let label = if e.reinforcement.is_some() { l.text("Wapening verwijderen", "Remove reinforcement") } else { l.text("Wapening", "Reinforcement") };
+            rows = rows.push(a11y::named(button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::Reinforce(e.reinforcement.is_none())), a11y::Role::Button, label));
+            if let (Some(r), Some(Ok(bars))) = (&e.reinforcement, bars_of(e)) {
+                let weight: f64 = bars.iter().map(|b| b.weight()).sum();
+                rows = rows
+                    .push(prop_row(p, l.text("Wapening", "Reinforcement").to_string(), format!("{} · {weight:.0} kg", bars_text(r))))
+                    .push(field(l.text("Dekking (m)", "Cover (m)"), F::Cover))
+                    .push(field(l.text("Staven boven", "Top bars"), F::TopBars))
+                    .push(field(l.text("Diameter boven (m)", "Top diameter (m)"), F::TopBar))
+                    .push(field(l.text("Staven onder", "Bottom bars"), F::BottomBars))
+                    .push(field(l.text("Diameter onder (m)", "Bottom diameter (m)"), F::BottomBar))
+                    .push(field(l.text("Beugel (m)", "Stirrup (m)"), F::Stirrup))
+                    .push(field(l.text("Beugelafstand (m)", "Stirrup spacing (m)"), F::StirrupSpacing));
+            }
+        }
         for (label, value) in self.member_rows(e, l) {
             rows = rows.push(prop_row(p, label, value));
         }
@@ -580,6 +700,13 @@ impl App {
                         ]
                         .spacing(6),
                     )
+                    .push(
+                        row![
+                            choice(l.text("Stuik", "Splice"), ConnectionKind::Splice(bim_core::join::EndPlate::default())),
+                            choice(l.text("Voetplaat", "Base plate"), ConnectionKind::BasePlate(bim_core::join::BasePlate::default())),
+                        ]
+                        .spacing(6),
+                    )
                 };
             }
             // what it is to the analysis model
@@ -598,7 +725,16 @@ impl App {
                     .push(field(l.text("Gat (m)", "Hole (m)"), F::Hole))
                     .push(field(l.text("Aantal bouten", "Number of bolts"), F::BoltRows));
             }
-            if matches!(c.kind, ConnectionKind::EndPlate(_)) {
+            if matches!(c.kind, ConnectionKind::BasePlate(_)) {
+                rows = rows
+                    .push(field(l.text("Plaatdikte (m)", "Plate thickness (m)"), F::PlateThickness))
+                    .push(field(l.text("Plaat voorbij profiel (m)", "Plate past profile (m)"), F::PlateMargin))
+                    .push(field(l.text("Ondersabeling (m)", "Grout (m)"), F::Grout))
+                    .push(field(l.text("Anker (m)", "Anchor (m)"), F::Bolt))
+                    .push(field(l.text("Gat (m)", "Hole (m)"), F::Hole))
+                    .push(field(l.text("Ankerlengte (m)", "Anchor length (m)"), F::AnchorLength));
+            }
+            if matches!(c.kind, ConnectionKind::EndPlate(_) | ConnectionKind::Splice(_)) {
                 rows = rows
                     .push(field(l.text("Plaatdikte (m)", "Plate thickness (m)"), F::PlateThickness))
                     .push(field(l.text("Plaat voorbij profiel (m)", "Plate past profile (m)"), F::PlateMargin))

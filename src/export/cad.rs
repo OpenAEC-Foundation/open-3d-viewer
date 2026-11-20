@@ -123,7 +123,8 @@ pub fn cad_document(d: &Drawing2d) -> Document {
         base.common.layer = Pen::Dimension.name().into();
         // the middle of its text
         let label = dim.label();
-        base.text_middle_point = mm([label.at[0], label.at[1] + label.height / 2.0]);
+        let (sin, cos) = label.angle.sin_cos();
+        base.text_middle_point = mm([label.at[0] - sin*label.height/2., label.at[1] + cos*label.height/2.]);
         // on paper a dimension measures the model, not the paper
         if d.space == Space::Paper {
             base.set_text_override(Some(dim.label().text));

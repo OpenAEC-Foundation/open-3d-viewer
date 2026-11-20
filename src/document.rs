@@ -410,6 +410,8 @@ pub struct DimensionStyle {
     /// Explicit typeface and nominal em size in typographic points on paper.
     pub font_family: Option<Arc<str>>,
     pub font_size_pt: Option<f64>,
+    /// Read the figure along its measurement line from the foot or right side of the page.
+    pub aligned_text: bool,
     pub tick: Tick,
     /// Half the length of a slash, the length of an arrow, the diameter of a dot.
     pub tick_size: f64,
@@ -428,7 +430,7 @@ impl DimensionStyle {
 
     /// The style of a dimension that names none.
     pub fn standard() -> Self {
-        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, font_family: None, font_size_pt: None, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
+        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, font_family: None, font_size_pt: None, aligned_text: false, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
     }
 
     pub fn paper_font_size(&self) -> f64 {
@@ -438,6 +440,19 @@ impl DimensionStyle {
     pub fn label_family(&self) -> Option<Arc<str>> {
         self.font_family.clone().or_else(|| self.font_size_pt.map(|_| Arc::from("Inter")))
     }
+
+    /// A readable baseline in the drawing's y-up coordinate system.
+    pub fn label_angle(&self, dx: f64, dy: f64) -> f64 {
+        if !self.aligned_text { return 0.0; }
+        if dx < 0.0 || (dx == 0.0 && dy < 0.0) {
+            (-dy).atan2(-dx)
+        } else {
+            dy.atan2(dx)
+        }
+    }
+
+    /// Paper distance of a baseline above an aligned dimension line.
+    pub const ALIGNED_LABEL_GAP: f64 = 0.0008;
 
     /// The figure of a length (metres) in this style.
     pub fn figure(&self, length: f64) -> String {
@@ -452,6 +467,7 @@ impl DimensionStyle {
         let mut value = json!({"name": self.name, "size": self.size, "tick": self.tick.key(), "tick_size": self.tick_size, "extension": self.extension, "gap": self.gap, "unit": self.unit.key(), "decimals": self.decimals});
         if let Some(family) = &self.font_family { value["font_family"] = family.as_ref().into(); }
         if let Some(pt) = self.font_size_pt { value["font_size_pt"] = pt.into(); }
+        if self.aligned_text || self.name == "3BM ronde stip" { value["aligned_text"] = self.aligned_text.into(); }
         value
     }
 
@@ -469,7 +485,7 @@ impl DimensionStyle {
         (!name.is_empty()).then(|| Self {
             name: name.to_string(),
             size: legacy_size,
-            font_family, font_size_pt,
+            font_family, font_size_pt, aligned_text: v["aligned_text"].as_bool().unwrap_or(office),
             tick: v.get("tick").and_then(Value::as_str).and_then(Tick::from_key).unwrap_or_default(),
             tick_size: size("tick_size", standard.tick_size),
             extension: size("extension", standard.extension),

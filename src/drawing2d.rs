@@ -256,8 +256,15 @@ impl Dim2d {
         let w = text.chars().count() as f64 * h * CHARACTER;
         let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.units_per_paper_metre * 0.0015;
         let middle = [(self.from[0] + self.to[0]) / 2.0, (self.from[1] + self.to[1]) / 2.0];
-        let centre = add(middle, n, self.offset + clear);
-        Text2d { family: self.style.label_family(), bold: false, color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
+        let angle = self.style.label_angle(self.to[0]-self.from[0], self.to[1]-self.from[1]);
+        let at = if self.style.aligned_text {
+            let (sin, cos) = angle.sin_cos();
+            add(add(middle, n, self.offset), [-sin,cos], crate::document::DimensionStyle::ALIGNED_LABEL_GAP * self.units_per_paper_metre)
+        } else {
+            let centre = add(middle, n, self.offset + clear);
+            [centre[0], centre[1]-h/2.]
+        };
+        Text2d { family: self.style.label_family(), bold: false, color: None, pen: Pen::Dimension, at, height: h, text, align: Align::Center, angle }
     }
 }
 
@@ -887,6 +894,22 @@ mod tests {
         let d = draw(&doc);
         assert_eq!(d.dimensions[2].value, 8.);
         assert!(d.dimensions[2].offset > d.dimensions[0].offset);
+    }
+
+    #[test]
+    fn vertical_aligned_figures_read_upward_on_either_side_of_a_chain() {
+        let (mut doc, plan) = plan();
+        let style = crate::document::DimensionStyle::from_ifcx(&serde_json::json!({"name":"3BM ronde stip"})).unwrap();
+        let k = doc.set_dimension_style(style);
+        assert!(doc.add_dimension_chain(&plan,&[[1.,6.],[1.,4.],[1.,0.]]));
+        assert!(doc.set_dimension_style_of(&plan,1,k));
+        let drawing = view_drawing(&doc,&plan,&room(),&Rules::default()).unwrap();
+        for dim in &drawing.dimensions[1..] {
+            let label = dim.label();
+            assert_eq!(label.angle, std::f64::consts::FRAC_PI_2);
+            let (line,_) = dim.line().unwrap();
+            assert!((label.at[0] - (line[0]-0.080)).abs() < 1e-9);
+        }
     }
 
     #[test]

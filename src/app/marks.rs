@@ -1361,6 +1361,16 @@ pub(super) fn draw_interval_px(frame: &mut Frame, a: Point, b: Point, witnesses:
     }
     // the length beside the line, clear of it whichever way the line runs
     let content = style.figure(length);
+    if style.aligned_text {
+        let angle = style.label_angle(f64::from(ux), f64::from(-uy)) as f32;
+        let (sin, cos) = angle.sin_cos();
+        let gap = crate::document::DimensionStyle::ALIGNED_LABEL_GAP as f32 * look.paper;
+        let middle = Point::new((a2.x+b2.x)/2.0, (a2.y+b2.y)/2.0);
+        let at = Point::new(middle.x-sin*gap, middle.y-cos*gap);
+        let face = style.label_family().as_deref().map_or_else(crate::typeface::Face::default, crate::typeface::Face::of);
+        draw_note_in(frame, at, &content, look.size, color, Align::Center, angle, &face);
+        return;
+    }
     let (w, h) = (content.chars().count() as f32 * look.size * 0.6, look.size);
     let clear = nx.abs() * w / 2.0 + ny.abs() * h / 2.0 + look.paper * 0.0015;
     frame.fill_text(canvas::Text {

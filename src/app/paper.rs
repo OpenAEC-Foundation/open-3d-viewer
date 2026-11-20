@@ -462,6 +462,7 @@ impl App {
                     lines: self.document.view_lines(&v.plan).iter().chain(self.document.view_symbols(&v.plan)).copied().collect(),
                     crop: marks.and_then(|(_, c)| c),
                     datums: self.view_datums(&v.plan),
+                    caption: self.document.view_has_sheet_caption(&v.plan),
                     is_plan: self.document.plan(&v.plan).is_some(),
                     sections: crate::drawing2d::plan_sections(&self.document, &v.plan),
                     rules: self.view_rules(&v.plan),
@@ -657,16 +658,16 @@ struct Placed {
     datums: Vec<crate::drawing2d::Datum2>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
+    caption: bool,
     sections: Vec<(String, [f64; 2], [f64; 2])>,
     /// How its kind of drawing draws it: the widths of its lines, and whether what is cut is
     /// hatched.
     rules: crate::drawing2d::Rules,
 }
 
-/// A line's width on the sheet's canvas (pixels) for its width on paper (millimetres): 0.5 mm as
-/// 1.2 pixels, so the weights of a drawing can be told apart at any zoom.
-fn on_screen(millimetres: f64) -> f32 {
-    (millimetres as f32 * 2.4).max(0.4)
+/// Converts a paper line weight in millimetres to logical canvas pixels.
+fn on_screen(scale: f64, millimetres: f64) -> f32 {
+    (millimetres * scale / 1000.0) as f32
 }
 
 /// A side of a crop: left, right, bottom, top.
@@ -1132,14 +1133,14 @@ impl canvas::Program<Message> for PaperDrawing {
                             b.line_to(fit.point(self.to_paper(i, z)));
                         }
                     });
-                    frame.stroke(&below, Stroke::default().with_color(Color { a: 0.55, ..ink }).with_width(on_screen(placed.rules.beyond)));
+                    frame.stroke(&below, Stroke::default().with_color(Color { a: 0.55, ..ink }).with_width(on_screen(fit.scale, placed.rules.beyond)));
                     let lines = Path::new(|b| {
                         for (a, z) in cut.segments.iter().filter_map(|[a, z]| piece(a, z)) {
                             b.move_to(fit.point(self.to_paper(i, a)));
                             b.line_to(fit.point(self.to_paper(i, z)));
                         }
                     });
-                    frame.stroke(&lines, Stroke::default().with_color(ink).with_width(on_screen(placed.rules.cut)));
+                    frame.stroke(&lines, Stroke::default().with_color(ink).with_width(on_screen(fit.scale, placed.rules.cut)));
                     // the lines the view's filters give a pen of their own
                     for inked in &cut.inked {
                         let lines = Path::new(|b| {
@@ -1148,17 +1149,19 @@ impl canvas::Program<Message> for PaperDrawing {
                                 b.line_to(fit.point(self.to_paper(i, z)));
                             }
                         });
-                        let (plain, width) = if inked.cut { (ink, on_screen(placed.rules.cut)) } else { (Color { a: 0.55, ..ink }, on_screen(placed.rules.beyond)) };
+                        let (plain, width) = if inked.cut { (ink, on_screen(fit.scale, placed.rules.cut)) } else { (Color { a: 0.55, ..ink }, on_screen(fit.scale, placed.rules.beyond)) };
                         let color = inked.ink.color.map_or(plain, |c| Color::from_rgb8(c[0], c[1], c[2]));
                         frame.stroke(&lines, Stroke::default().with_color(color).with_width(inked.ink.wide(width, inked.cut)));
                     }
-                    if crop.is_some() {
+                    if placed.caption && crop.is_some() {
                         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(0.8));
                     }
                 }
                 None => {
-                    frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
-                    if placed.lines.is_empty() && placed.notes.is_empty() && placed.dimensions.is_empty() {
+                    if placed.caption {
+                        frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
+                    }
+                    if placed.caption && placed.lines.is_empty() && placed.notes.is_empty() && placed.dimensions.is_empty() {
                         label(&mut frame, self.empty.clone(), Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0), 11.0, p.text_muted, alignment::Horizontal::Center);
                     }
                 }
@@ -1170,7 +1173,7 @@ impl canvas::Program<Message> for PaperDrawing {
             super::marks::draw_detail_lines(&mut frame, &placed.lines, &placed.pens, placed.crop, ink, &|q| Some(fit.point(self.to_paper(i, q))), (fit.scale / 1000.0) as f32);
             for d in &placed.datums {
                 let (a, b) = (fit.point(self.to_paper(i, d.a)), fit.point(self.to_paper(i, d.b)));
-                super::marks::draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), ink, Color::WHITE);
+                super::marks::draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), (fit.scale / 1000.0) as f32, ink, Color::WHITE);
             }
             for (k, note) in placed.notes.iter().enumerate() {
                 if crate::drawing2d::crop_segment(note.at, note.at, placed.crop).is_none() { continue; }
@@ -1186,6 +1189,7 @@ impl canvas::Program<Message> for PaperDrawing {
             for (label, from, to) in &placed.sections {
                 draw_section_mark(&mut frame, &fit, self.to_paper(i, *from), self.to_paper(i, *to), label.clone(), ink);
             }
+            if !placed.caption { continue; }
             let under = fit.point([lo[0], lo[1] - 0.009]);
             label(&mut frame, placed.name, under, (0.003 * fit.scale / 0.72) as f32, if hot && !self.busy() { p.accent } else { ink }, alignment::Horizontal::Left);
             label(&mut frame, format!("1:{}", view.scale), fit.point([lo[0], lo[1] - 0.0135]), (0.0022 * fit.scale / 0.72) as f32, p.text_secondary, alignment::Horizontal::Left);
@@ -1295,7 +1299,7 @@ fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2],
 /// length in millimetres over the middle.
 fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color, style: &crate::document::DimensionStyle) {
     let px = |m: f64| (m * fit.scale) as f32;
-    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.size).max(6.0), style };
+    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: px(style.size), style };
     super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, look);
 }
 

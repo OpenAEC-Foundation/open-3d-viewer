@@ -88,7 +88,7 @@ impl App {
     /// The grid lines and levels a view's tab shows (none while the grid lines are off), on the
     /// view's drawing: a floor plan's in plan, a section's along its line and up.
     pub(super) fn view_datums(&self, view: &str) -> Vec<Datum2> {
-        if self.document.view_drawing(view) == Some("pile-schedule") {
+        if self.document.view_is_schedule(view) {
             return Vec::new();
         }
         if self.document.view_presentation(view)["grids"] == false { return Vec::new(); }

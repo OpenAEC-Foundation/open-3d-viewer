@@ -1093,7 +1093,7 @@ impl canvas::Program<Message> for ViewMarks {
         // the grid lines and levels of the view, as its drawing has them
         for d in &self.datums {
             if let (Some(a), Some(b)) = (self.px(&screen, d.a), self.px(&screen, d.b)) {
-                draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), ink, if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE });
+                draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), self.paper(&screen, d.a) / 1000.0, ink, if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE });
             }
         }
         for (k, d) in self.dimensions.iter().enumerate() {
@@ -1265,7 +1265,8 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
             }
         }
     });
-    frame.stroke(&lines, Stroke::default().with_color(color).with_width(0.9));
+    let weight = crate::drawing2d::Pen::Dimension.weight_mm() as f32 * look.paper / 1000.0;
+    frame.stroke(&lines, Stroke::default().with_color(color).with_width(weight));
     match style.tick {
         Tick::Arrow => {
             // the point on the end of the line, the head lying on the line
@@ -1282,7 +1283,7 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
         }
         Tick::Dot => {
             for q in [a2, b2] {
-                frame.fill(&Path::circle(q, (tick / 2.0).max(1.0)), color);
+                frame.fill(&Path::circle(q, tick / 2.0), color);
             }
         }
         Tick::Slash | Tick::None => {}
@@ -1290,7 +1291,7 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
     // the length beside the line, clear of it whichever way the line runs
     let content = style.figure(length);
     let (w, h) = (content.chars().count() as f32 * look.size * 0.6, look.size);
-    let clear = nx.abs() * w / 2.0 + ny.abs() * h / 2.0 + 2.0;
+    let clear = nx.abs() * w / 2.0 + ny.abs() * h / 2.0 + look.offset * 0.25;
     frame.fill_text(canvas::Text {
         content,
         position: off(Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), look.offset + clear),
@@ -1317,45 +1318,37 @@ pub(super) fn draw_detail_lines(frame: &mut Frame, lines: &[[[f64; 2]; 2]], pens
         });
         frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
     };
+    let base = crate::drawing2d::Pen::Detail.weight_mm() as f32 * px_per_mm;
     let mut start = 0;
     for (range, [r, g, b], width) in pens {
-        draw(start..range.start, ink, 1.0);
-        draw(range.clone(), Color::from_rgb8(*r, *g, *b), (*width as f32 * px_per_mm).max(0.4));
+        draw(start..range.start, ink, base);
+        draw(range.clone(), Color::from_rgb8(*r, *g, *b), *width as f32 * px_per_mm);
         start = range.end;
     }
-    draw(start..lines.len(), ink, 1.0);
+    draw(start..lines.len(), ink, base);
 }
 
 /// A grid line or a level of a view on its drawing, from `a` to `b` on screen: a dash-dot line;
 /// a grid line with its name in a bubble past both ends, a level with its name past its end.
-pub(super) fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, level: bool, ink: Color, paper: Color) {
+pub(super) fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, level: bool, px_per_mm: f32, ink: Color, paper: Color) {
     let length = a.distance(b);
-    if length < 1.0 {
+    if length < 1.0 || !px_per_mm.is_finite() || px_per_mm <= 0.0 {
         return;
     }
     let (ux, uy) = ((b.x - a.x) / length, (b.y - a.y) / length);
     let at = |d: f32| Point::new(a.x + ux * d, a.y + uy * d);
-    // a long dash, a gap, a dot, a gap (logical pixels)
-    let line = Path::new(|path| {
-        let mut d = 0.0;
-        while d < length {
-            path.move_to(at(d));
-            path.line_to(at((d + 14.0).min(length)));
-            if d + 17.0 < length {
-                path.move_to(at(d + 17.0));
-                path.line_to(at((d + 18.5).min(length)));
-            }
-            d += 21.5;
-        }
-    });
-    frame.stroke(&line, Stroke::default().with_color(Color { a: 0.75, ..ink }).with_width(0.8));
+    let dash = [8.0, 1.5, 0.35, 1.5].map(|mm| mm * px_per_mm);
+    let weight = crate::drawing2d::Pen::Grids.weight_mm() as f32 * px_per_mm;
+    let mut stroke = Stroke::default().with_color(ink).with_width(weight);
+    stroke.line_dash = canvas::LineDash { segments: &dash, offset: 0 };
+    frame.stroke(&Path::line(a, b), stroke);
     let label = |frame: &mut Frame, position: Point, align: alignment::Horizontal| {
         frame.fill_text(canvas::Text {
             content: name.to_string(),
             position,
             align_x: align.into(),
             align_y: alignment::Vertical::Center,
-            size: iced::Pixels(11.0),
+            size: iced::Pixels(2.5 * px_per_mm / 0.72),
             color: ink,
             font: openaec_ui::fonts::MEDIUM,
             ..canvas::Text::default()
@@ -1364,14 +1357,14 @@ pub(super) fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, leve
     if level {
         // the level's name past the end on the right
         let end = if a.x >= b.x { a } else { b };
-        label(frame, Point::new(end.x + 6.0, end.y), alignment::Horizontal::Left);
+        label(frame, Point::new(end.x + 1.5 * px_per_mm, end.y), alignment::Horizontal::Left);
         return;
     }
-    const BUBBLE: f32 = 10.0;
-    for centre in [at(-BUBBLE), at(length + BUBBLE)] {
-        let circle = Path::circle(centre, BUBBLE);
+    let bubble = 4.0 * px_per_mm;
+    for centre in [at(-bubble), at(length + bubble)] {
+        let circle = Path::circle(centre, bubble);
         frame.fill(&circle, paper);
-        frame.stroke(&circle, Stroke::default().with_color(ink).with_width(1.0));
+        frame.stroke(&circle, Stroke::default().with_color(ink).with_width(weight));
         label(frame, centre, alignment::Horizontal::Center);
     }
 }

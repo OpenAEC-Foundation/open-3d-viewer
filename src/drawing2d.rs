@@ -627,7 +627,9 @@ pub fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f6
 /// Visible section references of a plan, clipped to its view window before placement.
 pub(crate) fn plan_sections(doc: &Document, path: &str) -> Vec<(String, [f64; 2], [f64; 2])> {
     let Some(plan) = doc.plan(path) else { return Vec::new() };
-    if plan.presentation["section_marks"].as_bool() == Some(false) { return Vec::new(); }
+    let show = plan.presentation["section_marks"].as_bool()
+        .unwrap_or_else(|| plan.drawing.as_deref() != Some("pile-plan") && !doc.view_is_schedule(path));
+    if !show { return Vec::new(); }
     doc.sections().iter().filter_map(|s| {
         let (a,b) = match plan.crop {
             Some((lo, hi)) => clip(s.from, s.to, lo, hi)?,
@@ -700,12 +702,13 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
         // its grid lines and levels, as its own tab shows them
         let placed: Vec<Datum2> = datums(&v.plan).into_iter().map(|m| Datum2 { a: to(m.a), b: to(m.b), ..m }).collect();
         d.datums(&placed);
-        if !drawn || crop.is_some() {
+        if doc.view_has_sheet_caption(&v.plan) && (!drawn || crop.is_some()) {
             d.rectangle(Pen::Frame, lo, hi);
         }
         for (label, a, b) in plan_sections(doc, &v.plan) {
             section_mark(&mut d, to(a), to(b), label);
         }
+        if !doc.view_has_sheet_caption(&v.plan) { continue; }
         let name = doc.view_name(&v.plan).unwrap_or_default().to_string();
         d.text([lo[0], lo[1] - 0.009], 0.003, name, Align::Left);
         d.text([lo[0], lo[1] - 0.0135], 0.0022, format!("1:{}", v.scale), Align::Left);

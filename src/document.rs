@@ -1463,6 +1463,18 @@ impl Document {
         self.plan(path).map(|p| &p.presentation).or_else(|| self.section(path).map(|s| &s.presentation)).unwrap_or(&Value::Null)
     }
 
+    /// Pile layouts and their schedules supply their own annotation on paper.
+    pub(crate) fn view_has_sheet_caption(&self, path: &str) -> bool {
+        self.view_presentation(path)["sheet_caption"].as_bool().unwrap_or_else(|| {
+            !matches!(self.view_drawing(path), Some("pile-plan" | "pile-schedule"))
+                && !self.view_presentation(path)["legend"].is_object()
+        })
+    }
+
+    pub(crate) fn view_is_schedule(&self, path: &str) -> bool {
+        self.view_drawing(path) == Some("pile-schedule") || self.view_presentation(path)["legend"].is_object()
+    }
+
     /// Consecutive detail lines with a common colour and width in millimetres.
     pub fn detail_pens(&self, path: &str) -> Vec<(std::ops::Range<usize>, [u8; 3], f64)> {
         let count = self.view_lines(path).len();

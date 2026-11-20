@@ -1472,6 +1472,30 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a structural sheet IFCX fixture with four placed views"]
+    fn linked_section_on_structural_sheet_exports_without_unrelated_section_marks() {
+        let input = PathBuf::from(std::env::var_os("STRUCTURAL_SHEET_IFCX").unwrap());
+        let mut app = App::default();
+        app.set_model(Arc::new(crate::loaders::load(&input).unwrap()));
+        let sheet = app.document.sheets().iter().find(|s| s.number == "CP-21").unwrap();
+        assert_eq!(sheet.views.len(), 4);
+        let plan = &sheet.views[0].plan;
+        let sections = crate::drawing2d::plan_sections(&app.document, plan);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].0, "A");
+        assert!(crate::drawing2d::plan_sections(&app.document, &sheet.views[1].plan).is_empty());
+        assert_eq!(app.document.plan(plan).unwrap().dimensions.len(), 4);
+        let path = sheet.path.clone();
+        app.open_doc_sheet(&path);
+        let drawing = app.drawing_to_export().unwrap();
+        for pitch in ["Ø12-200", "Ø12-150"] {
+            assert!(drawing.texts.iter().any(|n| n.text.contains(pitch)));
+        }
+        let path = PathBuf::from(std::env::var_os("STRUCTURAL_SHEET_PDF").unwrap());
+        app.export_shown_to(&path).unwrap();
+    }
+
+    #[test]
     fn a_picked_sheet_dimension_accepts_and_removes_an_individual_reference() {
         let (mut app, sheet, view, _) = sheet_with_plan(false);
         let _ = app.update(Message::AddDimension(view.clone(), [0., 0.], [8., 0.]));

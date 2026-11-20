@@ -84,6 +84,37 @@ pub enum JoinKind {
     /// The second member stops a gap short of the first's face; a steel plate welded square to
     /// that face lies against the second's web and is bolted through it: a pinned connection.
     FinPlate(FinPlate),
+    /// Two members in one line, end to end: each stops a plate's thickness short of where they
+    /// meet, and the two plates on their ends are bolted to each other.
+    Splice(EndPlate),
+    /// The second member (a column) stands on the first: it stops short of it, and a plate under
+    /// its end is held by anchors in the first, on a bed of grout.
+    BasePlate(BasePlate),
+}
+
+/// A base plate's sizes (metres). Editable geometric defaults, not a checked structural design.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BasePlate {
+    /// The plate's thickness.
+    pub thickness: f64,
+    /// How far the plate reaches past the column's profile on every side; the four anchors sit
+    /// in its corners, half this from both edges.
+    pub margin: f64,
+    /// The bed of grout between what the column stands on and the plate.
+    pub grout: f64,
+    /// The anchors' diameter, and their holes' in the plate.
+    pub bolt: f64,
+    pub hole: f64,
+    /// How far an anchor reaches into what the column stands on.
+    pub length: f64,
+}
+
+impl Default for BasePlate {
+    /// A 20 mm plate reaching 80 mm past the profile on 30 mm of grout, four M24 anchors in
+    /// 30 mm holes, 400 mm deep.
+    fn default() -> Self {
+        Self { thickness: 0.02, margin: 0.08, grout: 0.03, bolt: 0.024, hole: 0.03, length: 0.4 }
+    }
 }
 
 /// A fin plate's sizes (metres). Editable geometric defaults, not a checked structural design.
@@ -145,6 +176,8 @@ const BOLT_IN: f64 = 0.05;
 const BOLT_OUT: f64 = 0.025;
 /// The material of plates and bolts (a key of the project's library).
 const STEEL: &str = "steel";
+/// The material of the bed under a base plate.
+const GROUT: &str = "grout";
 
 /// What a join does to its members (indices into the members given to [`cuts`]), in the join's
 /// frame.
@@ -177,6 +210,8 @@ pub fn cuts(kind: JoinKind, members: &[Member]) -> Result<JoinResult, Refusal> {
         }
         JoinKind::EndPlate(plate) => end_plate(first, second, &plate, &mut result)?,
         JoinKind::FinPlate(plate) => fin_plate(first, second, &plate, &mut result)?,
+        JoinKind::Splice(plate) => splice(first, second, &plate, &mut result)?,
+        JoinKind::BasePlate(plate) => base_plate(first, second, &plate, &mut result)?,
     }
     Ok(result)
 }
@@ -222,10 +257,6 @@ fn end_plate(first: &Member, second: &Member, plate: &EndPlate, result: &mut Joi
     };
     let spots: Vec<DVec2> = [lo.x - half, hi.x + half].into_iter().flat_map(|a| across.iter().map(move |&b| DVec2::new(a, b))).collect();
     // the plate, its holes in it
-    let ring = |c: DVec2, d: f64| -> Vec<DVec2> {
-        let n = crate::profile::circle_segments(d / 2.0);
-        (0..n).map(|i| c + DVec2::from_angle(std::f64::consts::TAU * i as f64 / n as f64) * (d / 2.0)).collect()
-    };
     let (plo, phi) = (lo - DVec2::splat(plate.margin), hi + DVec2::splat(plate.margin));
     let outline = vec![plo, DVec2::new(phi.x, plo.y), phi, DVec2::new(plo.x, phi.y)];
     let holes: Vec<Vec<DVec2>> = spots.iter().map(|&c| ring(c, plate.hole)).collect();
@@ -276,10 +307,6 @@ fn fin_plate(first: &Member, second: &Member, plate: &FinPlate, result: &mut Joi
     // the plate: from the face along n, half its height up and down, against the web's side
     let axes = Axes::new(foot + across * web, n, across)?;
     let h = height / 2.0;
-    let ring = |c: DVec2, d: f64| -> Vec<DVec2> {
-        let k = crate::profile::circle_segments(d / 2.0);
-        (0..k).map(|i| c + DVec2::from_angle(std::f64::consts::TAU * i as f64 / k as f64) * (d / 2.0)).collect()
-    };
     // in the plate's own frame: x along n, y across its height
     let spots: Vec<DVec2> = (0..plate.rows).map(|k| DVec2::new(plate.gap + plate.edge, -h + plate.edge * (2 * k + 1) as f64)).collect();
     let outline = vec![DVec2::new(0.0, -h), DVec2::new(length, -h), DVec2::new(length, h), DVec2::new(0.0, h)];
@@ -295,6 +322,140 @@ fn fin_plate(first: &Member, second: &Member, plate: &FinPlate, result: &mut Joi
         result.parts.push(PartSolid { class: "IfcMechanicalFastener", solid: Solid::extrude(&bolt, &through, 2.0 * web + plate.thickness + 2.0 * BOLT_OUT)?, material: steel() });
         let drilled = Axes::new(at - across * (2.0 * web + 0.005), n, across)?;
         result.removals.push((1, Solid::extrude(&hole, &drilled, 2.0 * web + 0.01)?));
+    }
+    Ok(())
+}
+
+/// The points of a circle of diameter `d` round `c`.
+fn ring(c: DVec2, d: f64) -> Vec<DVec2> {
+    let n = crate::profile::circle_segments(d / 2.0);
+    (0..n).map(|i| c + DVec2::from_angle(std::f64::consts::TAU * i as f64 / n as f64) * (d / 2.0)).collect()
+}
+
+/// The box round a member's profile at `at` on its axis, seen from `origin` along `u` and `v`.
+fn profile_box(member: &Member, at: DVec3, origin: DVec3, u: DVec3, v: DVec3) -> (DVec2, DVec2) {
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    for p in member.profile.outer() {
+        let c = at + member.axes.x * p.x + member.axes.y * p.y - origin;
+        let c = DVec2::new(c.dot(u), c.dot(v));
+        lo = lo.min(c);
+        hi = hi.max(c);
+    }
+    (lo, hi)
+}
+
+/// Two members in one line: the ends with which they meet, the point where, and the direction
+/// from the first into the second.
+fn in_line(first: &Member, second: &Member) -> Result<((MemberEnd, MemberEnd), DVec3, DVec3), Refusal> {
+    let ends = [MemberEnd::Start, MemberEnd::End];
+    let (e0, e1) = ends
+        .iter()
+        .flat_map(|&p| ends.iter().map(move |&s| (p, s)))
+        .min_by(|&(p1, s1), &(p2, s2)| {
+            let d = |p, s| (first.end_of(p).0 - second.end_of(s).0).length();
+            d(p1, s1).total_cmp(&d(p2, s2))
+        })
+        .unwrap();
+    let ((q0, into0), (q1, into1)) = (first.end_of(e0), second.end_of(e1));
+    if (q0 - q1).length() > JOIN_TOLERANCE {
+        return Err(Refusal::NotTouching);
+    }
+    if into0.cross(into1).length() > 1e-6 || into0.dot(into1) > 0.0 {
+        return Err(Refusal::NotInLine);
+    }
+    Ok(((e0, e1), (q0 + q1) / 2.0, into1))
+}
+
+/// A splice of two members in one line: each stops a plate's thickness short of where they meet;
+/// the two plates, as large as the larger profile and `margin` more on every side, lie against
+/// each other; two rows of bolts sit in the margin past the profile's height (an I's flanges),
+/// through both plates.
+fn splice(first: &Member, second: &Member, plate: &EndPlate, result: &mut JoinResult) -> Result<(), Refusal> {
+    let positive = |v: f64| v.is_finite() && v > crate::LINEAR_TOLERANCE;
+    if ![plate.thickness, plate.margin, plate.bolt, plate.hole].into_iter().all(positive) || plate.rows == 0 || plate.hole < plate.bolt {
+        return Err(Refusal::NotPositive);
+    }
+    let ((e0, e1), p, n) = in_line(first, second)?;
+    result.trims.push((0, e0, Plane { point: p - n * plate.thickness, normal: n }));
+    result.trims.push((1, e1, Plane { point: p + n * plate.thickness, normal: -n }));
+    // u: up the first's profile, so the bolts sit past its flanges; v across it
+    let u = first.axes.y;
+    let v = n.cross(u);
+    let (lo0, hi0) = profile_box(first, p, p, u, v);
+    let (lo1, hi1) = profile_box(second, p, p, u, v);
+    let (lo, hi) = (lo0.min(lo1), hi0.max(hi1));
+    let half = plate.margin / 2.0;
+    if half - plate.hole / 2.0 <= crate::LINEAR_TOLERANCE || hi.y - lo.y <= plate.hole {
+        return Err(Refusal::BoltsDoNotFit);
+    }
+    let across: Vec<f64> = if plate.rows == 1 {
+        vec![(lo.y + hi.y) / 2.0]
+    } else {
+        let (from, to) = (lo.y + plate.hole, hi.y - plate.hole);
+        if to - from < (plate.rows - 1) as f64 * plate.hole * 1.5 {
+            return Err(Refusal::BoltsDoNotFit);
+        }
+        (0..plate.rows).map(|k| from + (to - from) * k as f64 / (plate.rows - 1) as f64).collect()
+    };
+    let spots: Vec<DVec2> = [lo.x - half, hi.x + half].into_iter().flat_map(|a| across.iter().map(move |&b| DVec2::new(a, b))).collect();
+    let (plo, phi) = (lo - DVec2::splat(plate.margin), hi + DVec2::splat(plate.margin));
+    let outline = vec![plo, DVec2::new(phi.x, plo.y), phi, DVec2::new(plo.x, phi.y)];
+    let holes: Vec<Vec<DVec2>> = spots.iter().map(|&c| ring(c, plate.hole)).collect();
+    let steel = || Some(STEEL.to_string());
+    let outline = Profile::new(outline, holes)?;
+    for from in [p - n * plate.thickness, p] {
+        result.parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&outline, &Axes::new(from, u, n)?, plate.thickness)?, material: steel() });
+    }
+    let bolt = Profile::circle(plate.bolt)?;
+    for c in spots {
+        let at = p + u * c.x + v * c.y;
+        let through = Axes::new(at - n * (plate.thickness + BOLT_OUT), u, n)?;
+        result.parts.push(PartSolid { class: "IfcMechanicalFastener", solid: Solid::extrude(&bolt, &through, 2.0 * (plate.thickness + BOLT_OUT))?, material: steel() });
+    }
+    Ok(())
+}
+
+/// A base plate under `second` (a column) where it stands on `first`: in one line with it (on a
+/// pile, a column below) or on its side (on a foundation beam). The column stops the grout and
+/// the plate short of the first; the plate, the column's profile and `margin` more on every side,
+/// lies on a bed of grout as large as it; four anchors in its corners reach `length` into the
+/// first and past the plate for their nuts.
+fn base_plate(first: &Member, second: &Member, plate: &BasePlate, result: &mut JoinResult) -> Result<(), Refusal> {
+    let positive = |v: f64| v.is_finite() && v > crate::LINEAR_TOLERANCE;
+    if ![plate.thickness, plate.margin, plate.grout, plate.bolt, plate.hole, plate.length].into_iter().all(positive) || plate.hole < plate.bolt {
+        return Err(Refusal::NotPositive);
+    }
+    // where the column meets what it stands on, and the direction from there into the column
+    let (which, foot, n) = match in_line(first, second) {
+        Ok(((_, e1), p, n)) => (e1, p, n),
+        Err(Refusal::NotInLine) | Err(Refusal::NotTouching) => {
+            let (which, face) = butt(first, second)?;
+            (which, face.point, -face.normal)
+        }
+        Err(other) => return Err(other),
+    };
+    let half = plate.margin / 2.0;
+    if half - plate.hole / 2.0 <= crate::LINEAR_TOLERANCE {
+        return Err(Refusal::BoltsDoNotFit);
+    }
+    let lift = plate.grout + plate.thickness;
+    result.trims.push((1, which, Plane { point: foot + n * lift, normal: -n }));
+    let u = (second.axes.x - n * second.axes.x.dot(n)).try_normalize().ok_or(Refusal::Parallel)?;
+    let v = n.cross(u);
+    let (end, _) = second.end_of(which);
+    let (lo, hi) = profile_box(second, end, foot, u, v);
+    let (plo, phi) = (lo - DVec2::splat(plate.margin), hi + DVec2::splat(plate.margin));
+    let outline = vec![plo, DVec2::new(phi.x, plo.y), phi, DVec2::new(plo.x, phi.y)];
+    let spots = [DVec2::new(plo.x + half, plo.y + half), DVec2::new(phi.x - half, plo.y + half), DVec2::new(phi.x - half, phi.y - half), DVec2::new(plo.x + half, phi.y - half)];
+    let holes: Vec<Vec<DVec2>> = spots.iter().map(|&c| ring(c, plate.hole)).collect();
+    let steel = || Some(STEEL.to_string());
+    result.parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&Profile::new(outline.clone(), holes)?, &Axes::new(foot + n * plate.grout, u, n)?, plate.thickness)?, material: steel() });
+    result.parts.push(PartSolid { class: "IfcBuildingElementPart", solid: Solid::extrude(&Profile::new(outline, Vec::new())?, &Axes::new(foot, u, n)?, plate.grout)?, material: Some(GROUT.to_string()) });
+    let anchor = Profile::circle(plate.bolt)?;
+    for c in spots {
+        let at = foot + u * c.x + v * c.y;
+        let through = Axes::new(at - n * plate.length, u, n)?;
+        result.parts.push(PartSolid { class: "IfcMechanicalFastener", solid: Solid::extrude(&anchor, &through, plate.length + lift + BOLT_OUT)?, material: steel() });
     }
     Ok(())
 }
@@ -422,6 +583,65 @@ mod tests {
         assert_eq!(cuts(JoinKind::EndPlate(many), &[column.clone(), beam.clone()]), Err(Refusal::BoltsDoNotFit));
         let thin = EndPlate { thickness: 0.0, ..EndPlate::default() };
         assert_eq!(cuts(JoinKind::EndPlate(thin), &[column, beam]), Err(Refusal::NotPositive));
+    }
+
+    #[test]
+    fn a_splice_plates_both_ends_and_bolts_them_together() {
+        let (a, b) = (member(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0)), member(DVec3::new(4.0, 0.0, 0.0), DVec3::new(9.0, 0.0, 0.0)));
+        let plate = EndPlate::default();
+        let r = cuts(JoinKind::Splice(plate), &[a.clone(), b.clone()]).unwrap();
+        // both stop a plate's thickness short of where they met
+        let at: Vec<(usize, MemberEnd, f64)> = r.trims.iter().map(|t| (t.0, t.1, t.2.point.x)).collect();
+        assert_eq!(at, vec![(0, MemberEnd::End, 4.0 - 0.015), (1, MemberEnd::Start, 4.0 + 0.015)]);
+        let plates: Vec<&PartSolid> = r.parts.iter().filter(|p| p.class == "IfcPlate").collect();
+        assert_eq!((plates.len(), r.parts.len()), (2, 6), "two plates and two rows of two bolts");
+        let hole = Profile::circle(0.022).unwrap().area();
+        for p in &plates {
+            assert!((p.solid.volume() - ((0.4 + 0.16) * (0.2 + 0.16) - 4.0 * hole) * 0.015).abs() < 1e-12, "{}", p.solid.volume());
+        }
+        // the bolts go through both plates, past the profile's height
+        let bolt = r.parts.iter().find(|p| p.class == "IfcMechanicalFastener").unwrap();
+        let (lo, hi) = bolt.solid.bounds();
+        assert!((lo.x - (4.0 - 0.04)).abs() < 1e-9 && (hi.x - 4.04).abs() < 1e-9, "{lo} {hi}");
+        assert!(lo.z.abs().min(hi.z.abs()) > 0.2, "outside the profile: {lo} {hi}");
+        assert!(r.removals.is_empty());
+        // members at an angle, or apart, are no splice
+        let corner = member(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0, 3.0, 0.0));
+        assert_eq!(cuts(JoinKind::Splice(plate), &[a.clone(), corner]), Err(Refusal::NotInLine));
+        let far = member(DVec3::new(5.0, 0.0, 0.0), DVec3::new(9.0, 0.0, 0.0));
+        assert_eq!(cuts(JoinKind::Splice(plate), &[a.clone(), far]), Err(Refusal::NotTouching));
+        // and two that lie over each other are not in line either
+        let back = member(DVec3::new(4.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(cuts(JoinKind::Splice(plate), &[a, back]), Err(Refusal::NotInLine));
+    }
+
+    #[test]
+    fn a_base_plate_lifts_the_column_onto_grout_and_anchors_it() {
+        let column = |from: f64| Member::of(&LinearDef { start: DVec3::new(2.0, 0.0, from), end: DVec3::new(2.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.2 }, roll: 0.0 }).unwrap();
+        let plate = BasePlate::default();
+        let check = |r: &JoinResult, top: f64| {
+            let (k, end, trim) = r.trims[0];
+            assert_eq!((r.trims.len(), k, end), (1, 1, MemberEnd::Start));
+            assert!((trim.point.z - (top + 0.05)).abs() < 1e-12, "on 30 mm of grout and a 20 mm plate: {}", trim.point);
+            assert_eq!(r.parts.iter().map(|p| p.class).collect::<Vec<_>>(), ["IfcPlate", "IfcBuildingElementPart", "IfcMechanicalFastener", "IfcMechanicalFastener", "IfcMechanicalFastener", "IfcMechanicalFastener"]);
+            let hole = Profile::circle(0.03).unwrap().area();
+            assert!((r.parts[0].solid.volume() - (0.36 * 0.36 - 4.0 * hole) * 0.02).abs() < 1e-12);
+            assert!((r.parts[1].solid.volume() - 0.36 * 0.36 * 0.03).abs() < 1e-12);
+            assert_eq!(r.parts[1].material.as_deref(), Some(GROUT));
+            // an anchor: 400 into what is below, through grout and plate, 25 past for its nut
+            let (lo, hi) = r.parts[2].solid.bounds();
+            assert!((lo.z - (top - 0.4)).abs() < 1e-9 && (hi.z - (top + 0.075)).abs() < 1e-9, "{lo} {hi}");
+            assert!(r.removals.is_empty() && r.additions.is_empty());
+        };
+        // on a pile in one line with it
+        let pile = Member::of(&LinearDef { start: DVec3::new(2.0, 0.0, -8.0), end: DVec3::new(2.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }).unwrap();
+        check(&cuts(JoinKind::BasePlate(plate), &[pile, column(0.0)]).unwrap(), 0.0);
+        // on a foundation beam, whose top lies 0.2 over its axis
+        let beam = member(DVec3::ZERO, DVec3::new(5.0, 0.0, 0.0));
+        check(&cuts(JoinKind::BasePlate(plate), &[beam.clone(), column(0.0)]).unwrap(), 0.2);
+        let thin = BasePlate { margin: 0.02, ..plate };
+        assert_eq!(cuts(JoinKind::BasePlate(thin), &[beam.clone(), column(0.0)]), Err(Refusal::BoltsDoNotFit));
+        assert_eq!(cuts(JoinKind::BasePlate(BasePlate { grout: 0.0, ..plate }), &[beam, column(0.0)]), Err(Refusal::NotPositive));
     }
 
     #[test]

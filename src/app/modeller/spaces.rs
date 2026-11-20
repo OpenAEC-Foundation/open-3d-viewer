@@ -403,10 +403,11 @@ impl App {
         let levels: Vec<(String, f64)> = self.document.levels().iter().map(|l| (l.path.clone(), l.elevation)).collect();
         let top_word = if self.modeller.top_word.is_empty() { "top" } else { self.modeller.top_word };
         let model = &self.modeller.model;
+        let library = &self.library;
         self.document.set_plan_tags(|plan| {
             if plan.kind.structural() {
                 let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);
-                return (super::structure::tags(model, &plan.level, elevation, plan.scale, top_word), Vec::new());
+                return (super::structure::tags(model, library, &plan.level, elevation, plan.scale, top_word), Vec::new());
             }
             let on = |level: &Option<String>| level.as_deref().is_none_or(|l| l == plan.level);
             let line = plan.scale * NOTE_HEIGHT * 1.6;

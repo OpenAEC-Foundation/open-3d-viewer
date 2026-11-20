@@ -940,7 +940,7 @@ mod tests {
         reopened.set_placed_title(&sheet, 1, None);
         assert!(title_x(&render(&reopened)).is_empty());
         let sheet_node = reopened.ifcx_drawing_nodes().into_iter().find(|n| n["path"] == sheet).unwrap();
-        assert!(sheet_node["attributes"]["o3v::sheet"]["views"][1].get("show_title").is_none());
+        assert!(sheet_node["attributes"]["o3v::sheet"]["views"][1].get("showTitle").is_none());
     }
 
     #[test]

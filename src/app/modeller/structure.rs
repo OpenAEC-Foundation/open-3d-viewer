@@ -129,7 +129,7 @@ pub(super) fn member_tags(model: &Model, level: &str, elevation: f64, scale: f64
 }
 
 /// An on-sheet schedule reads the same issued identity and live coordinates as the schedule pane.
-pub fn schedule_table(model: &Model, plan: &crate::document::PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
+pub fn schedule_table(model: &Model, plan: &mut crate::document::PlanView, office_style: bool) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
     let (lo, hi) = plan.crop.unwrap_or(([0.0, 0.0], [22.0, 40.0]));
     let mut entries: Vec<_> = model.iter().filter_map(|e| {
         let n = e.pile_number?;
@@ -139,15 +139,36 @@ pub fn schedule_table(model: &Model, plan: &crate::document::PlanView) -> (Vec<N
     entries.sort_by_key(|(n, _, _)| *n);
     let height = (plan.scale * NOTE_HEIGHT).max(0.001);
     let row = height * 3.2;
-    let rows = (((hi[1] - lo[1]) / row).floor() as usize).saturating_sub(2).max(1);
-    let groups = entries.len().div_ceil(rows).max(1);
-    let group_width = (hi[0] - lo[0]) / groups as f64;
     let mut notes = Vec::new();
     let mut lines = Vec::new();
+    let mut table_top = hi[1];
+    if office_style {
+        let mut profiles = std::collections::BTreeMap::new();
+        for e in model.iter().filter(|e| e.pile_number.is_some()) {
+            let Shape::Linear(l) = &e.shape else { continue };
+            let Ok(profile) = l.profile.profile() else { continue };
+            if profile.outer().len() == 4 {
+                profiles.entry(l.profile.name()).or_insert_with(|| profile.outer().to_vec());
+            }
+        }
+        for (label, outline) in profiles {
+            let radius = outline.iter().map(|p| p.abs().max_element()).fold(0.0, f64::max);
+            if radius <= 0.0 { continue; }
+            let centre = DVec2::new(lo[0] + plan.scale * 0.007, table_top - plan.scale * 0.006);
+            let outline: Vec<_> = outline.into_iter().map(|p| centre + p * (plan.scale * 0.002 / radius)).collect();
+            super::pile_symbols::office_symbol(centre, &outline, &mut lines, &mut plan.symbol_fills);
+            plan.office_symbol_lines = lines.len();
+            notes.push(Note { at: (centre + DVec2::X * plan.scale * 0.007).to_array(), text: label, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
+            table_top -= plan.scale * 0.012;
+        }
+    }
+    let rows = (((table_top - lo[1]) / row).floor() as usize).saturating_sub(2).max(1);
+    let groups = entries.len().div_ceil(rows).max(1);
+    let group_width = (hi[0] - lo[0]) / groups as f64;
     for group in 0..groups {
         let length = entries.len().saturating_sub(group * rows).min(rows);
         let left = lo[0] + group as f64 * group_width;
-        let top = hi[1] - 0.3 * row;
+        let top = table_top - 0.3 * row;
         let bottom = top - (1 + length) as f64 * row;
         for col in [0.0, 0.1, 0.525, 0.765, 0.99] {
             let x = left + col * group_width;
@@ -160,7 +181,7 @@ pub fn schedule_table(model: &Model, plan: &crate::document::PlanView) -> (Vec<N
         let mut write = |r: usize, cols: [String; 4]| {
             for (i, text) in cols.into_iter().enumerate() {
                 let x = lo[0] + (group as f64 + [0.015, 0.115, 0.54, 0.78][i]) * group_width;
-                notes.push(Note { at: [x, hi[1] - (r + 1) as f64 * row], text, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
+                notes.push(Note { at: [x, table_top - (r + 1) as f64 * row], text, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
             }
         };
         write(0, ["Nr.".into(), "ID".into(), "X (m)".into(), "Y (m)".into()]);

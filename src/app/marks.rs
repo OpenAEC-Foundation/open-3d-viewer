@@ -319,7 +319,7 @@ impl App {
             notes: self.document.view_notes(view)?.iter().chain(self.document.view_tags(view)).cloned().collect(),
             lines: self.document.view_lines(view).iter().chain(self.document.view_symbols(view)).copied().collect(),
             image: self.document.plan(view).and_then(|p| p.orthophoto.as_ref()).and_then(|p| p.image.placed(self.document.view_marks(view).and_then(|(_, crop)| crop), |q| q)),
-            fills: self.document.view_fills(view).to_vec(),
+            fills: self.document.view_fills(view).cloned().collect(),
             cut: self.cuts.get(view).cloned(),
             crop,
             measuring: self.dimension_tool,

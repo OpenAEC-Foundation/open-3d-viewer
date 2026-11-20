@@ -159,7 +159,7 @@ impl App {
                     dimensions: dimensions.to_vec(),
                     notes: self.document.view_notes(path).unwrap_or(&[]).iter().chain(self.document.view_tags(path)).cloned().collect(),
                     lines: self.document.view_lines(path).iter().chain(self.document.view_symbols(path)).copied().collect(),
-                    fills: self.document.view_fills(path).to_vec(),
+                    fills: self.document.view_fills(path).cloned().collect(),
                 },
                 // a 3D view: its hidden lines, once they are made, within its crop where it has
                 // one: the viewport's box, measured from the point of the drawing at its position

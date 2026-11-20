@@ -191,6 +191,9 @@ pub struct PlanView {
     pub pile_offsets: std::collections::BTreeMap<u64, [f64; 2]>,
     /// Regenerated tag index, element identity, and head used by drag editing.
     pub pile_tags: Vec<(usize, u64, [f64; 2])>,
+    pub corner_labels: bool,
+    pub office_symbol_lines: usize,
+    pub symbol_fills: Vec<Fill>,
     /// And the lines it draws by itself: the swings of its doors.
     pub symbols: Vec<[[f64; 2]; 2]>,
     /// The regions drawn on it in one colour that are no model, under its lines.
@@ -896,7 +899,7 @@ impl Document {
                     pile_tag_marks: p.get("pile_tag_marks").and_then(Value::as_bool).unwrap_or(false),
                     pile_symbols: p.get("pile_symbols").and_then(Value::as_bool).unwrap_or(false),
                     pile_offsets: p.get("pile_offsets").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
-                    pile_tags: Vec::new(),
+                    pile_tags: Vec::new(), corner_labels: false, office_symbol_lines: 0, symbol_fills: Vec::new(),
                     symbols: Vec::new(),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
@@ -1056,7 +1059,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, presentation: Value::Null, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), pile_symbols: kind.structural(), pile_tag_marks: false, pile_offsets: Default::default(), pile_tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { orthophoto: None, path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, presentation: Value::Null, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), pile_symbols: kind.structural(), pile_tag_marks: false, pile_offsets: Default::default(), pile_tags: Vec::new(), corner_labels: false, office_symbol_lines: 0, symbol_fills: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1422,16 +1425,18 @@ impl Document {
     pub fn set_plan_tags(&mut self, of: impl Fn(&mut PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>)) {
         for p in &mut self.plans {
             p.pile_tags.clear();
+            p.symbol_fills.clear();
+            p.corner_labels = false;
+            p.office_symbol_lines = 0;
             (p.tags, p.symbols) = of(p);
         }
     }
 
     /// The regions of a view filled in one colour that are no model, drawn under its lines.
-    pub fn view_fills(&self, path: &str) -> &[Fill] {
-        if let Some(p) = self.plan(path) {
-            return &p.fills;
-        }
-        self.section(path).map_or(&[], |s| &s.fills[..])
+    pub fn view_fills(&self, path: &str) -> impl Iterator<Item = &Fill> {
+        let plan = self.plan(path);
+        let authored = plan.map(|p| p.fills.as_slice()).or_else(|| self.section(path).map(|s| s.fills.as_slice())).unwrap_or_default();
+        authored.iter().chain(plan.into_iter().flat_map(|p| &p.symbol_fills))
     }
 
     pub fn view_presentation(&self, path: &str) -> &Value {
@@ -1448,7 +1453,11 @@ impl Document {
             (at < count && width.is_finite() && width > 0.0).then_some((at, rgb, width))
         }).collect();
         starts.sort_by_key(|p| p.0);
-        starts.iter().enumerate().map(|(i, &(at, rgb, width))| (at..starts.get(i+1).map_or(count, |p| p.0), rgb, width)).collect()
+        let mut pens: Vec<_> = starts.iter().enumerate().map(|(i, &(at, rgb, width))| (at..starts.get(i+1).map_or(count, |p| p.0), rgb, width)).collect();
+        if let Some(plan) = self.plan(path).filter(|p| p.office_symbol_lines > 0) {
+            pens.push((count..count + plan.office_symbol_lines, [0,0,0], 0.18));
+        }
+        pens
     }
 
     /// The lines of a view that are no model: the shapes and leaders of its tags.
@@ -1600,7 +1609,12 @@ impl Document {
         let Some(p) = self.plans.iter_mut().find(|p| p.path == view) else { return false };
         let Some(index) = index.checked_sub(p.notes.len()) else { return false };
         let Some(&(_, id, head)) = p.pile_tags.iter().find(|(k, _, _)| *k == index) else { return false };
-        p.pile_offsets.insert(id, [at[0] - head[0], at[1] - head[1]]);
+        let offset = [at[0] - head[0], at[1] - head[1]];
+        if p.corner_labels {
+            p.presentation["pile_label_offsets"][id.to_string()] = json!(offset);
+        } else {
+            p.pile_offsets.insert(id, offset);
+        }
         true
     }
 

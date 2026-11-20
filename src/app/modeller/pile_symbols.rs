@@ -10,11 +10,13 @@ pub(super) fn draw(
     plan: &mut PlanView,
     elevation: f64,
     source: u32,
+    office_style: bool,
     notes: &mut Vec<Note>,
     lines: &mut Vec<[[f64; 2]; 2]>,
 ) {
     let up = plan.kind.looks_up();
     let cut = elevation + plan.cut;
+    plan.corner_labels = up && office_style;
     for e in model.iter() {
         let Some(number) = e.pile_number else {
             continue;
@@ -61,7 +63,7 @@ pub(super) fn draw(
         let dot = (plan.scale * 0.0003).min(radius * 0.25);
         for (&a, &b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
             if up {
-                add(lines, a, b);
+                if !office_style || outline.len() != 4 { add(lines, a, b); }
                 continue;
             }
             let length = a.distance(b);
@@ -85,7 +87,10 @@ pub(super) fn draw(
         if !up && e.level.as_deref() != Some(&plan.level) {
             continue;
         }
-        if up && outline.len() == 4 {
+        if plan.corner_labels && outline.len() == 4 {
+            office_symbol(centre, &outline, lines, &mut plan.symbol_fills);
+            plan.office_symbol_lines = lines.len();
+        } else if up && outline.len() == 4 {
             add(lines, outline[0], outline[2]);
             add(lines, outline[1], outline[3]);
         } else if up {
@@ -93,13 +98,16 @@ pub(super) fn draw(
                 add(lines, centre - dir * radius, centre + dir * radius);
             }
         }
-        let offset = plan
-            .pile_offsets
-            .get(&e.id.0)
-            .copied()
-            .map(DVec2::from_array)
-            .unwrap_or_else(|| DVec2::splat(radius + plan.scale * 0.001));
-        if offset.length() > radius + plan.scale * 0.004 {
+        let offset = if plan.corner_labels {
+            let hi = outline.iter().copied().fold(centre, DVec2::max);
+            let previous = plan.presentation.get("pile_label_offsets").and_then(|v| v.get(e.id.0.to_string()));
+            previous.and_then(|v| serde_json::from_value::<[f64; 2]>(v.clone()).ok()).map(DVec2::from_array)
+                .unwrap_or(hi - centre + plan.scale * DVec2::new(0.00135, 0.00145))
+        } else {
+            plan.pile_offsets.get(&e.id.0).copied().map(DVec2::from_array)
+                .unwrap_or_else(|| DVec2::splat(radius + plan.scale * 0.001))
+        };
+        if !plan.corner_labels && offset.length() > radius + plan.scale * 0.004 {
             let along = offset.normalize_or_zero();
             add(
                 lines,
@@ -123,13 +131,28 @@ pub(super) fn draw(
         notes.push(Note {
             at: (centre + offset).to_array(),
             text,
-            size: NOTE_HEIGHT,
-            align: Align::Center,
+            size: if plan.corner_labels { 7.0 * 0.0254 / 72.0 } else { NOTE_HEIGHT },
+            align: if plan.corner_labels { Align::Left } else { Align::Center },
             angle: 0.0,
             level: false,
-            face: Default::default(),
+            face: if plan.corner_labels { crate::typeface::Face::of("Swis721 Cn BT") } else { Default::default() },
         });
     }
+}
+
+/// Square shaft, solid upper-right quarter and two axes extending half a shaft beyond each face.
+pub(super) fn office_symbol(centre: DVec2, outline: &[DVec2], lines: &mut Vec<[[f64; 2]; 2]>, fills: &mut Vec<crate::document::Fill>) {
+    for (&a, &b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+        lines.push([a.to_array(), b.to_array()]);
+    }
+    let axis = |i: usize| (outline[i] + outline[(i+1) % 4]) * 0.5 - centre;
+    for i in 0..2 {
+        let reach = axis(i) * 2.0;
+        lines.push([(centre - reach).to_array(), (centre + reach).to_array()]);
+    }
+    let k = (0..4).max_by(|&a, &b| outline[a].element_sum().total_cmp(&outline[b].element_sum())).unwrap();
+    let ring = [centre, centre + axis((k+3)%4), outline[k], centre + axis(k)];
+    fills.push(crate::document::Fill { loops: vec![ring.map(|p| p.to_array()).to_vec()], color: [41,49,51] });
 }
 
 #[cfg(test)]
@@ -168,7 +191,7 @@ mod tests {
             doc.set_plan_tags(|p| {
                 p.pile_tag_marks = true;
                 let (mut notes, mut lines) = (Vec::new(), Vec::new());
-                draw(&model, p, 0.0, 0, &mut notes, &mut lines);
+                draw(&model, p, 0.0, 0, false, &mut notes, &mut lines);
                 (notes, lines)
             });
         };

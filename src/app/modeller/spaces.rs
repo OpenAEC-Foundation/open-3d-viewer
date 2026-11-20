@@ -404,16 +404,17 @@ impl App {
         let top_word = if self.modeller.top_word.is_empty() { "top" } else { self.modeller.top_word };
         let model = &self.modeller.model;
         let source = self.models.iter().position(|m| Some(m.model.id) == self.modeller.shown && m.visible).map(|i| i as u32);
+        let office_style = self.house.key.eq_ignore_ascii_case("3bm");
         self.document.set_plan_tags(|plan| {
             if plan.drawing.as_deref() == Some("pile-schedule") {
-                return super::structure::schedule_table(model, plan);
+                return super::structure::schedule_table(model, plan, office_style);
             }
             if plan.kind.structural() {
                 let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);
                 let mut tags = super::structure::member_tags(model, &plan.level, elevation, plan.scale, top_word, !plan.pile_symbols);
                 let mut symbols = Vec::new();
                 if let Some(source) = source.filter(|_| plan.pile_symbols && plan.layers.get("IfcPile") != Some(&false)) {
-                    super::pile_symbols::draw(model, plan, elevation, source, &mut tags, &mut symbols);
+                    super::pile_symbols::draw(model, plan, elevation, source, office_style, &mut tags, &mut symbols);
                 }
                 return (tags, symbols);
             }

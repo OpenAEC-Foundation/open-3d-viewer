@@ -463,7 +463,8 @@ impl App {
                     lines: self.document.view_lines(&v.plan).iter().chain(self.document.view_symbols(&v.plan)).copied().collect(),
                     crop: marks.and_then(|(_, c)| c),
                     datums: self.view_datums(&v.plan),
-                    caption: self.document.view_has_sheet_caption(&v.plan),
+                    frame: self.document.view_has_sheet_caption(&v.plan),
+                    caption: self.document.placed_view_has_title(v),
                     is_plan: self.document.plan(&v.plan).is_some(),
                     sections: crate::drawing2d::plan_sections(&self.document, &v.plan),
                     rules: self.view_rules(&v.plan),
@@ -560,6 +561,11 @@ impl App {
                 scales.push(view.scale);
             }
             rows = rows.push(choices(scales.iter().map(|&scale| small(format!("1:{scale}"), view.scale == scale, Message::SetScale(key.clone(), i, scale))).collect()));
+            rows = rows.push(label(l.text("Viewporttitel", "Viewport title")));
+            let titles = [(None, l.text("Standaard", "Default")), (Some(true), l.text("Aan", "On")), (Some(false), l.text("Uit", "Off"))];
+            rows = rows.push(choices(titles.into_iter().map(|(setting, word)| {
+                small(word.to_string(), view.show_title == setting, Message::SetPlacedTitle(key.clone(), i, setting))
+            }).collect()));
             if let Some((_, typed)) = &self.cut_edit {
                 rows = rows.push(
                     row![
@@ -665,6 +671,7 @@ struct Placed {
     datums: Vec<crate::drawing2d::Datum2>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
+    frame: bool,
     caption: bool,
     sections: Vec<(String, [f64; 2], [f64; 2])>,
     /// How its kind of drawing draws it: the widths of its lines, and whether what is cut is
@@ -1166,15 +1173,15 @@ impl canvas::Program<Message> for PaperDrawing {
                         let color = inked.ink.color.map_or(plain, |c| Color::from_rgb8(c[0], c[1], c[2]));
                         frame.stroke(&lines, Stroke::default().with_color(color).with_width(inked.ink.wide(width, inked.cut)));
                     }
-                    if placed.caption && crop.is_some() {
+                    if placed.frame && crop.is_some() {
                         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(0.8));
                     }
                 }
                 None => {
-                    if placed.caption {
+                    if placed.frame {
                         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
                     }
-                    if placed.caption && placed.lines.is_empty() && placed.notes.is_empty() && placed.dimensions.is_empty() {
+                    if placed.frame && placed.lines.is_empty() && placed.notes.is_empty() && placed.dimensions.is_empty() {
                         label(&mut frame, self.empty.clone(), Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0), 11.0, p.text_muted, alignment::Horizontal::Center);
                     }
                 }

@@ -708,7 +708,7 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
         for (label, a, b) in plan_sections(doc, &v.plan) {
             section_mark(&mut d, to(a), to(b), label);
         }
-        if !doc.view_has_sheet_caption(&v.plan) { continue; }
+        if !doc.placed_view_has_title(v) { continue; }
         let name = doc.view_name(&v.plan).unwrap_or_default().to_string();
         d.text([lo[0], lo[1] - 0.009], 0.003, name, Align::Left);
         d.text([lo[0], lo[1] - 0.0135], 0.0022, format!("1:{}", v.scale), Align::Left);
@@ -879,6 +879,42 @@ mod tests {
         // the right wall is outside; the lower and upper walls are cut back to x = 4
         assert_eq!(count(&d, Pen::Cut), 3);
         assert!(d.lines.iter().all(|l| l.a[0] <= 4.0 + 1e-9 && l.b[0] <= 4.0 + 1e-9), "{:?}", d.lines);
+    }
+
+    #[test]
+    fn two_placements_have_independent_titles_after_reopening() {
+        let (mut doc, plan) = plan();
+        let sheet = doc.add_sheet("Blad");
+        doc.place_plan(&sheet, &plan).unwrap();
+        doc.place_plan(&sheet, &plan).unwrap();
+        doc.put_placed(&sheet, 0, [0.09, 0.12]);
+        doc.put_placed(&sheet, 1, [0.28, 0.12]);
+        let render = |doc: &Document| sheet_drawing(doc, &sheet, &|_| None, &|_| vec![], &|_| Rules::default()).unwrap();
+        let name = doc.view_name(&plan).unwrap().to_owned();
+        let title_x = |d: &Drawing2d| d.texts.iter().filter(|t| t.text == name).map(|t| t.at[0]).collect::<Vec<_>>();
+        let normal = render(&doc);
+        let both = title_x(&normal);
+        assert_eq!(both.len(), 2);
+        doc.set_placed_title(&sheet, 0, Some(false));
+        assert_eq!(title_x(&render(&doc)), both[1..]);
+        assert_eq!(count(&render(&doc), Pen::Frame), count(&normal, Pen::Frame));
+        doc.set_view_drawing(&plan, Some("pile-plan".into()));
+        assert!(title_x(&render(&doc)).is_empty());
+        let frames = count(&render(&doc), Pen::Frame);
+        doc.set_placed_title(&sheet, 1, Some(true));
+        let nodes = doc.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_owned(), n["attributes"].clone())).collect::<Vec<_>>();
+        let mut reopened = Document::default();
+        reopened.add_level("Begane grond", 0.0).unwrap();
+        reopened.adopt_ifcx(&nodes);
+        let places = &reopened.sheet(&sheet).unwrap().views;
+        assert_eq!((places[0].show_title, places[1].show_title), (Some(false), Some(true)));
+        let drawing = render(&reopened);
+        assert_eq!(title_x(&drawing), both[1..]);
+        assert_eq!(count(&drawing, Pen::Frame), frames);
+        reopened.set_placed_title(&sheet, 1, None);
+        assert!(title_x(&render(&reopened)).is_empty());
+        let sheet_node = reopened.ifcx_drawing_nodes().into_iter().find(|n| n["path"] == sheet).unwrap();
+        assert!(sheet_node["attributes"]["o3v::sheet"]["views"][1].get("show_title").is_none());
     }
 
     #[test]

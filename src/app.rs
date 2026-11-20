@@ -771,6 +771,7 @@ pub enum Message {
     RemovePicked,
     /// Set the scale of a placed view: sheet, index, 1 : scale.
     SetScale(Arc<str>, usize, f64),
+    SetPlacedTitle(Arc<str>, usize, Option<bool>),
     /// Give a sheet another paper (width, height in metres).
     SetPaper(Arc<str>, [f64; 2]),
     SheetField(Arc<str>, bim_library::house::Field, String),
@@ -2872,6 +2873,7 @@ impl App {
                 }
             }
             Message::RemovePicked => self.remove_picked(),
+            Message::SetPlacedTitle(sheet, i, show) => self.document.set_placed_title(&sheet, i, show),
             Message::SetScale(sheet, i, scale) => {
                 self.scale_placed_view(&sheet, i, scale);
             }

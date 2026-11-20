@@ -632,6 +632,8 @@ pub struct PlacedView {
     pub at: [f64; 2],
     /// 1 : `scale`.
     pub scale: f64,
+    /// Overrides the view's default name and scale caption on this placement only.
+    pub show_title: Option<bool>,
 }
 
 /// Why a level was not added.
@@ -804,7 +806,11 @@ impl Document {
         }
         for (i, s) in self.sheets.iter().enumerate() {
             children.insert(format!("sheet {}", i + 1), s.path.clone().into());
-            let views: Vec<Value> = s.views.iter().map(|v| json!({"view": v.plan, "at": v.at, "scale": v.scale})).collect();
+            let views: Vec<Value> = s.views.iter().map(|v| {
+                let mut placement = json!({"view": v.plan, "at": v.at, "scale": v.scale});
+                if let Some(show) = v.show_title { placement["show_title"] = show.into(); }
+                placement
+            }).collect();
             nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "fields": s.fields, "revisions": s.revisions, "paper": s.paper, "views": views}}}));
         }
         if !nodes.is_empty() || self.pile_high_water > 0 || !self.project_fields.is_empty() || !self.project_address.is_empty() {
@@ -979,7 +985,7 @@ impl Document {
             let views = s.get("views").and_then(Value::as_array).into_iter().flatten().filter_map(|v| {
                 let view = v.get("view")?.as_str()?.to_string();
                 (self.plan(&view).is_some() || self.section(&view).is_some()).then_some(())?;
-                Some(PlacedView { plan: view, at: pair(v.get("at")?)?, scale: v.get("scale").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(SHEET_SCALE) })
+                Some(PlacedView { show_title: v.get("show_title").and_then(Value::as_bool), plan: view, at: pair(v.get("at")?)?, scale: v.get("scale").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(SHEET_SCALE) })
             });
             let views: Vec<PlacedView> = views.collect();
             let (number, name) = (text(s, "number"), text(s, "name"));
@@ -1480,6 +1486,16 @@ impl Document {
         })
     }
 
+    pub(crate) fn placed_view_has_title(&self, view: &PlacedView) -> bool {
+        view.show_title.unwrap_or_else(|| self.view_has_sheet_caption(&view.plan))
+    }
+
+    pub fn set_placed_title(&mut self, sheet: &str, index: usize, show: Option<bool>) {
+        if let Some(v) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.views.get_mut(index)) {
+            v.show_title = show;
+        }
+    }
+
     pub(crate) fn view_is_schedule(&self, path: &str) -> bool {
         self.view_drawing(path) == Some("pile-schedule") || self.view_presentation(path)["legend"].is_object()
     }
@@ -1771,7 +1787,7 @@ impl Document {
         let scale = self.view_scale(plan).unwrap_or(SHEET_SCALE);
         let sheet = self.sheets.iter_mut().find(|s| s.path == sheet)?;
         let at = [sheet.paper[0] / 2.0, sheet.paper[1] / 2.0];
-        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale });
+        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale, show_title: None });
         Some(sheet.views.len() - 1)
     }
 

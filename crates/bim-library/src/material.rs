@@ -74,12 +74,15 @@ impl HatchKind {
         const WHITE: [u8; 3] = [255, 255, 255];
         const BLACK: [u8; 3] = [0, 0, 0];
         const GREY: [u8; 3] = [128, 128, 128];
-        let lines = |fill, line, angle, spacing| HatchPattern { fill, line, angle, spacing, crossed: false, zigzag: false };
+        let lines = |fill, line, angle, spacing| HatchPattern { fill, line, angle, spacing, pair: 0.0, crossed: false, zigzag: false };
+        let pairs = |fill, line, angle, spacing, pair| HatchPattern { pair, ..lines(fill, line, angle, spacing) };
         let crossed = |fill, line, angle, spacing| HatchPattern { crossed: true, ..lines(fill, line, angle, spacing) };
         let solid = |fill| lines(fill, fill, 45.0, 0.0);
         let zigzag = |fill| HatchPattern { zigzag: true, ..lines(fill, BLACK, 0.0, 0.0) };
         match (standard, self) {
-            (Nen47, Brick) => lines([212, 144, 143], BLACK, 45.0, 0.08),
+            // brickwork is hatched with pairs of lines: the sign of NEN 47 as the hatch catalogue
+            // has it, at 1:50 a pair every 2.25 mm with its lines 0.375 mm apart
+            (Nen47, Brick) => pairs([212, 144, 143], BLACK, 45.0, 0.1125, 0.01875),
             (Nen47, Insulation) => zigzag([255, 253, 224]),
             (Nen47, Concrete) => solid([192, 192, 192]),
             (Nen47, SandLime) => lines([200, 192, 176], [168, 160, 144], 45.0, 0.08),
@@ -127,12 +130,16 @@ impl DrawingStandard {
 /// A hatch: the fill behind it, its line colour, the angle of its lines (degrees on paper,
 /// anticlockwise from the x axis) and their spacing (metres on the model, so a hatch scales with
 /// the drawing; 0 for a solid fill without lines), crossed lines, or one zigzag across the layer.
+/// Where its lines come in pairs, `pair` is how far the two lines of a pair are apart (metres on
+/// the model; 0: single lines) and `spacing` how far the pairs are.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HatchPattern {
     pub fill: [u8; 3],
     pub line: [u8; 3],
     pub angle: f64,
     pub spacing: f64,
+    #[serde(default)]
+    pub pair: f64,
     pub crossed: bool,
     pub zigzag: bool,
 }
@@ -147,11 +154,34 @@ pub struct Material {
     pub hatch: HatchKind,
     /// Its colour in the 3D view, red, green and blue.
     pub colour: [u8; 3],
+    /// The key of its own hatch in the hatch catalogue ("openaec-12-spruce"), where it has one:
+    /// the sign of its kind of material, in its colour. Without one it is drawn by its hatch
+    /// kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign: Option<String>,
+    /// Its grade or strength class, as its standard writes it ("C24", "S355", "C20/25").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<String>,
 }
 
 impl Material {
     pub fn name(&self, lang: Lang) -> &str {
         self.names.get(lang)
+    }
+
+    /// A material drawn by its hatch kind.
+    pub fn new(key: &str, names: Names, hatch: HatchKind, colour: [u8; 3]) -> Self {
+        Self { key: key.into(), names, hatch, colour, sign: None, grade: None }
+    }
+
+    /// Its own hatch of the hatch catalogue, when it names one the catalogue has.
+    pub fn catalogue_hatch(&self) -> Option<&'static crate::hatch::Hatch> {
+        self.sign.as_deref().and_then(crate::hatch::hatch)
+    }
+
+    /// The timber strength class its grade names, when it names one ([`crate::grade`]).
+    pub fn timber_grade(&self) -> Option<&'static crate::grade::TimberGrade> {
+        self.grade.as_deref().and_then(crate::grade::timber_grade)
     }
 
     /// Its colour as fractions of one, for IFCX and the renderer.
@@ -160,10 +190,32 @@ impl Material {
     }
 }
 
+/// The hatch of the catalogue a starter material is drawn with: the suite's sign for its kind
+/// of material. The materials NEN 47 has no sign for are drawn by their hatch kind.
+fn starter_sign(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "concrete" => "openaec-5",
+        "steel" => "openaec-18",
+        "aluminium" | "zinc" => "openaec-19",
+        "roofing" => "openaec-24",
+        "hollow-core-concrete" => "openaec-6",
+        "brick" => "openaec-1",
+        "sand-lime" => "openaec-3",
+        "insulation" | "mineral-wool" => "openaec-17",
+        "insulation-pir" => "openaec-17-pir",
+        "timber" | "timber-cladding" => "openaec-12",
+        "osb" => "openaec-16-osb",
+        "plywood" => "openaec-16-plywood",
+        "glass" => "openaec-29",
+        "screed" => "openaec-10",
+        _ => return None,
+    })
+}
+
 /// The materials a library starts with: Open BIM Studio's.
 pub fn starter() -> Vec<Material> {
     use HatchKind::*;
-    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material { key: key.into(), names: Names::new(nl, en, de, fr), hatch, colour };
+    let m = |key: &str, nl: &str, en: &str, de: &str, fr: &str, hatch, colour| Material { sign: starter_sign(key).map(str::to_string), ..Material::new(key, Names::new(nl, en, de, fr), hatch, colour) };
     const CONCRETE: [u8; 3] = [185, 185, 185];
     const INSULATION: [u8; 3] = [240, 225, 150];
     const TIMBER: [u8; 3] = [205, 165, 115];
@@ -179,6 +231,8 @@ pub fn starter() -> Vec<Material> {
         m("insulation-pir", "isolatie PIR", "PIR insulation", "PIR-Dämmung", "isolant PIR", Insulation, INSULATION),
         m("mineral-wool", "minerale wol", "mineral wool", "Mineralwolle", "laine minérale", Insulation, [236, 214, 120]),
         m("timber", "hout", "timber", "Holz", "bois", Timber, TIMBER),
+        m("clt", "kruislaaghout", "cross-laminated timber", "Brettsperrholz", "bois lamellé-croisé", Timber, [214, 178, 128]),
+        m("glulam", "gelamineerd hout", "glulam", "Brettschichtholz", "bois lamellé-collé", Timber, [210, 172, 120]),
         m("timber-cladding", "houten gevelbekleding", "timber cladding", "Holzverschalung", "bardage bois", Timber, TIMBER),
         m("timber-frame-insulated", "houtskelet met isolatie", "timber frame with insulation", "Holzständerwerk mit Dämmung", "ossature bois isolée", Insulation, INSULATION),
         m("osb", "OSB", "OSB", "OSB", "OSB", Timber, [214, 182, 128]),
@@ -225,7 +279,16 @@ mod tests {
     #[test]
     fn hatches_follow_open_bim_studio() {
         let brick = HatchKind::Brick.pattern(DrawingStandard::Nen47);
-        assert_eq!((brick.fill, brick.angle, brick.spacing), ([212, 144, 143], 45.0, 0.08));
+        assert_eq!((brick.fill, brick.angle, brick.spacing, brick.pair), ([212, 144, 143], 45.0, 0.1125, 0.01875));
+        // brickwork's pairs of lines are those of the sign in the hatch catalogue, which is drawn
+        // for 1:50: its tile is the pairs' spacing, its two lines are a pair
+        let sign = crate::hatch::sign(crate::HatchSet::Nen47, 1).expect("the sign for brickwork");
+        let crate::hatch::Mark::Line { points: first, .. } = &sign.marks[0] else { panic!("a line") };
+        let crate::hatch::Mark::Line { points: second, .. } = &sign.marks[1] else { panic!("a line") };
+        let on_model = |millimetres: f64| millimetres * sign.scale[0] * 50.0 / 1000.0;
+        assert_eq!((on_model(sign.tile[0]), on_model(second[0][0] - first[0][0]), sign.angle), (brick.spacing, brick.pair, brick.angle));
+        // only brickwork under NEN 47 has pairs
+        assert!(DrawingStandard::ALL.into_iter().flat_map(|s| HatchKind::ALL.map(|k| (s, k))).all(|(s, k)| (k.pattern(s).pair > 0.0) == (s == DrawingStandard::Nen47 && k == HatchKind::Brick)));
         assert!(HatchKind::Insulation.pattern(DrawingStandard::Nen47).zigzag);
         assert!(HatchKind::Concrete.pattern(DrawingStandard::Din1356).crossed, "reinforced concrete is crossed in DIN 1356");
         assert_eq!(HatchKind::Timber.pattern(DrawingStandard::Iso128).angle, 135.0);

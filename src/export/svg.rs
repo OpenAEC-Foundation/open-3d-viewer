@@ -44,21 +44,30 @@ pub fn svg(d: &Drawing2d) -> String {
     let _ = write!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#, w = num(w), h = num(h));
     let _ = write!(s, r##"<rect width="{}" height="{}" fill="#fff"/>"##, num(w), num(h));
     for pen in Pen::ALL {
-        let mut path = String::new();
-        let mut segment = |a: [f64; 2], b: [f64; 2]| {
-            let ((ax, ay), (bx, by)) = (at(a), at(b));
-            let _ = write!(path, "M{ax} {ay}L{bx} {by}");
-        };
-        for l in d.lines.iter().filter(|l| l.pen == pen) {
-            segment(l.a, l.b);
+        // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
+        // what is seen beyond it a width of its own
+        let mut widths = d.widths(pen);
+        let plain = |width: f64| (width - pen.weight_mm()).abs() < 1e-9;
+        if pen == Pen::Dimension && !d.dimensions.is_empty() && !widths.iter().any(|w| plain(*w)) {
+            widths.push(pen.weight_mm());
         }
-        if pen == Pen::Dimension {
-            for [a, b] in d.dimensions.iter().flat_map(|dim| dim.lines()) {
-                segment(a, b);
+        for width in widths {
+            let mut path = String::new();
+            let mut segment = |a: [f64; 2], b: [f64; 2]| {
+                let ((ax, ay), (bx, by)) = (at(a), at(b));
+                let _ = write!(path, "M{ax} {ay}L{bx} {by}");
+            };
+            for l in d.lines.iter().filter(|l| l.pen == pen && (l.width - width).abs() < 1e-9) {
+                segment(l.a, l.b);
             }
-        }
-        if !path.is_empty() {
-            let _ = write!(s, r##"<path d="{path}" fill="none" stroke="#000" stroke-width="{}" stroke-linecap="round"/>"##, num(pen.weight_mm()));
+            if pen == Pen::Dimension && plain(width) {
+                for [a, b] in d.dimensions.iter().flat_map(|dim| dim.lines()) {
+                    segment(a, b);
+                }
+            }
+            if !path.is_empty() {
+                let _ = write!(s, r##"<path d="{path}" fill="none" stroke="#000" stroke-width="{}" stroke-linecap="round"/>"##, num(width));
+            }
         }
     }
     let labels: Vec<Text2d> = d.dimensions.iter().map(|dim| dim.label()).collect();
@@ -70,7 +79,9 @@ pub fn svg(d: &Drawing2d) -> String {
             Align::Right => "end",
         };
         let size = num(t.height * k / CAPITALS);
-        let _ = write!(s, r##"<text x="{x}" y="{y}" font-family="Inter, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="#000">{}</text>"##, escape(&t.text));
+        // the page's y runs down: a turn counter-clockwise is a negative one there
+        let turn = if t.angle == 0.0 { String::new() } else { format!(r#" transform="rotate({} {x} {y})""#, num(-t.angle.to_degrees())) };
+        let _ = write!(s, r##"<text x="{x}" y="{y}" font-family="Inter, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="#000"{turn}>{}</text>"##, escape(&t.text));
     }
     s.push_str("</svg>");
     s
@@ -122,8 +133,8 @@ mod tests {
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(paper),
-            lines: vec![Line2d { pen: Pen::Cut, a: [0.05, 0.05], b: [0.30, 0.05] }, Line2d { pen: Pen::Beyond, a: [0.05, 0.10], b: [0.30, 0.10] }],
-            texts: vec![Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left }],
+            lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
+            texts: vec![Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 }],
             dimensions: Vec::new(),
         }
     }

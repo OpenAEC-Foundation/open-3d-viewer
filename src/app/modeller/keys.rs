@@ -31,8 +31,11 @@ pub enum ModelKey {
     Text,
     /// Lines, a rectangle or a circle drawn on the view shown.
     DrawLine,
+    DrawPolyline,
     DrawRectangle,
     DrawCircle,
+    DrawArc,
+    DrawEllipse,
     /// Another element like the one selected: its tool, with its type and sizes.
     CreateSimilar,
     /// G: grabs the picked points in edit mode, else moves the selection.
@@ -41,6 +44,7 @@ pub enum ModelKey {
     Copy,
     Rotate,
     Mirror,
+    Align,
     Delete,
     LevelUp,
     LevelDown,
@@ -69,6 +73,9 @@ pub const PAIRS: &[(&str, ModelKey)] = &[
     ("se", ModelKey::Section),
     ("tx", ModelKey::Text),
     ("li", ModelKey::DrawLine),
+    ("pl", ModelKey::DrawPolyline),
+    ("ar", ModelKey::DrawArc),
+    ("el", ModelKey::DrawEllipse),
     ("rc", ModelKey::DrawRectangle),
     ("ci", ModelKey::DrawCircle),
     ("cs", ModelKey::CreateSimilar),
@@ -77,6 +84,7 @@ pub const PAIRS: &[(&str, ModelKey)] = &[
     ("co", ModelKey::Copy),
     ("ro", ModelKey::Rotate),
     ("mm", ModelKey::Mirror),
+    ("al", ModelKey::Align),
     ("cl", ModelKey::Column),
     ("bm", ModelKey::Beam),
     ("di", ModelKey::Dimension),

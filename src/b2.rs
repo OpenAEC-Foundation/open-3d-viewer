@@ -41,7 +41,7 @@ icons! {
     "view.orbit", "view.zoom-in", "view.zoom-out", "view.grid", "view.saved", "view.reset-camera",
     "mesh.surface", "mesh.faces", "mesh.closed",
     "section.box", "section.plane-z", "section.fit-selection", "section.reset-box", "section.clear",
-    "transform.mirror", "transform.flip-vertical", "transform.explode",
+    "transform.mirror", "transform.flip-vertical", "transform.explode", "transform.offset", "transform.trim", "transform.extend", "transform.fillet", "transform.chamfer",
     "measure.distance", "measure.angle", "measure.area", "measure.perimeter", "measure.takeoff",
     "edit.clear-all", "edit.undo", "edit.redo",
     "status.success", "status.error", "status.warning", "status.info",
@@ -51,6 +51,7 @@ icons! {
     "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut", "object.edit", "frame.combination",
     "frame.new-door", "frame.new-turn-tilt", "resource.level", "drawing.plan", "drawing.sheet-new",
     "construction.library", "draw.dimension", "draw.text", "drawing.section",
+    "draw.polyline", "draw.rectangle", "draw.circle", "draw.arc", "draw.ellipse",
     // the BIM Validator
     "git.issue", "bcf.import", "bcf.export", "validation.select-specification", "validation.workspace", "note.reply", "team.add",
     "ifc.compare-files", "export.ifc-report", "page.next", "page.previous", "validation.highlight-failures", "validation.clear-highlights",

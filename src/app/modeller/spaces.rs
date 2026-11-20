@@ -382,9 +382,10 @@ impl App {
         self.modeller.space_typing = Some((k, typed));
     }
 
-    /// What every floor plan says and draws by itself, made again from the model: the name and
-    /// the area of each space of its level, and the swing of each door standing on it. Called
-    /// after every change of the model and when a plan is made.
+    /// What every plan says and draws by itself, made again from the model: the name and the
+    /// area of each space of its level, and the swing of each door standing on it; a structural
+    /// plan the labels of its beams and columns and the numbers of its piles instead (see
+    /// `structure`). Called after every change of the model and when a plan is made.
     pub(in crate::app) fn tag_plans(&mut self) {
         use crate::document::{Align, Note, NOTE_HEIGHT};
         let spaces = self.spaces();
@@ -399,13 +400,20 @@ impl App {
                 _ => None,
             })
             .collect();
+        let levels: Vec<(String, f64)> = self.document.levels().iter().map(|l| (l.path.clone(), l.elevation)).collect();
+        let top_word = if self.modeller.top_word.is_empty() { "top" } else { self.modeller.top_word };
+        let model = &self.modeller.model;
         self.document.set_plan_tags(|plan| {
+            if plan.kind.structural() {
+                let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);
+                return (super::structure::tags(model, &plan.level, elevation, plan.scale, top_word), Vec::new());
+            }
             let on = |level: &Option<String>| level.as_deref().is_none_or(|l| l == plan.level);
             let line = plan.scale * NOTE_HEIGHT * 1.6;
             let mut notes = Vec::new();
             for s in spaces.iter().filter(|s| on(&s.level)) {
                 let middle = s.outline.iter().sum::<DVec2>() / s.outline.len() as f64;
-                let note = |text: String, down: f64| Note { at: [middle.x, middle.y - down], text, size: NOTE_HEIGHT, align: Align::Center, angle: 0.0, face: crate::typeface::Face::default() };
+                let note = |text: String, down: f64| Note { at: [middle.x, middle.y - down], text, size: NOTE_HEIGHT, align: Align::Center, angle: 0.0, face: crate::typeface::Face::default(), level: false };
                 notes.push(note(s.name.clone(), 0.0));
                 notes.push(note(format!("{:.2} m²", s.area), line));
             }
@@ -596,7 +604,7 @@ mod tests {
         let (a, b) = (DVec2::from_array(swing[0][0]), DVec2::from_array(swing[0][1]));
         assert!((a - DVec2::new(2.55, 0.0)).length() < 1e-9 && (b - DVec2::new(2.55, 0.9)).length() < 1e-9, "{a} {b}");
         // drawn as on a sheet, the plan's drawing holds both
-        let drawing = crate::drawing2d::view_drawing(&app.document, &plan, &crate::drawing::Cut::default()).unwrap();
+        let drawing = crate::drawing2d::view_drawing(&app.document, &plan, &crate::drawing::Cut::default(), &crate::drawing2d::Rules::default()).unwrap();
         assert!(drawing.texts.iter().any(|t| t.text == "Space 1") && drawing.lines.len() >= 9);
         // a wall gone, no space, and the plan says none
         app.select_modelled(bim_core::ElementId(2));

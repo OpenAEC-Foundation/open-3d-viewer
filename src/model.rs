@@ -43,6 +43,10 @@ pub struct Layer {
     pub line_elements: Vec<(u64, u32, u32)>,
     /// Images on the surfaces (textured materials and decals), when any vertex shows one.
     pub texturing: Option<Box<Texturing>>,
+    /// A splat scene (3D Gaussian splatting): with `points`, every vertex is the centre of a
+    /// splat and its colour the splat's base colour with its opacity in the fourth byte; drawn
+    /// as sorted, blended Gaussians rather than dots.
+    pub splats: Option<Arc<SplatData>>,
 }
 
 /// The images on a layer's surfaces: per vertex what it shows of which image, and the images.
@@ -76,6 +80,39 @@ pub struct TextureImage {
     pub height: u32,
     /// RGBA8, `width * height * 4` bytes.
     pub rgba: Vec<u8>,
+}
+
+/// What a splat layer has beyond its centres and base colours.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SplatData {
+    /// The covariance of every splat (xx, xy, xz, yy, yz, zz), in the axes of the layer.
+    pub covariances: Vec<[f32; 6]>,
+    /// The degree of the view-dependent colour: 0 to 3.
+    pub sh_degree: u8,
+    /// Its coefficients beyond degree 0, `((degree + 1)^2 - 1) * 3` per splat (each as red,
+    /// green, blue).
+    pub sh: Vec<f32>,
+    /// The turn from the axes of the layer to the axes of the coefficients, row by row.
+    pub sh_frame: [[f32; 3]; 3],
+    /// The base colours are linear, not sRGB.
+    pub linear: bool,
+}
+
+impl SplatData {
+    /// Turns the splats about the vertical (with their layer's centres turned the same way).
+    pub fn turn_z(&mut self, sin: f32, cos: f32) {
+        let r = [[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]];
+        for c in &mut self.covariances {
+            let m = [[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]];
+            // R M R^T
+            let rm: Vec<[f32; 3]> = (0..3).map(|i| [0, 1, 2].map(|j| (0..3).map(|k| r[i][k] * m[k][j]).sum())).collect();
+            let out = |i: usize, j: usize| (0..3).map(|k| rm[i][k] * r[j][k]).sum::<f32>();
+            *c = [out(0, 0), out(0, 1), out(0, 2), out(1, 1), out(1, 2), out(2, 2)];
+        }
+        // a direction of the turned layer is turned back before the old frame
+        let f = self.sh_frame;
+        self.sh_frame = [0, 1, 2].map(|i| [0, 1, 2].map(|j| (0..3).map(|k| f[i][k] * r[j][k]).sum()));
+    }
 }
 
 impl Layer {
@@ -251,6 +288,13 @@ pub struct ProjectData {
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
+    /// The parts elements are made of, where they are of several materials (a modelled wall's
+    /// layers): the layer of the model, the first index and the index count of the part's
+    /// triangles, and its material in `part_materials`; sorted by layer and first index. A cut
+    /// through such an element is a face per part, each hatched as its material.
+    pub parts: Vec<(usize, u32, u32, u32)>,
+    /// What the parts are made of: each material with how a cut through it is hatched.
+    pub part_materials: Vec<crate::hatching::PartMaterial>,
     /// The earth under the terrain a section cuts (Revit, the settings of the site): the height
     /// down to which it is filled (metres) and the name of the material it is hatched as.
     pub earth: Option<(f32, Option<String>)>,
@@ -275,6 +319,9 @@ pub struct ProjectData {
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,
+    /// Values a simulation file gives at the points or cells of its mesh, and where the vertices
+    /// of its layers come from (VTK).
+    pub fields: Option<std::sync::Arc<crate::fields::Fields>>,
     /// Levels: name and elevation (metres), low to high.
     pub levels: Vec<(String, f32)>,
     /// The path the file gives a level, by its name: what its elements and plans name it by. A
@@ -327,6 +374,20 @@ impl ProjectData {
         self.joins = drawings.joins;
         self.drawn = drawings.drawn;
         self.drawings = drawings.drawings;
+    }
+}
+
+impl ProjectData {
+    /// The material (in `part_materials`) of the part that triangle `tri` of `layer` draws,
+    /// when the triangle is of a part.
+    pub fn part_at(&self, layer: usize, tri: usize) -> Option<u32> {
+        if self.parts.is_empty() {
+            return None;
+        }
+        let at = (3 * tri) as u32;
+        let k = self.parts.partition_point(|p| (p.0, p.1) <= (layer, at)).checked_sub(1)?;
+        let (of, first, count, material) = self.parts[k];
+        (of == layer && at < first + count).then_some(material)
     }
 }
 
@@ -948,6 +1009,9 @@ impl Model {
                 for element in &mut layer.elements { element.0 = remap[&element.0]; }
                 if let Some(((sin, cos), pivot)) = turn {
                     turn_about(&mut layer.positions, &mut layer.normals, sin, cos, pivot);
+                    if let Some(splats) = &mut layer.splats {
+                        Arc::make_mut(splats).turn_z(sin as f32, cos as f32);
+                    }
                 }
                 if let Some(t) = moved {
                     translate(&mut layer.positions, t);
@@ -1294,7 +1358,8 @@ pub const MAX_PART_POINTS: usize = 12_000_000;
 /// Splits a point cloud layer into parts of at most `max` points, named as [`split_layer`] does.
 pub fn split_points(mut layer: Layer, max: usize) -> Vec<Layer> {
     let n = layer.vertex_count();
-    if n <= max {
+    // a splat scene stays whole: its loader keeps it within the limit
+    if n <= max || layer.splats.is_some() {
         return vec![layer];
     }
     let count = n.div_ceil(max);

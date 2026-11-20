@@ -81,6 +81,41 @@ pub enum JoinKind {
     /// The second member stops a plate's thickness short of the first's face; a steel plate
     /// against that face takes its end and is bolted to the first member.
     EndPlate(EndPlate),
+    /// The second member stops a gap short of the first's face; a steel plate welded square to
+    /// that face lies against the second's web and is bolted through it: a pinned connection.
+    FinPlate(FinPlate),
+}
+
+/// A fin plate's sizes (metres). Editable geometric defaults, not a checked structural design.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FinPlate {
+    /// The plate's thickness.
+    pub thickness: f64,
+    /// How far the member's end stays from the face the plate is welded to.
+    pub gap: f64,
+    /// From a bolt to the edge of the plate and to the member's end; the bolts are `2 × edge`
+    /// apart, in one line square to the member.
+    pub edge: f64,
+    /// The bolts' diameter, and their holes'.
+    pub bolt: f64,
+    pub hole: f64,
+    /// How many bolts.
+    pub rows: u32,
+}
+
+impl Default for FinPlate {
+    /// A 10 mm plate, the beam 10 mm from the face, three M20 bolts in 22 mm holes 80 mm apart
+    /// and 40 mm from the edges.
+    fn default() -> Self {
+        Self { thickness: 0.01, gap: 0.01, edge: 0.04, bolt: 0.02, hole: 0.022, rows: 3 }
+    }
+}
+
+impl FinPlate {
+    /// The plate's length from the face it is welded to, and its height.
+    pub fn size(&self) -> (f64, f64) {
+        (self.gap + 2.0 * self.edge, 2.0 * self.edge * self.rows as f64)
+    }
 }
 
 /// An end plate's sizes (metres). Editable geometric defaults, not a checked structural design.
@@ -141,6 +176,7 @@ pub fn cuts(kind: JoinKind, members: &[Member]) -> Result<JoinResult, Refusal> {
             result.trims.push((1, e1, plane));
         }
         JoinKind::EndPlate(plate) => end_plate(first, second, &plate, &mut result)?,
+        JoinKind::FinPlate(plate) => fin_plate(first, second, &plate, &mut result)?,
     }
     Ok(result)
 }
@@ -205,6 +241,60 @@ fn end_plate(first: &Member, second: &Member, plate: &EndPlate, result: &mut Joi
         let into = Axes::new(at - n * BOLT_IN, u, n)?;
         result.parts.push(PartSolid { class: "IfcMechanicalFastener", solid: Solid::extrude(&bolt, &into, BOLT_IN + plate.thickness + BOLT_OUT)?, material: steel() });
         result.removals.push((0, Solid::extrude(&hole, &into, BOLT_IN + 0.005)?));
+    }
+    Ok(())
+}
+
+/// A fin plate between `first` (which runs through) and `second`: the second's end is cut `gap`
+/// short of the first's face; the plate stands square to that face in the plane of the second's
+/// web, against one side of it (a member without a web: against its side), as high as its bolts
+/// need; the bolts, in one line square to the second member, go through the plate and the web,
+/// which gets their holes. The plate must fit the height of the second's profile.
+fn fin_plate(first: &Member, second: &Member, plate: &FinPlate, result: &mut JoinResult) -> Result<(), Refusal> {
+    let positive = |v: f64| v.is_finite() && v > crate::LINEAR_TOLERANCE;
+    if ![plate.thickness, plate.gap, plate.edge, plate.bolt, plate.hole].into_iter().all(positive) || plate.rows == 0 || plate.hole < plate.bolt {
+        return Err(Refusal::NotPositive);
+    }
+    let (which, face) = butt(first, second)?;
+    // n: out of the first member's face towards the second; across and up: the second's profile
+    let n = -face.normal;
+    let (across, up) = (second.axes.x, second.axes.y);
+    let (length, height) = plate.size();
+    let outer = second.profile.outer();
+    let (low, high) = outer.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+    if plate.edge <= plate.hole / 2.0 || height > (high - low) * 0.8 {
+        return Err(Refusal::BoltsDoNotFit);
+    }
+    // half the web: the least the profile's outline lies from the middle of its width (an I's
+    // web between its fillets; a rectangle's side)
+    let middle = (low + high) / 2.0;
+    let web = outer.iter().map(|p| p.x.abs()).fold(f64::INFINITY, f64::min);
+    result.trims.push((1, which, Plane { point: face.point + n * plate.gap, normal: face.normal }));
+    // where the second's axis meets the face, at the middle of its profile's height
+    let (end, _) = second.end_of(which);
+    let foot = end - n * (end - face.point).dot(n) + up * middle;
+    // the plate: from the face along n, half its height up and down, against the web's side
+    let axes = Axes::new(foot + across * web, n, across)?;
+    let h = height / 2.0;
+    let ring = |c: DVec2, d: f64| -> Vec<DVec2> {
+        let k = crate::profile::circle_segments(d / 2.0);
+        (0..k).map(|i| c + DVec2::from_angle(std::f64::consts::TAU * i as f64 / k as f64) * (d / 2.0)).collect()
+    };
+    // in the plate's own frame: x along n, y across its height
+    let spots: Vec<DVec2> = (0..plate.rows).map(|k| DVec2::new(plate.gap + plate.edge, -h + plate.edge * (2 * k + 1) as f64)).collect();
+    let outline = vec![DVec2::new(0.0, -h), DVec2::new(length, -h), DVec2::new(length, h), DVec2::new(0.0, h)];
+    let holes: Vec<Vec<DVec2>> = spots.iter().map(|&c| ring(c, plate.hole)).collect();
+    let steel = || Some(STEEL.to_string());
+    result.parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&Profile::new(outline, holes)?, &axes, plate.thickness)?, material: steel() });
+    // the bolts: through the web and the plate, their heads and nuts past both
+    let bolt = Profile::circle(plate.bolt)?;
+    let hole = Profile::circle(plate.hole)?;
+    for c in spots {
+        let at = axes.point(c);
+        let through = Axes::new(at - across * (2.0 * web + BOLT_OUT), n, across)?;
+        result.parts.push(PartSolid { class: "IfcMechanicalFastener", solid: Solid::extrude(&bolt, &through, 2.0 * web + plate.thickness + 2.0 * BOLT_OUT)?, material: steel() });
+        let drilled = Axes::new(at - across * (2.0 * web + 0.005), n, across)?;
+        result.removals.push((1, Solid::extrude(&hole, &drilled, 2.0 * web + 0.01)?));
     }
     Ok(())
 }

@@ -7,6 +7,7 @@
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
 use crate::drawing::Cut;
+use crate::drawing2d::clip;
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -249,7 +250,7 @@ impl App {
     /// The drawings of views as the sheet layout takes them (`crate::sheet_layout`): the crop, or
     /// else the whole cut, with the points its dimensions measure, around the middle of the
     /// whole cut (the point a placed view's place stands for). Views not cut yet are cut first.
-    fn layout_items(&mut self, views: &[String]) -> Vec<Item> {
+    pub(super) fn layout_items(&mut self, views: &[String]) -> Vec<Item> {
         for view in views {
             self.cut_view(view);
         }
@@ -345,6 +346,7 @@ impl App {
         let mut first = None;
         for (name, (from, to)) in names.iter().zip(lines) {
             if let Some(path) = self.document.add_section_of(SectionKind::Elevation, name, from, to, depth) {
+                self.view_made(&path);
                 first.get_or_insert(path);
             }
         }
@@ -359,6 +361,7 @@ impl App {
         let depth = self.world_bounds().map_or(100.0, |b| f64::from((b.max[0] - b.min[0]).hypot(b.max[1] - b.min[1]))).max(1.0);
         let name = self.document.next_section_name(word);
         if let Some(path) = self.document.add_section(&name, from, to, depth) {
+            self.view_made(&path);
             self.open_plan(&path);
         }
     }
@@ -382,6 +385,7 @@ impl App {
                     crop: marks.and_then(|(_, c)| c),
                     datums: self.view_datums(&v.plan),
                     is_plan: self.document.plan(&v.plan).is_some(),
+                    rules: self.view_rules(&v.plan),
                 }
             })
             .collect();
@@ -447,7 +451,15 @@ impl App {
         };
         if let Some((i, view)) = picked_view {
             rows = rows.push(label(l.text("Schaal", "Scale")));
-            rows = rows.push(choices(SCALES.iter().map(|&scale| small(format!("1:{scale}"), view.scale == scale, Message::SetScale(key.clone(), i, scale))).collect()));
+            // the scales of its kind of drawing, and the one it has
+            let mut scales: Vec<f64> = self.view_scales(&view.plan).into_iter().map(f64::from).collect();
+            if scales.is_empty() {
+                scales = SCALES.to_vec();
+            }
+            if !scales.contains(&view.scale) {
+                scales.push(view.scale);
+            }
+            rows = rows.push(choices(scales.iter().map(|&scale| small(format!("1:{scale}"), view.scale == scale, Message::SetScale(key.clone(), i, scale))).collect()));
             if let Some((_, typed)) = &self.cut_edit {
                 rows = rows.push(
                     row![
@@ -518,6 +530,15 @@ struct Placed {
     datums: Vec<crate::drawing2d::Datum2>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
+    /// How its kind of drawing draws it: the widths of its lines, and whether what is cut is
+    /// hatched.
+    rules: crate::drawing2d::Rules,
+}
+
+/// A line's width on the sheet's canvas (pixels) for its width on paper (millimetres): 0.5 mm as
+/// 1.2 pixels, so the weights of a drawing can be told apart at any zoom.
+fn on_screen(millimetres: f64) -> f32 {
+    (millimetres as f32 * 2.4).max(0.4)
 }
 
 /// A side of a crop: left, right, bottom, top.
@@ -529,26 +550,6 @@ enum Side {
     Top,
 }
 
-/// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky).
-pub(super) fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
-    let d = [b[0] - a[0], b[1] - a[1]];
-    let (mut t0, mut t1) = (0.0f64, 1.0f64);
-    for (p, q) in [(-d[0], a[0] - lo[0]), (d[0], hi[0] - a[0]), (-d[1], a[1] - lo[1]), (d[1], hi[1] - a[1])] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return None;
-            }
-        } else {
-            let r = q / p;
-            if p < 0.0 {
-                t0 = t0.max(r);
-            } else {
-                t1 = t1.min(r);
-            }
-        }
-    }
-    (t0 <= t1).then(|| ([a[0] + t0 * d[0], a[1] + t0 * d[1]], [a[0] + t1 * d[0], a[1] + t1 * d[1]]))
-}
 struct PaperDrawing {
     sheet: Sheet,
     /// Per placed view, in the order of the sheet's views.
@@ -928,21 +929,23 @@ impl canvas::Program<Message> for PaperDrawing {
                         }
                     };
                     let per_metre = (fit.scale / self.sheet.views[i].scale) as f32;
-                    super::hatch::draw_fills(&mut frame, &cut, crop, &|q| Some(fit.point(self.to_paper(i, q))), per_metre, None);
+                    if placed.rules.hatched {
+                        super::hatch::draw_fills(&mut frame, &cut, crop, &|q| Some(fit.point(self.to_paper(i, q))), per_metre, None);
+                    }
                     let below = Path::new(|b| {
                         for (a, z) in cut.below.iter().filter_map(|[a, z]| piece(a, z)) {
                             b.move_to(fit.point(self.to_paper(i, a)));
                             b.line_to(fit.point(self.to_paper(i, z)));
                         }
                     });
-                    frame.stroke(&below, Stroke::default().with_color(Color { a: 0.55, ..ink }).with_width(0.6));
+                    frame.stroke(&below, Stroke::default().with_color(Color { a: 0.55, ..ink }).with_width(on_screen(placed.rules.beyond)));
                     let lines = Path::new(|b| {
                         for (a, z) in cut.segments.iter().filter_map(|[a, z]| piece(a, z)) {
                             b.move_to(fit.point(self.to_paper(i, a)));
                             b.line_to(fit.point(self.to_paper(i, z)));
                         }
                     });
-                    frame.stroke(&lines, Stroke::default().with_color(ink).with_width(1.2));
+                    frame.stroke(&lines, Stroke::default().with_color(ink).with_width(on_screen(placed.rules.cut)));
                     // the lines the view's filters give a pen of their own
                     for inked in &cut.inked {
                         let lines = Path::new(|b| {
@@ -951,7 +954,7 @@ impl canvas::Program<Message> for PaperDrawing {
                                 b.line_to(fit.point(self.to_paper(i, z)));
                             }
                         });
-                        let (plain, width) = if inked.cut { (ink, 1.2) } else { (Color { a: 0.55, ..ink }, 0.6) };
+                        let (plain, width) = if inked.cut { (ink, on_screen(placed.rules.cut)) } else { (Color { a: 0.55, ..ink }, on_screen(placed.rules.beyond)) };
                         let color = inked.ink.color.map_or(plain, |c| Color::from_rgb8(c[0], c[1], c[2]));
                         frame.stroke(&lines, Stroke::default().with_color(color).with_width(inked.ink.wide(width, inked.cut)));
                     }
@@ -983,7 +986,9 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             for (k, note) in placed.notes.iter().enumerate() {
                 let picked = self.pick == Some(SheetPick::Note(i, k));
-                super::marks::draw_note_in(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
+                let at = fit.point(self.to_paper(i, note.at));
+                let at = if note.level { super::marks::draw_level_mark(&mut frame, at, Self::note_size(&fit), if picked { p.accent } else { ink }) } else { at };
+                super::marks::draw_note_in(&mut frame, at, &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
                 if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
                 }
@@ -1475,9 +1480,10 @@ mod tests {
     #[test]
     fn a_drag_on_a_placed_view_moves_it() {
         let (_, _, _, drawing) = sheet_with_plan(false);
-        // the frame: the 8 x 5 m room at 1:100, with 5 mm around it, in the middle of A3
+        // the frame: the 8 x 5 m room at 1:50 (a floor plan's usual scale in the drawing
+        // standard), with 5 mm around it, in the middle of A3
         let (lo, hi, middle) = drawing.frame(0);
-        assert!((hi[0] - lo[0] - 0.09).abs() < 1e-9 && (hi[1] - lo[1] - 0.06).abs() < 1e-9, "{lo:?} {hi:?}");
+        assert!((hi[0] - lo[0] - 0.17).abs() < 1e-9 && (hi[1] - lo[1] - 0.11).abs() < 1e-9, "{lo:?} {hi:?}");
         assert_eq!(middle, [4.0, 2.5]);
         assert_eq!(drawing.view_at([0.21, 0.1485]), Some(0));
         assert_eq!(drawing.view_at([0.03, 0.03]), None);

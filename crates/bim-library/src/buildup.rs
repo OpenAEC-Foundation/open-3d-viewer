@@ -88,11 +88,14 @@ pub struct BuildUp {
     /// file keeps the name it had there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// An NL-SfB code of its own, in place of the rule's ("21.22").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl BuildUp {
     pub fn new(id: &str, role: Role, layers: Vec<Layer>) -> Self {
-        Self { id: id.into(), role, layers, name: None }
+        Self { id: id.into(), role, layers, name: None, code: None }
     }
 
     /// The total thickness.
@@ -177,6 +180,10 @@ pub fn starter() -> Vec<BuildUp> {
         one("wall.brick-210", Wall, "brick", 0.21),
         one("wall.timber-120", Wall, "timber", 0.12),
         one("wall.timber-170", Wall, "timber", 0.17),
+        one("wall.clt-100", Wall, "clt", 0.1),
+        one("wall.clt-120", Wall, "clt", 0.12),
+        one("wall.clt-140", Wall, "clt", 0.14),
+        one("wall.clt-160", Wall, "clt", 0.16),
         one("wall.steel-10", Wall, "steel", 0.01),
         one("wall.insulation-184", Wall, "insulation", 0.184),
         one("floor.concrete-150", Floor, "concrete", 0.15),
@@ -187,8 +194,14 @@ pub fn starter() -> Vec<BuildUp> {
         one("floor.hollow-core-260", Floor, "hollow-core-concrete", 0.26),
         one("floor.hollow-core-320", Floor, "hollow-core-concrete", 0.32),
         one("floor.timber-200", Floor, "timber", 0.2),
+        one("floor.clt-160", Floor, "clt", 0.16),
+        one("floor.clt-200", Floor, "clt", 0.2),
+        one("floor.clt-240", Floor, "clt", 0.24),
+        one("floor.clt-280", Floor, "clt", 0.28),
         b("floor.screed-concrete-insulation-350", Floor, &[("screed", 0.05), ("concrete", 0.2), ("insulation", 0.1)]),
         b("roof.flat-concrete-pir", Roof, &[("insulation-pir", 0.12), ("concrete", 0.2)]),
+        one("roof.clt-140", Roof, "clt", 0.14),
+        one("roof.clt-180", Roof, "clt", 0.18),
         b("roof.pitched-timber", Roof, &[("insulation", 0.15), ("timber", 0.05)]),
         one("ceiling.gypsum-12.5", Ceiling, "gypsum-board", 0.0125),
         one("ceiling.suspended-20", Ceiling, "gypsum-board", 0.02),

@@ -26,12 +26,16 @@ impl ModelKey {
             ModelKey::DrawLine => l.text("Lijn", "Line"),
             ModelKey::DrawRectangle => l.text("Rechthoek", "Rectangle"),
             ModelKey::DrawCircle => l.text("Cirkel", "Circle"),
+            ModelKey::DrawPolyline => l.text("Polylijn", "Polyline"),
+            ModelKey::DrawArc => l.text("Boog", "Arc"),
+            ModelKey::DrawEllipse => l.text("Ellips", "Ellipse"),
             ModelKey::CreateSimilar => l.text("Nog zo een maken", "Create similar"),
             ModelKey::Grab => l.text("Pakken: de selectie volgt de muis", "Grab: the selection follows the mouse"),
             ModelKey::Move => TransformKind::Move.label(l),
             ModelKey::Copy => TransformKind::Copy.label(l),
             ModelKey::Rotate => TransformKind::Rotate.label(l),
             ModelKey::Mirror => TransformKind::Mirror.label(l),
+            ModelKey::Align => TransformKind::Align.label(l),
             ModelKey::Delete => l.text("Verwijderen", "Delete"),
             ModelKey::LevelUp => l.text("Niveau hoger", "Level up"),
             ModelKey::LevelDown => l.text("Niveau lager", "Level down"),
@@ -104,11 +108,14 @@ impl App {
                 let _ = self.update(Message::NoteTool(!self.note_tool));
             }
             ModelKey::CreateSimilar => self.create_similar(l),
-            ModelKey::DrawLine | ModelKey::DrawRectangle | ModelKey::DrawCircle => {
+            ModelKey::DrawLine | ModelKey::DrawPolyline | ModelKey::DrawRectangle | ModelKey::DrawCircle | ModelKey::DrawArc | ModelKey::DrawEllipse => {
                 use crate::app::marks::DrawKind;
                 let kind = match key {
                     ModelKey::DrawLine => DrawKind::Line,
+                    ModelKey::DrawPolyline => DrawKind::Polyline,
                     ModelKey::DrawRectangle => DrawKind::Rectangle,
+                    ModelKey::DrawArc => DrawKind::Arc,
+                    ModelKey::DrawEllipse => DrawKind::Ellipse,
                     _ => DrawKind::Circle,
                 };
                 let _ = self.update(Message::DrawTool(Some(kind)));
@@ -128,6 +135,7 @@ impl App {
             ModelKey::Copy => self.begin_transform(TransformKind::Copy),
             ModelKey::Rotate => self.begin_transform(TransformKind::Rotate),
             ModelKey::Mirror => self.begin_transform(TransformKind::Mirror),
+            ModelKey::Align => self.begin_transform(TransformKind::Align),
             ModelKey::Delete => {
                 let _ = self.update(Message::DeletePicked);
             }
@@ -228,8 +236,10 @@ mod tests {
     fn the_apps_own_letters_still_work_in_the_modeller() {
         let mut studio = modelling_studio();
         studio.app.camera.ortho = true;
-        // p: perspective, a shortcut of the app the Modeller has no use for
+        // p: perspective, a shortcut of the app, after the Modeller waited for pl (a polyline)
         press(&mut studio, "p");
+        assert!(studio.app.camera.ortho, "it waits for the l");
+        studio.expire_keys(web_time::Instant::now() + web_time::Duration::from_secs(1));
         assert!(!studio.app.camera.ortho);
         // f: fit, after the Modeller waited for fl (a wall to fit to)
         let form = bim_core::element::PlanarForm::Wall { start: glam::DVec2::ZERO, end: glam::DVec2::new(4.0, 0.0), base: 0.0, height: 3.0 };

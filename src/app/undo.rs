@@ -1,25 +1,98 @@
 //! Undo and redo across what the app changes: what is shown (hide, show, layers: kept per view)
 //! and the modelled elements (every step that changes the model: placing, moving, joining,
 //! deleting, typing a size). Ctrl+Z takes back the last of either, in the order they were made.
+//!
+//! The project's library and its drawing standard are part of a step of the model: a change of a
+//! type is taken back with the elements that followed it, and a change of the library or the
+//! standard alone is a step too, with or without a model. Typing in one field of a Library
+//! editor that takes every keystroke, or dragging its sliders, is one step.
 
+use super::buildups::BuildUpMessage;
+use super::materials::MaterialMessage;
 use super::modeller::Step;
-use super::App;
+use super::profiles::ProfileMessage;
+use super::standards::{Field, Setting, StandardMessage};
+use super::{App, Message};
+use bim_library::Lang;
 use std::sync::Arc;
 
+/// A field of a Library editor that changes the library or the standard at every keystroke, or
+/// a slider at every move: what is typed or dragged there in one go is one step to take back.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Typing {
+    /// The name of a material (its key) in a language.
+    MaterialName(String, Lang),
+    /// The colour of a material: typed, or a channel at a time.
+    MaterialColour(String),
+    /// A field of the house style.
+    House(super::house::Typed),
+    /// The grade typed for a material (its key).
+    MaterialGrade(String),
+    /// The name of a code in a language.
+    CodeName(String, Lang),
+    /// The name typed for a build-up (its id).
+    BuildUpName(String),
+    /// The name typed for a linear type (its id).
+    ProfileName(String),
+    /// A field of a setting of the drawing standard, in a language.
+    Standard(Setting, Field, Lang),
+}
+
 impl App {
+    /// The field `message` types into, when it is one that takes every keystroke.
+    pub(super) fn typing_of(&self, message: &Message) -> Option<Typing> {
+        match message {
+            Message::Material(MaterialMessage::Named(lang, _)) => Some(Typing::MaterialName(self.material_view.picked.clone()?, *lang)),
+            Message::Material(MaterialMessage::Hex(_) | MaterialMessage::Channel(..) | MaterialMessage::Shown) => Some(Typing::MaterialColour(self.material_view.picked.clone()?)),
+            Message::House(super::house::HouseMessage::Typed(field, _, _)) => Some(Typing::House(*field)),
+            Message::Material(MaterialMessage::Graded(_)) => Some(Typing::MaterialGrade(self.material_view.picked.clone()?)),
+            Message::Code(super::codes::CodeMessage::Named(lang, _)) => Some(Typing::CodeName(self.code_view.picked.clone()?, *lang)),
+            Message::BuildUp(BuildUpMessage::Named(_)) => Some(Typing::BuildUpName(self.buildup_view.picked.clone()?)),
+            Message::Profile(ProfileMessage::Named(_)) => Some(Typing::ProfileName(self.profile_view.picked.clone()?)),
+            Message::Standard(StandardMessage::Typed(field, _, lang)) => Some(Typing::Standard(self.standard_view.picked.clone()?, *field, *lang)),
+            _ => None,
+        }
+    }
+
+    /// Before a message is handled: when the history has not looked at the library and the
+    /// drawing standard yet (at the start, or in a project just begun), it notes how they are,
+    /// so the first change of them is a step too.
+    pub(super) fn look_at_setup(&mut self) {
+        let base = &mut self.modeller.base;
+        if base.library.is_none() {
+            base.library = Some(Arc::new(self.library.clone()));
+        }
+        if base.standard.is_none() {
+            base.standard = Some(Arc::new(self.standard.clone()));
+        }
+        if base.house.is_none() {
+            base.house = Some(Arc::new(self.house.clone()));
+        }
+    }
+
+    /// Whether the project's library or its drawing standard is no longer as the history last
+    /// saw it.
+    fn setup_changed(&mut self) -> bool {
+        self.look_at_setup();
+        let base = &self.modeller.base;
+        base.library.as_deref() != Some(&self.library) || base.standard.as_deref() != Some(&self.standard) || base.house.as_deref() != Some(&self.house)
+    }
+
     /// A move being made in edit mode or with a grip: the model changes at every move of the
     /// cursor, and is one step once it is put down.
     fn moving(&self) -> bool {
         self.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some()) || self.modeller.grab.is_some()
     }
 
-    /// After any message: when the modelled elements changed, the model as it was goes into the
-    /// history, as one step to take back.
+    /// After any message: when the modelled elements, the library or the drawing standard
+    /// changed, the project as it was goes into the history, as one step to take back.
     pub(super) fn keep_model_history(&mut self) {
         if self.moving() {
             return;
         }
-        if !self.modeller.touched {
+        let typing = self.step_typing.take();
+        let setup_changed = self.setup_changed();
+        if !self.modeller.touched && !setup_changed {
             // the levels changed without the model (a level of the form, a file added): no step,
             // and what later steps are measured against has them
             if self.document.levels() != self.modeller.base.levels.as_slice() {
@@ -29,19 +102,41 @@ impl App {
         }
         self.modeller.touched = false;
         let base = &self.modeller.base;
-        if self.modeller.model == *base.model && self.modeller.taken == base.taken && self.modeller.project_file == base.project_file && self.document.levels() == base.levels.as_slice() {
+        let model_same = self.modeller.model == *base.model;
+        if model_same && self.modeller.taken == base.taken && self.modeller.project_file == base.project_file && self.document.levels() == base.levels.as_slice() && !setup_changed {
             return;
         }
-        let now = self.modelled_step();
+        // (a step that left the elements as they were shares them with the step before)
+        let model = if model_same { base.model.clone() } else { Arc::new(self.modeller.model.clone()) };
+        let now = self.modelled_step_of(model);
         let before = std::mem::replace(&mut self.modeller.base, now);
+        // typing on in the field the last step was typed in is that step: what is kept to go
+        // back to is the project before its first keystroke
+        if typing.is_some() && typing == self.last_typing {
+            return;
+        }
         self.modeller.history.record(before);
         self.note_step(true);
+        self.last_typing = typing;
     }
 
-    /// The modelled project as it is now: its elements, the walls taken over from opened files
-    /// and the document it became.
+    /// The modelled project as it is now: its elements, the walls taken over from opened files,
+    /// the document it became, and its library and drawing standard.
     fn modelled_step(&self) -> Step {
-        Step { model: Arc::new(self.modeller.model.clone()), taken: self.modeller.taken.clone(), project_file: self.modeller.project_file.clone(), levels: Arc::new(self.document.levels().to_vec()) }
+        self.modelled_step_of(Arc::new(self.modeller.model.clone()))
+    }
+
+    /// The modelled project as it is now, its elements being `model`.
+    fn modelled_step_of(&self, model: Arc<bim_core::Model>) -> Step {
+        Step {
+            model,
+            taken: self.modeller.taken.clone(),
+            project_file: self.modeller.project_file.clone(),
+            levels: Arc::new(self.document.levels().to_vec()),
+            library: Some(Arc::new(self.library.clone())),
+            standard: Some(Arc::new(self.standard.clone())),
+            house: Some(Arc::new(self.house.clone())),
+        }
     }
 
     /// A step went into a history (`modelled`: the model's, else the view's): it is the next to
@@ -49,6 +144,8 @@ impl App {
     pub(super) fn note_step(&mut self, modelled: bool) {
         self.undo_trail.push(modelled);
         self.redo_trail.clear();
+        // (typing after another step is a step of its own)
+        self.last_typing = None;
         if modelled {
             self.history.clear_redo();
         } else {
@@ -91,6 +188,25 @@ impl App {
     /// Shows the modelled project as `step` has it, out of edit mode and with no step begun: its
     /// elements, and of the opened files the walls that were not taken over yet.
     fn restore_modelled(&mut self, step: Step) {
+        // the library and the drawing standard as they stood: a type is taken back with the
+        // elements that followed it
+        let mut setup = false;
+        if let Some(library) = step.library.as_ref().filter(|library| ***library != self.library) {
+            self.library = (**library).clone();
+            setup = true;
+        }
+        if let Some(standard) = step.standard.as_ref().filter(|standard| ***standard != self.standard) {
+            self.standard = (**standard).clone();
+            setup = true;
+        }
+        if let Some(house) = step.house.as_ref().filter(|house| ***house != self.house) {
+            self.house = (**house).clone();
+            self.house_view = super::house::HouseView { sheet: self.house_view.sheet.take(), ..Default::default() };
+        }
+        if setup {
+            self.settle_library_editors();
+        }
+        self.last_typing = None;
         self.modeller.model = (*step.model).clone();
         self.modeller.project_file = step.project_file.clone();
         // the levels as they stood: a level's move is taken back with what it moved
@@ -103,7 +219,10 @@ impl App {
         self.modeller.points.clear();
         self.modeller.aim = None;
         self.modeller.typing = None;
-        self.show_modelled();
+        // (a project with no model, in Library, gets none shown by a step taken back)
+        if self.modeller.shown.is_some() || !self.modeller.model.is_empty() {
+            self.show_modelled();
+        }
         self.modeller.touched = false;
     }
 
@@ -157,7 +276,6 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::modeller::ModelTool;
-    use crate::app::Message;
 
     /// An app in a new model.
     fn modelling() -> App {
@@ -203,6 +321,93 @@ mod tests {
         place(&mut app, [0.0, 2.0], [4.0, 2.0]);
         assert!(!app.can_redo());
         assert_eq!(app.modeller.model.len(), 1);
+    }
+
+    #[test]
+    fn a_change_of_the_library_is_a_step_with_or_without_a_model() {
+        let mut app = App::default();
+        let materials = app.library.materials.len();
+        // the first message of all: the history has the library as it was before it
+        let _ = app.update(Message::Material(MaterialMessage::Add));
+        assert_eq!(app.library.materials.len(), materials + 1);
+        assert!(app.can_undo());
+        // taken back: the material is gone, its editor lets go of it, and no model is shown
+        // for it
+        let _ = app.update(Message::Undo);
+        assert_eq!((app.library.materials.len(), app.material_view.picked.clone(), app.modeller.shown, app.models.len()), (materials, None, None, 0));
+        assert!(!app.can_undo() && app.can_redo());
+        let _ = app.update(Message::Redo);
+        assert_eq!(app.library.materials.len(), materials + 1);
+        // a message that changes nothing is no step
+        let _ = app.update(Message::Material(MaterialMessage::Pick("brick".into())));
+        let _ = app.update(Message::Undo);
+        assert!(app.library.materials.len() == materials && !app.can_undo());
+    }
+
+    #[test]
+    fn typing_in_one_field_is_one_step() {
+        let mut app = App::default();
+        let _ = app.update(Message::Material(MaterialMessage::Pick("brick".into())));
+        let was = app.library.material("brick").unwrap().clone();
+        let brick = |app: &App| app.library.material("brick").unwrap().clone();
+        // a name, a keystroke at a time
+        for typed in ["b", "ba", "bak", "baks", "bakst", "bakste", "bakstee", "baksteen"] {
+            let _ = app.update(Message::Material(MaterialMessage::Named(Lang::Nl, typed.into())));
+        }
+        assert_eq!(brick(&app).name(Lang::Nl), "baksteen");
+        // its colour: a slider dragged and let go, then typed
+        for value in [10, 60, 120] {
+            let _ = app.update(Message::Material(MaterialMessage::Channel(0, value)));
+        }
+        let _ = app.update(Message::Material(MaterialMessage::Shown));
+        let _ = app.update(Message::Material(MaterialMessage::Hex("#102030".into())));
+        assert_eq!(brick(&app).colour, [16, 32, 48]);
+        // one step back is the colour before the slider moved; what was being typed is
+        // forgotten, so the fields show what is there
+        let _ = app.update(Message::Undo);
+        assert_eq!((brick(&app).colour, brick(&app).name(Lang::Nl).to_string()), (was.colour, "baksteen".to_string()));
+        assert_eq!((app.material_view.hex.clone(), app.material_view.name.clone()), (None, None));
+        // one more is the name before its first keystroke
+        let _ = app.update(Message::Undo);
+        assert_eq!(brick(&app), was);
+        assert!(!app.can_undo());
+        // typing after a step taken back, and in another language, are steps of their own
+        let _ = app.update(Message::Material(MaterialMessage::Named(Lang::Nl, "klinker".into())));
+        let _ = app.update(Message::Material(MaterialMessage::Named(Lang::En, "clinker".into())));
+        let _ = app.update(Message::Undo);
+        assert_eq!((brick(&app).name(Lang::Nl).to_string(), brick(&app).name(Lang::En).to_string()), ("klinker".to_string(), was.name(Lang::En).to_string()));
+        let _ = app.update(Message::Undo);
+        assert_eq!(brick(&app), was);
+    }
+
+    #[test]
+    fn the_drawing_standard_is_taken_back_too() {
+        let mut app = App::default();
+        let kinds = app.standard.kinds.len();
+        let _ = app.update(Message::Standard(StandardMessage::AddKind));
+        assert_eq!(app.standard.kinds.len(), kinds + 1);
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.standard.kinds.len(), kinds);
+        let _ = app.update(Message::Redo);
+        assert_eq!(app.standard.kinds.len(), kinds + 1);
+    }
+
+    #[test]
+    fn a_library_step_between_model_steps_is_taken_back_in_its_turn() {
+        let mut app = modelling();
+        place(&mut app, [0.0, 0.0], [4.0, 0.0]);
+        let one = app.modeller.model.clone();
+        let materials = app.library.materials.len();
+        let _ = app.update(Message::Material(MaterialMessage::Add));
+        place(&mut app, [4.0, 0.0], [4.0, 3.0]);
+        // the second wall goes first, and the library keeps its new material
+        let _ = app.update(Message::Undo);
+        assert_eq!((app.modeller.model.clone(), app.library.materials.len()), (one.clone(), materials + 1));
+        // then the material, and the first wall stands
+        let _ = app.update(Message::Undo);
+        assert_eq!((app.modeller.model.clone(), app.library.materials.len()), (one, materials));
+        let _ = app.update(Message::Undo);
+        assert!(app.modeller.model.is_empty() && app.library.materials.len() == materials && !app.can_undo());
     }
 
     #[test]

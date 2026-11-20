@@ -2,18 +2,20 @@
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
-//!                  [--language en|nl] [--product viewer|modeller|validator|docs|gis|pointcloud] [--no-remote]
+//!                  [--language en|nl] [--product viewer|modeller|validator|docs|gis|ifcx|library|planner|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,supports,loads,next-set,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
-//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
+//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME] [--project NAME]... [--zoom STEPS,X,Y]
 //!                  [--recent PATH]... [--docs FOLDER [--doc FILE]] [--gis PLACE (an address or coordinates: its parcels and buildings are fetched) [--map background|aerial] [--soundings] [--borings]]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc [--schema IFC4X3]   (convert without a window)
+//!   open-3d-viewer FILE --build-film OUT.mp4|OUT.usda [--film-seconds 20]   (how it is built; .mp4 needs Blender)
+//!   open-3d-viewer FILE --render OUT.png   (a still rendered by Blender)
 //!   open-3d-viewer FILE.ifcx --element-drawings FOLDER [--drawing-format pdf|dxf|dwg|svg|png|ifccad]
 //!                  (a drawing of every prefab unit of the project's timber frames, without a window)
 //!   open-3d-viewer FILE.ifc --check OUT.html|json|csv [--ids FILE.ids] [--rules NAME] [--issues OUT.bcf]
@@ -55,6 +57,10 @@ struct Args {
     mesh: Option<String>,
     /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
     draft: Option<String>,
+    /// Views laid in the 3D view for `--screenshot` (the "In 3D" switch of a view), by name.
+    project: Vec<String>,
+    /// Zoom for `--screenshot`: wheel steps towards a point of the 3D view (x and y from -1 to 1).
+    zoom: Option<[f32; 3]>,
     /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
     pick: Option<u64>,
     /// For `--screenshot` of the Validator: a BCF file to open, an IDS to check on, and what
@@ -95,6 +101,12 @@ struct Args {
     /// Do not take remote control commands (the MCP server).
     no_remote: bool,
     save_as: Option<PathBuf>,
+    /// `--build-film`: the film of how the model is built (`.mp4`, or `.usda` for its stage
+    /// alone), and how many seconds it runs.
+    build_film: Option<PathBuf>,
+    /// `--render`: a still of the model, rendered by Blender.
+    render: Option<PathBuf>,
+    film_seconds: Option<f32>,
     /// `--element-drawings`: the folder to write the drawings of the timber frames' prefab units
     /// into, and the format to write them in (PDF unless it says otherwise).
     element_drawings: Option<PathBuf>,
@@ -128,7 +140,7 @@ fn parse_args() -> Result<Args, String> {
             "--language" => {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
-            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|docs|gis|pointcloud")?),
+            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|docs|gis|ifcx|library|planner|pointcloud")?),
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|extensions|feedback|cloud")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
@@ -136,6 +148,11 @@ fn parse_args() -> Result<Args, String> {
             "--saved-view" => args.saved_view = Some(value()?),
             "--mesh" => args.mesh = Some(value()?),
             "--draft" => args.draft = Some(value()?),
+            "--project" => args.project.push(value()?),
+            "--zoom" => {
+                let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--zoom STEPS,X,Y")).collect::<Result<_, _>>()?;
+                args.zoom = Some(<[f32; 3]>::try_from(v).map_err(|_| "--zoom STEPS,X,Y")?);
+            }
             "--pick" => args.pick = Some(value()?.parse().map_err(|_| "--pick takes an element id")?),
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
             "--ids" => args.ids = Some(PathBuf::from(value()?)),
@@ -199,6 +216,9 @@ fn parse_args() -> Result<Args, String> {
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
+            "--build-film" => args.build_film = Some(PathBuf::from(value()?)),
+            "--render" => args.render = Some(PathBuf::from(value()?)),
+            "--film-seconds" => args.film_seconds = Some(value()?.parse().map_err(|_| "--film-seconds N")?),
             "--element-drawings" => args.element_drawings = Some(PathBuf::from(value()?)),
             "--drawing-format" => args.drawing_format = Some(value()?),
             "--check" => args.check = Some(PathBuf::from(value()?)),
@@ -258,6 +278,10 @@ pub fn main_as(edition: crate::product::Edition) {
         bench::run(file, args.frames.unwrap_or(300), args.throughput)
     } else if let Some(out) = &args.save_as {
         save_as(&args, out)
+    } else if let Some(out) = &args.build_film {
+        build_film(&args, out)
+    } else if let Some(out) = &args.render {
+        render_still(&args, out)
     } else if let Some(out) = &args.element_drawings {
         element_drawings(&args, out)
     } else if let Some(out) = &args.check {
@@ -293,6 +317,28 @@ fn keep_crashes() {
         }
         before(info);
     }));
+}
+
+/// `--render`: loads the file and writes a still of it, rendered by Blender from where Blender
+/// finds it shows well.
+fn render_still(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--render needs a FILE to render")?;
+    let model = loaders::load(file)?;
+    let start = web_time::Instant::now();
+    let said = crate::build_film::still(&model, out, None)?;
+    println!("{} -> {} ({said}) in {:.1} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
+}
+
+/// `--build-film`: loads the file and writes the film of how it is built (through Blender), or
+/// its USD stage.
+fn build_film(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--build-film needs a FILE to film")?;
+    let model = loaders::load(file)?;
+    let start = web_time::Instant::now();
+    let said = crate::build_film::render(&model, out, args.film_seconds.unwrap_or(crate::build_film::SECONDS))?;
+    println!("{} -> {} ({said}) in {:.1} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
 }
 
 /// `--save-as`: loads the file and writes it in the format of `out`'s extension.
@@ -506,7 +552,12 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let viewport = studio.viewport_in(w, h);
     let app = &mut studio.app;
     app.viewport_size = viewport;
-    if let Some(file) = &args.file {
+    // a project file: its files, each put back where the project had it
+    let project = args.file.as_ref().and_then(|file| Some((file, crate::app::project_file::Project::peek(file)?)));
+    if let Some((file, project)) = project {
+        app.initial_view = args.view;
+        app.open_project_now(file, project)?;
+    } else if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(
             "loaded {}: {} layers, {} triangles, {} points in {:.2} s",
@@ -545,6 +596,10 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             use crate::structural::diagrams::{Change, Force};
             let change = match word.to_ascii_lowercase().as_str() {
                 "deformed" => Some(Change::Deformed),
+                "plates" => Some(Change::Plates),
+                "plate-mesh" => Some(Change::PlateMeshOn(true)),
+                value if value.starts_with("plate-value-") => value["plate-value-".len()..].parse().ok().map(Change::PlateValue),
+                "reactions-xyz" => Some(Change::ReactionsAs(crate::structural::diagrams::ReactionsAs::Components)),
                 "reactions" => Some(Change::Reactions),
                 "supports" => Some(Change::Supports),
                 "loads" => Some(Change::Loads),
@@ -596,7 +651,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         }
         if let Some(name) = &args.draft {
             let model = app.model.clone().ok_or("no model")?;
-            let i = model.project.drafts.iter().position(|d| &d.name == name).ok_or(format!("no legend or drafting view {name} in the file"))?;
+            let i = model.project.drafts.iter().position(|d| &d.name == name).ok_or_else(|| format!("no legend or drafting view {name} in the file; it has: {}", model.project.drafts.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(" | ")))?;
             let _ = app.update(Message::OpenDraft(i));
             if let Some(element) = args.pick {
                 app.pick_drawn(element);
@@ -608,6 +663,17 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let path = plan.or_else(|| document.sections().iter().find(|s| &s.name == name).map(|s| s.path.clone())).ok_or(format!("no drawing {name} in the file"))?;
             let _ = app.update(Message::OpenPlan(Arc::from(path.as_str())));
             app.finish_animation();
+        }
+        for name in &args.project {
+            let document = app.document_now();
+            let plan = document.plans().iter().find(|p| &p.name == name).map(|p| p.path.clone());
+            let path = plan.or_else(|| document.sections().iter().find(|s| &s.name == name).map(|s| s.path.clone())).ok_or(format!("no drawing {name} in the file"))?;
+            let _ = app.update(Message::ProjectView(Arc::from(path.as_str())));
+        }
+        if let Some([steps, x, y]) = args.zoom {
+            app.finish_animation();
+            let aspect = app.aspect();
+            app.camera.zoom_at(steps, (x, y), aspect);
         }
     }
     // `--gis PLACE`: the place found, its surroundings fetched and the GIS tab shown

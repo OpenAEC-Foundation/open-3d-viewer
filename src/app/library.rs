@@ -82,16 +82,7 @@ pub fn lang(l: Language) -> Lang {
     }
 }
 
-fn role_label(role: Role, l: Language) -> &'static str {
-    match role {
-        Role::Wall => l.text("Wanden", "Walls"),
-        Role::Floor => l.text("Vloeren", "Floors"),
-        Role::Roof => l.text("Daken", "Roofs"),
-        Role::Ceiling => l.text("Plafonds", "Ceilings"),
-    }
-}
-
-fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
+pub(super) fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
     match group {
         SystemGroup::CurtainWall => l.text("Vliesgevels", "Curtain walls"),
         SystemGroup::Frame => l.text("Kozijnen", "Frames"),
@@ -105,7 +96,7 @@ fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
     }
 }
 
-fn linear_role_label(role: LinearRole, l: Language) -> &'static str {
+pub(super) fn linear_role_label(role: LinearRole, l: Language) -> &'static str {
     match role {
         LinearRole::Column => l.text("Kolom", "Column"),
         LinearRole::Beam => l.text("Balk", "Beam"),
@@ -306,7 +297,7 @@ impl App {
         for role in Role::ALL {
             let group = Group::BuildUps(role);
             let names = lib.names(role, lg);
-            body = body.push(header(role_label(role, l).into(), names.len(), group));
+            body = body.push(header(super::buildups::role_title(role, l).into(), names.len(), group));
             if !open(group) {
                 continue;
             }
@@ -360,7 +351,7 @@ impl App {
         }
 
         // linear types, by role
-        body = body.push(header(l.text("Lijntypen", "Linear types").into(), lib.linear_types.len(), Group::Linear));
+        body = body.push(header(l.text("Staaftypen", "Linear types").into(), lib.linear_types.len(), Group::Linear));
         if open(Group::Linear) {
             for role in LinearRole::ALL {
                 for (id, label) in lib.linear_names(role, lg) {
@@ -386,6 +377,11 @@ impl App {
                 let title = match series {
                     Series::LEqual => format!("L {}", l.text("gelijkzijdig", "equal")),
                     Series::LUnequal => format!("L {}", l.text("ongelijkzijdig", "unequal")),
+                    Series::CfShs => format!("SHS {}", l.text("koudgevormd", "cold-formed")),
+                    Series::CfRhs => format!("RHS {}", l.text("koudgevormd", "cold-formed")),
+                    Series::Flat => l.text("Strippen", "Flat bars").to_string(),
+                    Series::Round => l.text("Rondstaal", "Round bars").to_string(),
+                    Series::Differdinger => l.text("Differdinger (oud)", "Differdinger (old)").to_string(),
                     s => s.name().to_string(),
                 };
                 body = body.push(container(header(title, of.len(), group)).padding(Padding { left: 12.0, ..Padding::ZERO }));
@@ -397,7 +393,7 @@ impl App {
                     let pick = Pick::Steel(s.designation.clone());
                     body = body.push(container(item(name(s.designation.clone()).into(), pick.clone())).padding(Padding { left: 12.0, ..Padding::ZERO }));
                     if view.picked.as_ref() == Some(&pick) {
-                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(s.series.standard())))));
+                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(&s.source())))));
                     }
                 }
             }
@@ -421,14 +417,21 @@ fn small<'a>(s: String, p: Palette) -> Element<'a, Message> {
 }
 
 /// A material's hatch (NEN 47) on a square, and its key.
-fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
-    let sample = Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text };
-    column![canvas_widget(sample).width(Fill).height(60), small(m.key.clone(), p)].spacing(4).into()
+pub(super) fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
+    match m.catalogue_hatch() {
+        Some(hatch) => column![super::libraries::tile_hatch_look(hatch, p, 60.0, super::libraries::HATCH_LOOK_SCALE), small(format!("{} · {}", m.key, hatch.key), p)].spacing(4).into(),
+        None => column![material_hatch(p, m), small(m.key.clone(), p)].spacing(4).into(),
+    }
+}
+
+/// A material's hatch (NEN 47) on a band, as a section through it shows it.
+pub(super) fn material_hatch<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
+    canvas_widget(Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text }).width(Fill).height(60).into()
 }
 
 /// A build-up drawn as a section through its layers, the exterior (or the top) at the top, and
 /// its layers listed.
-fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &BuildUp) -> Element<'a, Message> {
+pub(super) fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &BuildUp) -> Element<'a, Message> {
     let colour = |key: &str| lib.material(key).map_or([175, 182, 195], |m| m.colour);
     let hatch = |key: &str| lib.material(key).map_or(HatchKind::Generic, |m| m.hatch);
     let bands = b.layers.iter().map(|layer| (layer.thickness, hatch(&layer.material), colour(&layer.material))).collect();
@@ -453,9 +456,17 @@ fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &BuildUp) -> El
     column![canvas_widget(Section { bands, depth: total, line: p.text }).width(Fill).height(height), list].spacing(6).into()
 }
 
+/// A build-up's section alone: its layers as bands with their hatches, the exterior or the top up.
+pub(super) fn buildup_section<'a>(p: Palette, lib: &Library, b: &BuildUp) -> Element<'a, Message> {
+    let bands = b.layers.iter().map(|layer| (layer.thickness, lib.material(&layer.material).map_or(HatchKind::Generic, |m| m.hatch), lib.material(&layer.material).map_or([175, 182, 195], |m| m.colour))).collect();
+    let total = b.thickness();
+    let height = (total * 400.0).clamp(24.0, 150.0) as f32;
+    canvas_widget(Section { bands, depth: total, line: p.text }).width(Fill).height(height).into()
+}
+
 /// A system type drawn as its face, a few bays and rows of it as the kernel generates them, with a
 /// section through its layers when it has any, and its grid, members, panels and layers listed.
-fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> Element<'a, Message> {
+pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> Element<'a, Message> {
     let colour = |key: &str| lib.material(key).map_or([175, 182, 195], |m| m.colour);
     let material = |key: &str| lib.material(key).map_or(key.to_string(), |m| m.name(lang(l)).to_string());
     let line = |key: &str, what: String| -> Element<'a, Message> {
@@ -467,12 +478,7 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     let mut list = Column::new().spacing(2);
     let pattern = t.grid.pattern.name(t.group, lang(l)).map_or(String::new(), |n| format!(" · {n}"));
     list = list.push(small(format!("{} {} × {} mm{pattern}", l.text("Raster", "Grid"), mm(t.grid.bay, l), mm(t.grid.row, l)), p));
-    // what the members are: a frame's mullions and transoms, a ceiling's profiles, or joints
-    let members = match t.group {
-        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame => l.text("Stijlen en regels", "Members"),
-        SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
-        SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
-    };
+    let members = member_word(t.group, l);
     list = list.push(line(&t.members.material, format!("{members}: {} {}", material(&t.members.material), size(t.members.width, t.members.depth))));
     if let Some(framing) = t.members.framing {
         list = list.push(small(
@@ -537,16 +543,62 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     }
     let (class, predefined) = t.group.ifc_type();
     list = list.push(small(format!("{class} {predefined}"), p));
+    let mut drawn = column![system_face(p, lib, t)].spacing(6);
+    if !t.layers.is_empty() {
+        drawn = drawn.push(system_cut(p, lib, t));
+    }
+    drawn.push(list).into()
+}
+
+/// A look at a material on a tile: the hatch of a cut through it over a strip of its colour in the
+/// 3D model.
+pub(super) fn material_look<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
+    let c = rgb(m.colour);
+    let colour = container(text("")).width(Fill).height(10).style(move |_| Palette::swatch(c));
+    // its own hatch of the catalogue, where it has one
+    if let Some(hatch) = m.catalogue_hatch() {
+        return column![super::libraries::tile_hatch_look(hatch, p, 56.0, super::libraries::HATCH_LOOK_SCALE), colour].spacing(4).into();
+    }
+    column![canvas_widget(Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text }).width(Fill).height(56), colour].spacing(4).into()
+}
+
+/// A look at a build-up on a tile: its section, `height` high whatever its thickness.
+pub(super) fn buildup_look<'a>(p: Palette, lib: &Library, b: &BuildUp, height: f32) -> Element<'a, Message> {
+    let bands = b.layers.iter().map(|layer| (layer.thickness, lib.material(&layer.material).map_or(HatchKind::Generic, |m| m.hatch), lib.material(&layer.material).map_or([175, 182, 195], |m| m.colour))).collect();
+    canvas_widget(Section { bands, depth: b.thickness(), line: p.text }).width(Fill).height(height).into()
+}
+
+/// A look at a system type on a tile: its face, `height` high.
+pub(super) fn system_look<'a>(p: Palette, lib: &Library, t: &SystemType, height: f32) -> Element<'a, Message> {
+    let face = elevation(t, lib, p.text);
+    // as wide as the face is at that height, so it stands in the middle of its tile
+    let width = ((height - 8.0) * (face.size[0] / face.size[1].max(1e-6)) as f32 + 8.0).clamp(24.0, 168.0);
+    container(canvas_widget(face).width(width).height(height)).width(Fill).align_x(Center).into()
+}
+
+/// What the members of a system of `group` are: a frame's mullions and transoms, a ceiling's
+/// profiles, or joints.
+pub(super) fn member_word(group: SystemGroup, l: Language) -> &'static str {
+    match group {
+        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::SteelFrame => l.text("Stijlen en regels", "Members"),
+        SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
+        SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
+    }
+}
+
+/// A system type's face alone, a few bays and rows of it as the kernel generates them.
+pub(super) fn system_face<'a>(p: Palette, lib: &Library, t: &SystemType) -> Element<'a, Message> {
     let face = elevation(t, lib, p.text);
     // as high as the face's shape asks, in a canvas about 240 wide
     let tall = (240.0 * face.size[1] / face.size[0]).clamp(40.0, 170.0) as f32;
-    let mut drawn = column![canvas_widget(face).width(Fill).height(tall)].spacing(6);
-    if !t.layers.is_empty() {
-        let section = system_section(t, lib, p.text);
-        let height = (section.depth * 400.0).clamp(24.0, 150.0) as f32;
-        drawn = drawn.push(canvas_widget(section).width(Fill).height(height));
-    }
-    drawn.push(list).into()
+    canvas_widget(face).width(Fill).height(tall).into()
+}
+
+/// A section through a system type's face and layers alone, the exterior at the top.
+pub(super) fn system_cut<'a>(p: Palette, lib: &Library, t: &SystemType) -> Element<'a, Message> {
+    let section = system_section(t, lib, p.text);
+    let height = (section.depth * 400.0).clamp(24.0, 150.0) as f32;
+    canvas_widget(section).width(Fill).height(height).into()
 }
 
 /// The face of system type `t` as the kernel generates it, a few bays wide (as wide as a row is
@@ -607,10 +659,7 @@ fn system_section(t: &SystemType, lib: &Library, line: Color) -> Section {
 }
 
 /// A profile drawn as its outline, with its sizes, area and second moments.
-fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&'static str>) -> Element<'a, Message> {
-    let colour = material.map_or([95, 100, 110], |m| m.colour);
-    let rings = shape.rings(1e-4).unwrap_or_default();
-    let size = shape.size();
+pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&str>) -> Element<'a, Message> {
     let mut lines = vec![match *shape {
         ProfileShape::Rectangle { width, depth } => format!("b {} · h {} mm", mm_en(width), mm_en(depth)),
         ProfileShape::Circle { diameter } => format!("d {} mm", mm_en(diameter)),
@@ -630,8 +679,20 @@ fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Materi
     for line in lines {
         list = list.push(small(line, p));
     }
-    let outline = Outline { outer: rings.0, holes: rings.1, size: [size.x, size.y], fill: rgb(colour), line: p.text };
-    column![canvas_widget(outline).width(Fill).height(130), list].spacing(6).into()
+    column![profile_outline(p, shape, material, 130.0), list].spacing(6).into()
+}
+
+/// A profile's outline in its material's colour, `height` pixels high: a look at it. A small one
+/// (a line of a list, a tile to pick) stands in the middle of its width; a large one at the left,
+/// as the sections do.
+pub(super) fn profile_outline<'a, M: 'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, height: f32) -> Element<'a, M> {
+    let small = height < 80.0;
+    let colour = material.map_or([95, 100, 110], |m| m.colour);
+    // a small one needs no finer arcs than its pixels show
+    let rings = shape.rings(if small { 5e-4 } else { 1e-4 }).unwrap_or_default();
+    let size = shape.size();
+    let outline = Outline { outer: rings.0, holes: rings.1, size: [size.x, size.y], fill: rgb(colour), line: p.text, centred: small };
+    canvas_widget(outline).width(Fill).height(height).into()
 }
 
 /// Millimetres as in a designation: whole, or one decimal with a point.
@@ -672,7 +733,7 @@ impl canvas::Program<Message> for Section {
 
 /// A hatch in a band: its fill, then its lines (angle in degrees on paper, spacing in metres on
 /// the model at `scale` px per metre), crossed lines, or one zigzag along the band.
-fn draw_hatch(frame: &mut Frame, band: Rectangle, hatch: bim_library::HatchPattern, scale: f32) {
+pub(super) fn draw_hatch(frame: &mut Frame, band: Rectangle, hatch: bim_library::HatchPattern, scale: f32) {
     frame.fill_rectangle(band.position(), band.size(), rgb(hatch.fill));
     let ink = Stroke::default().with_color(rgb(hatch.line)).with_width(0.8);
     if hatch.zigzag {
@@ -695,16 +756,58 @@ fn draw_hatch(frame: &mut Frame, band: Rectangle, hatch: bim_library::HatchPatte
         return;
     }
     let spacing = (hatch.spacing as f32 * scale).max(3.0);
+    // the second line of each pair, where the lines come in pairs: far enough to be seen as two
+    let pair = (hatch.pair > 0.0).then(|| (hatch.pair as f32 * scale).clamp(2.0, spacing / 2.0));
     for angle in [hatch.angle as f32].into_iter().chain(hatch.crossed.then_some(hatch.angle as f32 + 90.0)) {
-        for (a, b) in hatch_lines(band, angle, spacing) {
-            frame.stroke(&Path::line(a, b), ink);
+        for shift in [Some(0.0), pair].into_iter().flatten() {
+            for (a, b) in hatch_lines(band, angle, spacing, shift) {
+                frame.stroke(&Path::line(a, b), ink);
+            }
         }
     }
 }
 
+/// A hatch of the catalogue over `area`: its fill (the paper where it has none), then its filled
+/// areas, its lines and its dots, at `scale` px per millimetre of paper.
+pub(super) fn draw_tile_hatch(frame: &mut Frame, area: Rectangle, hatch: &bim_library::Hatch, scale: f32) {
+    let drawn = hatch.over([0.0, 0.0], [f64::from(area.width / scale), f64::from(area.height / scale)]);
+    frame.fill_rectangle(area.position(), area.size(), drawn.fill.map_or(Color::WHITE, rgb));
+    let at = |p: &[f64; 2]| Point::new(area.x + p[0] as f32 * scale, area.y + p[1] as f32 * scale);
+    for (points, colour) in &drawn.areas {
+        let outline = Path::new(|b| {
+            b.move_to(at(&points[0]));
+            for point in &points[1..] {
+                b.line_to(at(point));
+            }
+            b.close();
+        });
+        frame.fill(&outline, rgb(*colour));
+    }
+    for strokes in &drawn.lines {
+        let lines = Path::new(|b| {
+            for [from, to] in &strokes.segments {
+                b.move_to(at(from));
+                b.line_to(at(to));
+            }
+        });
+        frame.stroke(&lines, Stroke::default().with_color(rgb(strokes.colour)).with_width((strokes.width as f32 * scale).max(0.8)));
+    }
+    for dots in &drawn.dots {
+        // (a dot no wider than a pixel or two is a square of that size)
+        let side = (dots.width as f32 * scale).max(1.2);
+        let marks = Path::new(|b| {
+            for point in &dots.at {
+                let centre = at(point);
+                b.rectangle(Point::new(centre.x - side / 2.0, centre.y - side / 2.0), Size::new(side, side));
+            }
+        });
+        frame.fill(&marks, rgb(dots.colour));
+    }
+}
+
 /// The parallel lines `spacing` apart at `angle` degrees (anticlockwise on paper, so clockwise on
-/// screen, whose y runs down) clipped to `band`.
-fn hatch_lines(band: Rectangle, angle: f32, spacing: f32) -> Vec<(Point, Point)> {
+/// screen, whose y runs down) clipped to `band`, the whole of them moved `shift` across.
+fn hatch_lines(band: Rectangle, angle: f32, spacing: f32, shift: f32) -> Vec<(Point, Point)> {
     let (sin, cos) = angle.to_radians().sin_cos();
     let d = (cos, -sin); // along the lines, on screen
     let n = (sin, cos); // across them
@@ -712,7 +815,7 @@ fn hatch_lines(band: Rectangle, angle: f32, spacing: f32) -> Vec<(Point, Point)>
     let across: Vec<f32> = corners.iter().map(|c| c.0 * n.0 + c.1 * n.1).collect();
     let (lo, hi) = across.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
     let mut lines = Vec::new();
-    let mut c = (lo / spacing).ceil() * spacing;
+    let mut c = ((lo - shift) / spacing).ceil() * spacing + shift;
     while c <= hi {
         // the line n·p = c through the band: clip p = p0 + t d to the rectangle
         let p0 = (n.0 * c, n.1 * c);
@@ -742,9 +845,11 @@ struct Outline {
     size: [f64; 2],
     fill: Color,
     line: Color,
+    /// In the middle of the canvas's width, not at its left.
+    centred: bool,
 }
 
-impl canvas::Program<Message> for Outline {
+impl<M> canvas::Program<M> for Outline {
     type State = ();
 
     fn draw(&self, _state: &(), renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
@@ -752,8 +857,9 @@ impl canvas::Program<Message> for Outline {
         if self.outer.len() < 3 {
             return vec![frame.into_geometry()];
         }
-        let scale = ((bounds.height - 8.0) / self.size[1].max(1e-6) as f32).min((bounds.width.min(220.0) - 8.0) / self.size[0].max(1e-6) as f32);
-        let centre = Point::new(4.0 + self.size[0] as f32 * scale / 2.0, bounds.height / 2.0);
+        let margin = if self.centred { 2.0 } else { 4.0 };
+        let scale = ((bounds.height - 2.0 * margin) / self.size[1].max(1e-6) as f32).min((bounds.width.min(220.0) - 2.0 * margin) / self.size[0].max(1e-6) as f32);
+        let centre = Point::new(if self.centred { bounds.width / 2.0 } else { margin + self.size[0] as f32 * scale / 2.0 }, bounds.height / 2.0);
         let at = |q: &glam::DVec2| Point::new(centre.x + q.x as f32 * scale, centre.y - q.y as f32 * scale);
         let path = Path::new(|b| {
             for ring in std::iter::once(&self.outer).chain(&self.holes) {
@@ -1027,7 +1133,7 @@ mod tests {
     fn hatch_lines_stay_in_their_band() {
         let band = Rectangle::new(Point::new(10.0, 20.0), Size::new(100.0, 30.0));
         for angle in [0.0, 45.0, 90.0, 135.0] {
-            let lines = hatch_lines(band, angle, 8.0);
+            let lines = hatch_lines(band, angle, 8.0, 0.0);
             assert!(!lines.is_empty(), "{angle}");
             for (a, b) in lines {
                 for q in [a, b] {
@@ -1035,6 +1141,28 @@ mod tests {
                 }
             }
         }
-        assert_eq!(hatch_lines(band, 0.0, 8.0).len(), 4, "horizontal lines 8 px apart in a band 30 high");
+        assert_eq!(hatch_lines(band, 0.0, 8.0, 0.0).len(), 4, "horizontal lines 8 px apart in a band 30 high");
+        // the second lines of pairs: the same lines moved across, those that still fall in the band
+        // (at 24, 32, 40 and 48 the first; at 27, 35 and 43 the second, 51 is outside)
+        let (first, second) = (hatch_lines(band, 0.0, 8.0, 0.0), hatch_lines(band, 0.0, 8.0, 3.0));
+        assert_eq!(second.len(), 3);
+        assert!(first.iter().zip(&second).all(|(a, b)| (b.0.y - a.0.y - 3.0).abs() < 1e-3), "{first:?} {second:?}");
+    }
+
+    #[test]
+    fn brickwork_is_hatched_with_pairs_of_lines_in_a_drawing() {
+        use bim_library::{DrawingStandard, HatchKind};
+        // under NEN 47 the rows come twice, the second their gap across; elsewhere once
+        let pattern: crate::hatching::Pattern = HatchKind::Brick.pattern(DrawingStandard::Nen47).into();
+        assert_eq!(pattern.grids.len(), 2);
+        let (a, b) = (&pattern.grids[0], &pattern.grids[1]);
+        assert_eq!((a.angle, a.offset, a.origin), (b.angle, b.offset, [0.0, 0.0]));
+        let (sin, cos) = a.angle.sin_cos();
+        // (the second row's start lies its gap from the first row, measured across the rows)
+        let across = -sin * b.origin[0] + cos * b.origin[1];
+        let along = cos * b.origin[0] + sin * b.origin[1];
+        assert!((across - 0.01875).abs() < 1e-12 && along.abs() < 1e-12 && (a.offset - 0.1125).abs() < 1e-12, "{b:?}");
+        let din: crate::hatching::Pattern = HatchKind::Brick.pattern(DrawingStandard::Din1356).into();
+        assert_eq!(din.grids.len(), 1);
     }
 }

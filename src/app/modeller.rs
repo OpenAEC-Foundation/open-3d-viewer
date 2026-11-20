@@ -32,6 +32,7 @@ pub(super) mod shape_handles;
 pub mod slab_handles;
 pub mod snaps;
 pub mod spaces;
+pub mod structure;
 pub mod temp_dims;
 pub mod sketch;
 pub mod tops;
@@ -159,7 +160,7 @@ const SYSTEM_PANEL: f64 = 0.02;
 /// The height of what stands on the work plane when no level lies above it.
 const STOREY: f64 = 3.0;
 /// Clicks within this of a point of an element (logical pixels) take that point.
-const SNAP_PIXELS: f32 = 12.0;
+pub(super) const SNAP_PIXELS: f32 = 12.0;
 /// A second point within this angle of the first point's horizontal or vertical is put on it.
 const ORTHO_DEGREES: f64 = 4.0;
 /// Clicks off every snap are rounded to this (metres).
@@ -190,6 +191,12 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// What joins made automatically are called, in the interface language.
     pub join_word: &'static str,
+    /// What the top of a beam is called on a structural plan, in the interface language ("b.k.").
+    pub top_word: &'static str,
+    /// What the pile schedule and its columns are called, in the interface language (see
+    /// `structure::PILE_WORDS`), and the name the schedule has now.
+    pub pile_words: [&'static str; 10],
+    pub pile_schedule: String,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
     /// The length being typed for what a tool draws, in millimetres (see `typed_length`).
@@ -242,6 +249,10 @@ pub struct Modeller {
     /// The model before each step that changed it, to take the step back (`super::undo`).
     /// A move, copy, turn or mirror of the selected elements under way (`super::transform`).
     pub transform: Option<super::transform::Transform>,
+    /// Offset is on (`super::drawn_edit`): the distance typed for it, in millimetres.
+    pub offset: Option<String>,
+    /// Trim, Extend, Fillet or Chamfer is on (`super::drawn_edit`).
+    pub pair_edit: Option<super::drawn_edit::PairEdit>,
     pub history: crate::history::History<Step>,
     /// The project as its last step left it: what a change is measured against.
     pub base: Step,
@@ -264,6 +275,13 @@ pub struct Step {
     pub project_file: Option<PathBuf>,
     /// The levels of the document: a level moves with what stands on it and reaches up to it.
     pub levels: Arc<Vec<crate::document::Level>>,
+    /// The project's library: a type is taken back with the elements that followed it, and a
+    /// change of the library alone is a step too. `None` until the history has looked at it.
+    pub library: Option<Arc<bim_library::Library>>,
+    /// The project's drawing standard, kept as the library is.
+    pub standard: Option<Arc<bim_library::drawing::Standard>>,
+    /// The house style the project follows, kept as the library is.
+    pub house: Option<Arc<bim_library::house::HouseStyle>>,
 }
 
 impl App {
@@ -280,6 +298,10 @@ impl App {
                 if let Ok(library) = serde_json::from_value::<bim_library::Library>(library.clone()) {
                     self.library.merge(&library);
                 }
+            } else if let Some(standards) = definition.get(crate::export::ifcx::STANDARDS) {
+                self.adopt_standard(standards);
+            } else if let Some(style) = definition.get(crate::export::ifcx::HOUSE) {
+                self.adopt_house(style);
             } else if let Some(rooms) = definition.get(crate::export::ifcx::ROOMS) {
                 self.modeller.rooms = serde_json::from_value(rooms.clone()).unwrap_or_default();
             } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
@@ -578,7 +600,17 @@ impl App {
         // with no height typed, what stands reaches the level above, when there is one
         let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
         let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
-        match self.add_element_reaching(name, level, top, shape) {
+        // a column or a beam takes the strip's strength class
+        let grade = self.modeller.placement.of(tool).grade.filter(|_| matches!(tool, ModelTool::Column | ModelTool::Beam));
+        let added = self.add_element_reaching(name, level, top, shape);
+        if let (Ok(id), Some(grade)) = (&added, grade) {
+            if let Some(mut graded) = self.modeller.model.get(*id).cloned() {
+                graded.grade = Some(grade);
+                let _ = self.modeller.model.replace(graded);
+                self.show_modelled();
+            }
+        }
+        match added {
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];
                 self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
@@ -660,7 +692,7 @@ impl App {
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
             ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
-            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -706,13 +738,22 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let mut layers = viewer_layers(&self.modeller.model, &levels, &self.library);
+        let (mut layers, parts) = viewer_layers(&self.modeller.model, &levels, &self.library);
         // the spaces its walls close in stand beside its elements, on a layer of their own
         layers.extend(spaces::space_layer(&self.spaces(), &levels));
         let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
+        // a material with a hatch of its own in the hatch catalogue is cut with it
+        built.project.cut_patterns = crate::hatching::library_patterns(&self.library);
+        // an element of several materials is cut a face per part, each hatched as its material
+        built.project.parts = parts;
+        built.project.part_materials = crate::hatching::part_materials(&self.library);
+        // and its drawing standard: the kinds of drawing and their settings, a node each
+        built.project.types.extend(bim_library::drawing::nodes(&self.standard));
+        // and the house style it follows
+        built.project.types.push(bim_library::house::node(&self.house));
         // and the names given to its spaces
         if !self.modeller.rooms.is_empty() {
             built.project.types.push(serde_json::json!({ "path": "openaec-rooms", "attributes": { crate::export::ifcx::ROOMS: self.modeller.rooms } }));
@@ -764,6 +805,7 @@ impl App {
         self.follow_dimensions();
         // and the floor plans say their spaces and draw their doors' swings again
         self.tag_plans();
+        self.list_piles();
     }
 
     /// Puts `model` in the place of the scene shown, keeping the camera, the views and the
@@ -907,11 +949,15 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
 
 impl App {
     /// What the tool places from `a` to `b` (scene coordinates, as clicked) with the strip's type
-    /// and sizes: a wall on its location line.
+    /// and sizes: a wall on its location line, a beam with the side picked on the line.
     pub(super) fn shape_for(&self, tool: ModelTool, a: DVec3, b: DVec3) -> Shape {
         let (z, storey, _) = self.work_plane();
         let s = self.modeller.placement.of(tool);
-        let (a, b) = if tool == ModelTool::Wall { self.wall_axis(a, b, &s) } else { (a, b) };
+        let (a, b) = match tool {
+            ModelTool::Wall => self.wall_axis(a, b, &s),
+            ModelTool::Beam => self.beam_axis(a, b, &s),
+            _ => (a, b),
+        };
         tool_shape(tool, a, b, z, storey, &s, &self.library)
     }
 
@@ -952,13 +998,21 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// `levels` names the levels by path.
 /// A part of a layered element has the colour of its layer's material in `library`.
 pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
-    Model::new(PathBuf::from("model.ifcx"), "IFCX", viewer_layers(model, levels, library))
+    let (layers, parts) = viewer_layers(model, levels, library);
+    let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
+    built.project.parts = parts;
+    built.project.part_materials = crate::hatching::part_materials(library);
+    built.project.cut_patterns = crate::hatching::library_patterns(library);
+    built
 }
 
-/// The layers of the model shown: one per class, each element with its properties.
-fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Vec<Layer> {
+/// The layers of the model shown: one per class, each element with its properties; and the
+/// parts of the elements that are of several materials (see `ProjectData::parts`): the layer,
+/// the first index and the index count of each part, and its material in the library's order.
+fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> (Vec<Layer>, Vec<(usize, u32, u32, u32)>) {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
+    let mut of_parts: Vec<(usize, u32, u32, u32)> = Vec::new();
     for element in model.iter() {
         let Ok(parts) = model.evaluate(element.id) else { continue };
         if parts.is_empty() {
@@ -974,8 +1028,11 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
         };
         let layer = &mut layers[k];
         let first = layer.indices.len() as u32;
+        // of several materials: each part is told from the others where it is cut
+        let several = parts.iter().filter_map(|p| p.material.as_deref()).collect::<std::collections::HashSet<_>>().len() > 1;
         for part in &parts {
             let Ok(mesh) = Mesh::of(&part.solid) else { continue };
+            let part_first = layer.indices.len() as u32;
             // tile-local f64 to the scene's f32, through the tile origin in f64
             let origin = grid.origin(part.tile);
             let base = (layer.positions.len() / 3) as u32;
@@ -988,13 +1045,40 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
                 layer.normals.extend(n.as_vec3().to_array());
             }
             layer.indices.extend(mesh.indices.iter().map(|i| i + base));
+            if let Some(material) = part.material.as_deref().filter(|_| several).and_then(|key| library.materials.iter().position(|m| m.key == key)) {
+                of_parts.push((k, part_first, layer.indices.len() as u32 - part_first, material as u32));
+            }
         }
         let count = layer.indices.len() as u32 - first;
         layer.elements.push((element.id.0, first, count));
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
         layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
-    layers
+    of_parts.sort_unstable();
+    (layers, of_parts)
+}
+
+/// The NL-SfB code of an element: of its build-up, its linear type (found by the name its
+/// profile has) or its system type as the library has it; of a type the library lacks, the
+/// rule's for its layers. None for what has no type.
+fn nlsfb_of(e: &Element, library: &bim_library::Library) -> Option<String> {
+    match &e.shape {
+        Shape::Planar(p) => {
+            let b = p.build_up.as_ref()?;
+            let role = match p.form {
+                PlanarForm::Wall { .. } => bim_library::Role::Wall,
+                _ => library.buildup(&b.id).map_or(bim_library::Role::Floor, |of| of.role),
+            };
+            let of = library.buildup(&b.id).cloned().unwrap_or_else(|| bim_library::BuildUp::new(&b.id, role, b.layers.iter().map(|l| bim_library::Layer::new(&l.material, l.thickness)).collect()));
+            Some(of.nlsfb(&library.materials))
+        }
+        Shape::Linear(l) => {
+            let name = l.profile.name();
+            library.linear_types.iter().find(|t| library.linear_name(&t.id, bim_library::Lang::En).as_deref() == Some(name.as_str())).map(|t| t.nlsfb())
+        }
+        Shape::System(s) => library.system_type(&s.system_type.as_ref()?.id).map(|t| t.nlsfb()),
+        _ => None,
+    }
 }
 
 /// An element's properties as a flat JSON object.
@@ -1024,6 +1108,9 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
         }
         Shape::Linear(l) => {
             put("Profile", l.profile.name());
+            if let Some(grade) = &e.grade {
+                put("Grade", grade.clone());
+            }
             put("Length", m((l.end - l.start).length()));
         }
         Shape::Planar(p) => {
@@ -1053,12 +1140,26 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Mitre => "Mitre",
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
+                ConnectionKind::FinPlate(_) => "Fin plate",
                 ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
+            match c.kind.fixity() {
+                Some(bim_core::Fixity::Pinned) => put("Fixity", "Pinned".into()),
+                Some(bim_core::Fixity::Rigid) => put("Fixity", "Rigid".into()),
+                None => {}
+            }
             put("Primary", c.primary.0.to_string());
             put("Secondary", c.secondary.0.to_string());
         }
+    }
+    // its NL-SfB code: that of its type in the library, else the rule's for what it is
+    if let Some(code) = nlsfb_of(e, library) {
+        put(crate::export::ifc::NLSFB, code);
+    }
+    // what it is made of, when it is of one material: the cut of it takes that material's hatch
+    if let Some(key) = parts.first().and_then(|p| p.material.as_deref()).filter(|key| parts.iter().all(|p| p.material.as_deref() == Some(key))) {
+        put("Material", library.material(key).map_or(key, |m| m.name(bim_library::Lang::En)).to_string());
     }
     let volume: f64 = parts.iter().map(|p| p.solid.volume()).sum();
     if volume > 0.0 {

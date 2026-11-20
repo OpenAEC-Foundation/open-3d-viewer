@@ -19,6 +19,7 @@ mod bench;
 pub mod desktop;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
+pub mod build_film;
 pub mod document;
 #[cfg(windows)]
 mod dpi_drag;
@@ -27,6 +28,7 @@ pub mod drawing2d;
 pub mod element_drawing;
 pub mod caps;
 pub mod cloud_color;
+pub mod fields;
 pub mod hatching;
 pub mod phasing;
 pub mod element_class;
@@ -45,6 +47,8 @@ mod managed;
 mod mcp;
 mod measure;
 pub mod model;
+#[cfg(all(feature = "planner", windows))]
+mod planner_frame;
 pub mod product;
 mod remote;
 pub mod remote_link;

@@ -1915,6 +1915,17 @@
         "no": {
           "type": "string"
         },
+        "surface_mesh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SurfaceMesh"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The mesh the surfaces were computed on, with its results."
+        },
         "tables": {
           "description": "The tables this set has.",
           "items": {
@@ -2716,6 +2727,31 @@
         }
       ]
     },
+    "SurfaceField": {
+      "additionalProperties": false,
+      "description": "One quantity over the mesh, a value per mesh node in SI units.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "unit",
+        "values"
+      ],
+      "type": "object"
+    },
     "SurfaceKind": {
       "enum": [
         "plate",
@@ -2725,6 +2761,82 @@
         "load_transfer"
       ],
       "type": "string"
+    },
+    "SurfaceMesh": {
+      "additionalProperties": false,
+      "description": "The mesh of the surfaces: its nodes with their displacements, its elements, and fields.",
+      "properties": {
+        "displacements": {
+          "description": "How far each moved, metres; as many as there are points.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "elements": {
+          "description": "The mesh nodes of each element, three or four, in order around it.",
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SurfaceField"
+          },
+          "type": "array"
+        },
+        "points": {
+          "description": "Where the mesh nodes are, world metres.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "surface": {
+          "description": "Per element: the surface member it is of.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "thickness": {
+          "description": "Per element: its thickness, metres.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "points",
+        "displacements",
+        "elements",
+        "surface",
+        "thickness"
+      ],
+      "type": "object"
     },
     "TableName": {
       "enum": [

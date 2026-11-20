@@ -1,0 +1,16 @@
+[package]
+name = "xodr-read"
+version = "0.1.0"
+description = "Reads ASAM OpenDRIVE road networks into 3D road surfaces: the reference lines with their plan geometry, elevation and superelevation, and the lanes beside them by type"
+authors = ["Open BIM Suite Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
+publish = false
+
+[dependencies]
+# The OpenDRIVE 1.7 XML: roads, plan views, profiles, lanes (MIT)
+opendrive = "0.1"
+# The lengths, angles and curvatures the parser returns (MIT OR Apache-2.0)
+uom = { version = "0.32", default-features = false, features = ["f64", "si", "std"] }

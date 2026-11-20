@@ -114,7 +114,7 @@ enum RibbonPart {
 /// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1410.0;
 /// The products to come, named on the switch but not to be chosen yet.
-const SOON: [&str; 2] = ["FM", "Environment"];
+const SOON: [&str; 2] = ["FM", "Requirements"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -559,6 +559,21 @@ pub enum Msg {
     NativeWindow(u64),
     CloseWindow,
     Update,
+    /// The Planner's web frame loads its page again.
+    PlannerReload,
+    /// The page of the Planner's web frame opens in the system's browser.
+    PlannerBrowser,
+    /// What laying or hiding the Planner's web frame gave: an error when it could not be made.
+    PlannerFrame(Result<(), String>),
+    /// What reloading the frame's page, or taking the keyboard back from it, gave.
+    PlannerDone(Result<(), String>),
+    /// Where the pointer is over the app's own drawing while the Planner shows (`None`: over the
+    /// web frame or outside the window).
+    PlannerPointer(Option<iced::Point>),
+    /// A press on the app's own drawing while the Planner shows: the keyboard comes back to it.
+    PlannerPress,
+    /// The window changed while the Planner shows: its frame is laid again.
+    PlannerWindow,
     /// Opens the desktop app's download page (from [`Dialog::DesktopOnly`]).
     DownloadDesktop,
 }
@@ -595,6 +610,13 @@ pub struct Studio {
     height: f32,
     /// Whether the window has told its size (it does when it changes, not always when it opens).
     sized: bool,
+    /// The window is open, and where the Planner's web frame was last laid in it (`None`: hidden).
+    window_open: bool,
+    planner_shown: Option<[f32; 4]>,
+    /// Why the web frame could not be made (no web view runtime), until Refresh tries again.
+    planner_failed: Option<String>,
+    /// Where the pointer is over the app's own drawing while the Planner shows.
+    planner_pointer: Option<iced::Point>,
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
@@ -686,6 +708,10 @@ impl Studio {
             width: 1280.0,
             height: 800.0,
             sized: false,
+            window_open: false,
+            planner_shown: None,
+            planner_failed: None,
+            planner_pointer: None,
             compact_panel: None,
             ribbon_folded: false,
             edition: Edition::Studio,
@@ -830,6 +856,25 @@ impl Studio {
         }
     }
 
+    /// IFCX is a product: while it is the one shown, the project's IFCX fills the workspace in
+    /// place of the views; another product gives them back. It opens once a model is there.
+    fn ifcx_follow_product(&mut self) -> Task<Msg> {
+        let on = self.product() == Product::Ifcx;
+        if on && !self.app.ifc.full && self.app.model.is_some() {
+            // the first time it opens on the graph
+            if !self.app.ifc.open {
+                self.app.ifc.view = crate::app::IfcView::Graph;
+            }
+            self.app.ifc.full = true;
+            return self.app.update(Message::OpenIfc).map(Msg::App);
+        }
+        if !on && self.app.ifc.full {
+            self.app.ifc.full = false;
+            self.app.ifc.shown = false;
+        }
+        Task::none()
+    }
+
     /// The ribbon tab shown.
     fn ribbon_page(&self) -> RibbonPage {
         let pages = self.product().pages();
@@ -909,6 +954,69 @@ impl Studio {
             Page::Extensions => SettingsPage::Extensions,
             _ => SettingsPage::General,
         };
+    }
+
+    /// Where the Planner's web frame lies in the window, in the window's own units (layout units
+    /// times the interface size): the whole workspace, from under the ribbon to the status bar.
+    /// `None` when it is hidden: another product, File, or a dialog, which the app draws itself
+    /// and which a frame over the window would cover; and when the web view could not be made.
+    ///
+    /// The frame is a window of the system, over all the app draws. So it stays clear of the
+    /// window's left and right edge, where a press resizes the window (the bottom edge is the
+    /// status bar's), and it makes room for a tip that hangs into the workspace while the pointer
+    /// is where such a tip opens: on the ribbon, whose buttons reach almost to its lower edge (or
+    /// on the tabs when the ribbon is folded), and on the status bar, whose tips open above it.
+    /// The tips of the title bar end above the workspace.
+    pub fn planner_area(&self) -> Option<[f32; 4]> {
+        let scale = self.prefs.scale() as f32;
+        self.planner_insets().map(|[left, top, right, bottom]| [left, top, (self.width * scale - left - right).max(1.0), (self.height * scale - top - bottom).max(1.0)])
+    }
+
+    /// How far the Planner's web frame stays from the window's left, top, right and bottom, in
+    /// the window's own units: what [`Studio::planner_area`] is laid by. The frame is laid from
+    /// these and the window's size as the system gives it at that moment, which the size the
+    /// window last told the shell may not be (a window just opened, or moved to another display).
+    pub fn planner_insets(&self) -> Option<[f32; 4]> {
+        use openaec_ui::design::shell::{RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
+        if self.product() != Product::Planner || self.backstage || self.dialog.is_some() || !self.window_open || self.planner_failed.is_some() {
+            return None;
+        }
+        let folded = self.compact() && self.ribbon_folded;
+        let (mut top, mut bottom) = (TITLEBAR + RIBBON_TABS + if folded { 0.0 } else { RIBBON }, STATUSBAR);
+        if let Some(at) = self.planner_pointer {
+            if at.y >= if folded { TITLEBAR } else { TITLEBAR + RIBBON_TABS } && at.y < top {
+                top += if folded { PLANNER_TIP } else { PLANNER_RIBBON_TIP };
+            }
+            if at.y >= self.height - STATUSBAR {
+                bottom += PLANNER_TIP;
+            }
+        }
+        let edge = if self.maximized { 0.0 } else { crate::resize_frame::EDGE };
+        let scale = self.prefs.scale() as f32;
+        Some([edge * scale, top * scale, edge * scale, bottom * scale])
+    }
+
+    /// [`Studio::update`], and then the Planner's web frame laid where the window now has its
+    /// workspace, when that changed: the frame follows the product, the window and the ribbon.
+    pub fn update_with_frame(&mut self, message: Msg) -> Task<Msg> {
+        // what laying the frame answers lays no frame again
+        let answer = matches!(message, Msg::PlannerFrame(_) | Msg::PlannerDone(_));
+        let task = self.update(message);
+        if self.product() != Product::Planner {
+            // the pointer is followed on the Planner only: what it was says nothing on return
+            self.planner_pointer = None;
+        }
+        // a frame that shows is laid again after every message: the window may have changed
+        // without telling (the frame itself skips what it already is)
+        let area = self.planner_insets();
+        if answer || (area.is_none() && self.planner_shown.is_none()) {
+            return task;
+        }
+        self.planner_shown = area;
+        #[cfg(all(feature = "planner", windows))]
+        return Task::batch([task, iced::window::latest().and_then(move |id| iced::window::run(id, move |window| crate::planner_frame::place(&window, area))).map(Msg::PlannerFrame)]);
+        #[cfg(not(all(feature = "planner", windows)))]
+        task
     }
 
     /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
@@ -1165,6 +1273,20 @@ impl Studio {
                 .shortcut(Shortcut::ctrl_shift('s'))
                 .enabled(loaded)
                 .dialog(),
+            Command::new("file.save-project", l.text("Project opslaan…", "Save project…"), go(Message::SaveProjectDialog))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(loaded)
+                .dialog(),
+            Command::new("file.render", l.text("Renderen…", "Render…"), go(Message::RenderDialog))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(loaded && cfg!(not(target_arch = "wasm32")))
+                .detail(l.text("Schrijft een afbeelding van het model zoals het beeld het toont (Blender rendert hem)", "Writes an image of the model as the view shows it (Blender renders it)"))
+                .dialog(),
+            Command::new("file.build-film", l.text("Bouwfilm…", "Build film…"), go(Message::BuildFilmDialog))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(loaded && cfg!(not(target_arch = "wasm32")))
+                .detail(l.text("Schrijft een film waarin het model wordt opgebouwd (Blender rendert hem)", "Writes a film in which the model is built up (Blender renders it)"))
+                .dialog(),
             Command::new("file.export-ifc4x3", l.text("Exporteren als IFC 4x3…", "Export IFC 4x3…"), go(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))
                 .icon(small("file.save-as"), large("file.save-as"))
                 .enabled(loaded)
@@ -1260,6 +1382,8 @@ impl Studio {
                 .enabled(app.section_on || app.plane.is_some()),
             // Docs: the project folder, and opening and linking the picked document
             Command::new("docs.folder", l.text("Projectmap", "Project folder"), go(Message::Docs(crate::app::DocsMessage::Choose))).icon(small("project.folder"), large("project.folder")),
+            Command::new("planner.reload", l.text("Vernieuwen", "Refresh"), Msg::PlannerReload).icon(small("view.reset-camera"), large("view.reset-camera")),
+            Command::new("planner.browser", l.text("In browser openen", "Open in browser"), Msg::PlannerBrowser).icon(small("file.import"), large("file.import")),
             Command::new("gis.map", l.text("Kaart laden", "Load map"), go(Message::Gis(crate::app::GisMessage::Map(crate::app::MapMessage::Fetch(l))))).icon(small("view.top"), large("view.top")).detail(l.text("Legt de kaart die in het tabblad GIS rechts gekozen is onder het project: de achtergrondkaart, de luchtfoto of een eigen WMS-dienst.", "Lays the map chosen in the GIS tab on the right under the project: the background map, the aerial photograph or a WMS service of your own.")),
             Command::new("geo.fetch", l.text("Sonderingen laden", "Load soundings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Fetch(l))))).icon(small("draw.coordinate"), large("draw.coordinate")).detail(l.text("Haalt de sonderingen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the soundings around the place from the Dutch register of the subsurface and puts them in the model.")),
             Command::new("geo.borings", l.text("Boringen laden", "Load borings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::FetchBorings(l))))).icon(small("pile.columns"), large("pile.columns")).detail(l.text("Haalt de geotechnische boringen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.")),
@@ -1284,6 +1408,9 @@ impl Studio {
             Command::new("docs.reveal", l.text("Tonen in map", "Show in folder"), go(Message::Docs(crate::app::DocsMessage::Reveal)))
                 .icon(small("panel.left"), large("panel.left"))
                 .enabled(app.docs_picked().is_some()),
+            Command::new("docs.save", l.text("Model opslaan in projectmap", "Save model in project folder"), go(Message::Docs(crate::app::DocsMessage::Save)))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(app.docs_save_target().is_some()),
             Command::new("docs.link", l.text("Koppelen aan selectie", "Link to selection"), go(Message::Docs(crate::app::DocsMessage::Link)))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.docs_can_link()),
@@ -1361,8 +1488,23 @@ impl Studio {
             Command::new(kind.id(), kind.label(l), go(Message::Transform(kind)))
                 .icon(small(kind.icon()), large(kind.icon()))
                 .toggle(app.modeller.transform.as_ref().is_some_and(|t| t.kind == kind))
-                .enabled(!app.selected_modelled().is_empty() || app.modeller.transform.is_some())
+                .enabled(!app.selected_modelled().is_empty() || app.modeller.transform.is_some() || app.drawn_picked().is_some())
         }));
+        // the Edit tools of the Draw tab, on the line or shape picked on a floor plan
+        list.push(
+            Command::new("edit.offset", l.text("Offset", "Offset"), go(Message::OffsetTool))
+                .icon(small("transform.offset"), large("transform.offset"))
+                .toggle(app.modeller.offset.is_some())
+                .enabled(app.drawn_picked().is_some() || app.modeller.offset.is_some()),
+        );
+        let on_plan = app.shown_drawing().is_some_and(|v| app.document.plan(&v).is_some());
+        list.extend(crate::app::drawn_edit::PairKind::ALL.map(|kind| {
+            Command::new(kind.id(), kind.label(l), go(Message::PairEdit(kind)))
+                .icon(small(kind.icon()), large(kind.icon()))
+                .toggle(app.modeller.pair_edit.as_ref().is_some_and(|e| e.kind == kind))
+                .enabled(on_plan)
+        }));
+        list.push(Command::new("edit.explode", l.text("Exploderen", "Explode"), go(Message::ExplodeDrawn)).icon(small("transform.explode"), large("transform.explode")).enabled(app.shape_picked()));
         // the project's levels, views, sheets and library
         use crate::document::PlanKind;
         let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
@@ -1407,7 +1549,8 @@ impl Studio {
             .icon(small("draw.dimension"), large("draw.dimension"))
             .enabled(plan_shown.is_some()),
         );
-        for (kind, icon) in [(crate::app::DrawKind::Line, "draw.line"), (crate::app::DrawKind::Rectangle, "draw.filled-area"), (crate::app::DrawKind::Circle, "draw.coordinate")] {
+        for kind in crate::app::DrawKind::ALL {
+            let icon = kind.icon();
             let on = app.draw_tool == Some(kind);
             let drawable = app.shown_drawing().is_some();
             list.push(Command::new(kind.command(), kind.label(l), go(Message::DrawTool(Some(kind)))).icon(small(icon), large(icon)).toggle(on && drawable).enabled(drawable));
@@ -1415,7 +1558,13 @@ impl Studio {
         list.push(
             Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
                 .icon(small("draw.text"), large("draw.text"))
-                .toggle(app.note_tool && annotatable)
+                .toggle(app.note_tool && !app.level_tool && annotatable)
+                .enabled(annotatable),
+        );
+        list.push(
+            Command::new("annotate.level", l.text("Peilmaat", "Level mark"), go(Message::LevelTool(!(app.note_tool && app.level_tool))))
+                .icon(small("resource.level"), large("resource.level"))
+                .toggle(app.note_tool && app.level_tool && annotatable)
                 .enabled(annotatable),
         );
         list.push(
@@ -1446,6 +1595,11 @@ impl Studio {
         let shown = self.product();
         for &product in &self.products {
             list.push(Command::new(product.command(), product.full_name(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
+        }
+        // Library, the product: the source whose library its page shows
+        for source in crate::app::libraries::Source::ALL {
+            let show = go(Message::Libraries(crate::app::LibrariesMessage::Source(source)));
+            list.push(Command::new(source.command(), source.label(l), show).icon(small(source.icon()), large(source.icon())).mode(app.libraries.source == source).detail(source.purpose(l)));
         }
         // the Validator's commands: issues, checks, clashes and the rule set
         // Pointcloud: how the points show, the meshes, exports and drawing made of a cloud (on the
@@ -1523,6 +1677,21 @@ impl Studio {
             add("analysis.set-previous", l.text("Vorig resultaat", "Previous result set"), "page.previous", Change::Set(false), false, sets > 1, l.text("Toont de resultaten van het vorige belastinggeval of de vorige combinatie.", "Shows the results of the previous load case or combination."));
             add("analysis.larger", l.text("Groter", "Larger"), "view.zoom-in", Change::Scale(true), false, loaded, l.text("Tekent de lijnen en pijlen groter.", "Draws the diagrams and arrows larger."));
             add("analysis.smaller", l.text("Kleiner", "Smaller"), "view.zoom-out", Change::Scale(false), false, loaded, l.text("Tekent de lijnen en pijlen kleiner.", "Draws the diagrams and arrows smaller."));
+        }
+        // which field of a simulation file colours its mesh, at which time step
+        {
+            use crate::app::fields::FieldChange as F;
+            let fields = app.shown_fields();
+            let (channels, steps) = fields.as_ref().map_or((0, 0), |f| (f.channels.len(), f.steps.len()));
+            let ways = [
+                ("field.next", F::NextChannel(true), l.text("Volgend veld", "Next field"), "page.next", channels > 0, l.text("Kleurt het net naar het volgende veld van het bestand, zoals een temperatuur of een verplaatsing.", "Colours the mesh by the file's next field, such as a temperature or a displacement.")),
+                ("field.previous", F::NextChannel(false), l.text("Vorig veld", "Previous field"), "page.previous", channels > 0, l.text("Kleurt het net naar het vorige veld van het bestand.", "Colours the mesh by the file's previous field.")),
+                ("field.step-next", F::NextStep(true), l.text("Volgende stap", "Next step"), "page.next", steps > 1, l.text("Toont de waarden van de volgende tijdstap.", "Shows the values of the next time step.")),
+                ("field.step-previous", F::NextStep(false), l.text("Vorige stap", "Previous step"), "page.previous", steps > 1, l.text("Toont de waarden van de vorige tijdstap.", "Shows the values of the previous time step.")),
+            ];
+            for (id, change, label, icon, enabled, detail) in ways {
+                list.push(Command::new(id, label, go(Message::Field(change))).icon(small(icon), large(icon)).enabled(enabled).detail(detail));
+            }
         }
         // how the points of a cloud are coloured
         {
@@ -1641,8 +1810,9 @@ impl Studio {
         let task = self.handle(message);
         self.app.modeller.in_modeller = self.product() == Product::Modeller;
         let docs = self.docs_follow_product();
+        let ifcx = self.ifcx_follow_product();
         self.keep_dev_session();
-        Task::batch([task, docs])
+        Task::batch([task, docs, ifcx])
     }
 
     fn handle(&mut self, message: Msg) -> Task<Msg> {
@@ -1665,12 +1835,25 @@ impl Studio {
                 // joins made automatically are named in the interface language
                 self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
                 self.app.modeller.space_word = self.l().text("Ruimte", "Space");
+                self.app.modeller.top_word = self.l().text("b.k.", "top");
+                self.app.modeller.pile_words = [
+                    self.l().text("Palenstaat", "Pile schedule"),
+                    self.l().text("Peil", "Level"),
+                    self.l().text("Nr.", "No."),
+                    "X (mm)",
+                    "Y (mm)",
+                    self.l().text("Paal", "Pile"),
+                    self.l().text("Sterkteklasse", "Grade"),
+                    self.l().text("Afhakhoogte", "Cut-off level"),
+                    self.l().text("Paalpunt", "Pile tip"),
+                    self.l().text("Lengte (mm)", "Length (mm)"),
+                ];
                 self.app.modeller.snap_words = crate::app::modeller::snaps::Snap::ALL.map(|s| s.label(self.l()));
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
                 };
-                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveIfcDialog(_) | Message::BlenderRender) {
+                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveProjectDialog | Message::SaveIfcDialog(_) | Message::BlenderRender) {
                     self.backstage = false;
                 }
                 if let Some(path) = opened {
@@ -1725,19 +1908,6 @@ impl Studio {
                 self.ribbon_folded = self.compact() && !self.backstage && same && !self.ribbon_folded;
                 self.ribbon_tab = tab;
                 self.backstage = false;
-                // the IFCX page shows the project's IFCX in place of the views; another page
-                // gives them back
-                if self.ribbon_page() == RibbonPage::Ifcx {
-                    // the first time it opens on the graph
-                    if !self.app.ifc.open {
-                        self.app.ifc.view = crate::app::IfcView::Graph;
-                    }
-                    self.app.ifc.full = true;
-                    return self.update(Msg::App(Message::OpenIfc));
-                } else if self.app.ifc.full {
-                    self.app.ifc.full = false;
-                    self.app.ifc.shown = false;
-                }
             }
             Msg::Backstage(open) => self.backstage = open,
             Msg::OpenRecent(path) => return self.update(Msg::App(Message::Open(path))),
@@ -2007,7 +2177,10 @@ impl Studio {
                 return iced::window::latest().and_then(iced::window::toggle_maximize);
             }
             Msg::ResizeEdge(direction) => return iced::window::latest().and_then(move |id| iced::window::drag_resize(id, direction)),
-            Msg::WindowOpened(id) => return iced::window::raw_id::<Msg>(id).map(Msg::NativeWindow),
+            Msg::WindowOpened(id) => {
+                self.window_open = true;
+                return iced::window::raw_id::<Msg>(id).map(Msg::NativeWindow);
+            }
             Msg::NativeWindow(_raw) => {
                 // between displays with a different scale the window keeps its size (`dpi_drag`)
                 #[cfg(windows)]
@@ -2055,6 +2228,37 @@ impl Studio {
                     FeedbackMsg::Send => {}
                 }
             }
+            Msg::PlannerReload => {
+                // a frame that could not be made is tried again: `update_with_frame` lays it
+                if self.planner_failed.take().is_some() {
+                    self.planner_shown = None;
+                    self.app.status = Status::Ready;
+                    return Task::none();
+                }
+                #[cfg(all(feature = "planner", windows))]
+                return iced::window::latest().and_then(|id| iced::window::run(id, |_| crate::planner_frame::reload())).map(Msg::PlannerDone);
+            }
+            Msg::PlannerPointer(at) => self.planner_pointer = at,
+            Msg::PlannerWindow => {}
+            Msg::PlannerPress => {
+                #[cfg(all(feature = "planner", windows))]
+                if self.planner_shown.is_some() {
+                    return iced::window::latest().and_then(|id| iced::window::run(id, |_| crate::planner_frame::release_keyboard())).map(Msg::PlannerDone);
+                }
+            }
+            Msg::PlannerBrowser => {
+                if let Err(e) = open_url(PLANNER_URL) {
+                    self.app.status = Status::Error(e);
+                }
+            }
+            // a frame that could not be made: the page under it says the web view is missing, the
+            // status bar says what the system gave
+            Msg::PlannerFrame(Err(e)) => {
+                self.app.status = Status::Error(format!("{}: {e}", self.l().text("Webframe", "Web frame")));
+                self.planner_failed = Some(e);
+            }
+            Msg::PlannerDone(Err(e)) => self.app.status = Status::Error(e),
+            Msg::PlannerFrame(Ok(())) | Msg::PlannerDone(Ok(())) => {}
             Msg::DownloadDesktop => {
                 if let Err(e) = open_url(crate::loaders::DESKTOP_DOWNLOAD) {
                     self.app.status = Status::Error(e);
@@ -2091,8 +2295,23 @@ impl Studio {
             iced::Event::Window(iced::window::Event::Opened { .. }) => Some(Msg::WindowOpened(id)),
             _ => None,
         });
+        // the Planner's web frame is a window of the system: the shell follows the pointer over
+        // its own drawing to make room for a tip, and takes the keyboard back on a press
+        let planner = if self.product() == Product::Planner && self.planner_failed.is_none() {
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => Some(Msg::PlannerPointer(Some(position))),
+                iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Msg::PlannerPointer(None)),
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Msg::PlannerPress),
+                // the window moved, changed size or went to another display: the frame follows
+                iced::Event::Window(iced::window::Event::Moved(_) | iced::window::Event::Resized(_) | iced::window::Event::Rescaled(_) | iced::window::Event::Focused) => Some(Msg::PlannerWindow),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             self.app.subscription().map(Msg::App),
+            planner,
             resized,
             opened,
             open.map(Msg::App),
@@ -2374,7 +2593,12 @@ impl Studio {
                 if crate::host::renders() {
                     groups[0].1.push(large("file.render-blender"));
                 }
+                // a simulation file: its fields and time steps beside the file
+                if self.app.shown_fields().is_some() {
+                    groups.push((l.text("Velden", "Fields"), vec![smalls(&["field.next", "field.previous"]), smalls(&["field.step-next", "field.step-previous"])]));
+                }
                 groups.extend(view_groups());
+                groups.push((l.text("Visualisatie", "Visualisation"), vec![smalls(&["file.render", "file.build-film"])]));
                 groups
             }
             RibbonPage::View => view_groups(),
@@ -2392,7 +2616,7 @@ impl Studio {
                 (l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
-                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
+                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), smalls(&["model.align"]), large("model.delete")]),
             ],
             // the project as its IFCX file has it: the ways to look at it, and saving it
             RibbonPage::Ifcx => vec![
@@ -2407,12 +2631,15 @@ impl Studio {
                 (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
                 (l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
-            // in the floor plan, section or sheet shown
-            RibbonPage::Annotate => vec![
-                (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
-                (l.text("Tekst", "Text"), vec![large("annotate.text")]),
-                // lines that are no model, drawn on the view shown
-                (l.text("Tekenen", "Draw"), vec![large("draw.line"), large("draw.rectangle"), large("draw.circle")]),
+            // drawing in the floor plan, section or sheet shown, in the order of a drawing program's
+            // first tab: selecting, the lines and shapes that are no model, what is written and
+            // measured on the drawing, and changing what is selected
+            RibbonPage::Draw => vec![
+                (l.text("Selectie", "Selection"), vec![large("model.select")]),
+                (l.text("Tekenen", "Draw"), vec![smalls(&["draw.line", "draw.polyline", "draw.rectangle"]), smalls(&["draw.circle", "draw.arc", "draw.ellipse"])]),
+                (l.text("Annoteren", "Annotate"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions", "annotate.text", "annotate.level"])]),
+                (l.text("Wijzigen", "Modify"), vec![smalls(&["model.move", "model.copy", "model.rotate"]), smalls(&["model.mirror", "model.edit", "model.delete"])]),
+                (l.text("Bewerken", "Edit"), vec![smalls(&["edit.trim", "edit.extend", "edit.offset"]), smalls(&["edit.fillet", "edit.chamfer", "edit.explode"])]),
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![
@@ -2421,12 +2648,15 @@ impl Studio {
                 (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
+                (l.text("Velden", "Fields"), vec![smalls(&["field.next", "field.previous"]), smalls(&["field.step-next", "field.step-previous"])]),
             ],
+            // the four sources of library content
+            RibbonPage::Library => vec![(l.text("Bibliotheek", "Library"), vec![large("library.general"), large("library.country"), large("library.company"), large("library.project")])],
             // the project folder, the picked document, and its link with the model
             RibbonPage::Docs => vec![
                 (l.text("Projectmap", "Project folder"), vec![large("docs.folder"), smalls(&["docs.refresh", "docs.leave"])]),
                 (l.text("Document", "Document"), vec![large("docs.open"), smalls(&["docs.open-outside", "docs.reveal"])]),
-                (l.text("Model", "Model"), vec![large("docs.link")]),
+                (l.text("Model", "Model"), vec![large("docs.link"), large("docs.save")]),
             ],
             // the place is searched in the GIS tab of the right pane; what is fetched around it is here
             RibbonPage::Gis => vec![
@@ -2437,6 +2667,8 @@ impl Studio {
             ],
             // roads, structures and rail: the pages are there, their tools are still to come
             RibbonPage::Infra | RibbonPage::Civil | RibbonPage::Rail => vec![(l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])])],
+            // the page itself is the program; the ribbon only loads it again or opens it outside
+            RibbonPage::Planner => vec![("Planner", vec![large("planner.reload"), large("planner.browser")])],
             // the ground under the project: what was investigated
             RibbonPage::Geo => vec![
                 (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
@@ -2546,6 +2778,7 @@ impl Studio {
             t::file_nav_row(look, small("file.open"), l.text("Map openen", "Open folder"), false, Some(Msg::App(Message::OpenFolderDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
+            t::file_nav_row(look, small("file.save-as"), l.text("Project opslaan", "Save project"), false, loaded.then_some(Msg::App(Message::SaveProjectDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Exporteren als IFC 4x3", "Export IFC 4x3"), false, loaded.then_some(Msg::App(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))),
             t::file_nav_row(look, small("ui.settings"), l.text("Instellingen", "Settings"), false, Some(Msg::Dialog(Some(Dialog::Settings)))),
         ]
@@ -2596,13 +2829,37 @@ impl Studio {
 
     fn document_area(&self, look: Look) -> Element<'_, Msg> {
         let l = self.l();
+        // the Planner is a web page in a frame over the whole workspace: no panels, no tabs. This
+        // lies under the frame, and shows while the page is not there (a dialog, no web view)
+        if self.product() == Product::Planner {
+            let explanation = if self.planner_failed.is_some() {
+                l.text(
+                    "De webweergave van het systeem (WebView2 Runtime) ontbreekt of start niet. Open de planning in de browser, of kies Vernieuwen om het opnieuw te proberen.",
+                    "The system's web view runtime (WebView2 Runtime) is missing or does not start. Open the planning in the browser, or choose Refresh to try again.",
+                )
+            } else {
+                l.text(
+                    "De webversie van Open Planner Studio opent hier in een webframe. Blijft dit leeg, dan ontbreekt de webweergave van het systeem of is er geen internet.",
+                    "The web version of Open Planner Studio opens here in a web frame. If this stays empty, the system's web view is missing or there is no internet.",
+                )
+            };
+            return container(w::empty_state(look, large("drawing.plan"), "Open Planner Studio", explanation, Some(cm::button(look, &self.command("planner.browser"), K::Secondary, D::Regular))))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_| container::Style { background: Some(look.color.workspace.into()), ..Default::default() })
+                .into();
+        }
         let p = palette(look);
         let app = &self.app;
-        let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
+        let library = self.product() == Product::Library;
+        let workspace: Element<'_, Msg> = if library {
+            // Library: its page is the workspace, with or without a model
+            app.libraries_page(p, l).map(Msg::App)
+        } else if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer | Product::Docs | Product::Gis => (
+                Product::Viewer | Product::Docs | Product::Gis | Product::Library | Product::Ifcx | Product::Planner => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2662,7 +2919,8 @@ impl Studio {
         }
         let doc_tabs = app.doc_tabs();
         // Docs opens without a model too; in its own product it then needs no tab
-        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 {
+        // (the Library page is no view of the model: no tabs of views over it)
+        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 && !library {
             let tabs: Vec<DocumentTab<'_>> = doc_tabs
                 .iter()
                 .map(|&t| if t == DocTab::Model { DocumentTab::pinned(model_name) } else { DocumentTab::new(app.tab_title(t), false) })
@@ -2726,7 +2984,9 @@ impl Studio {
             }
             // Docs: the folders of the project folder
             Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
-            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Gis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+            // Library: the sources of library content, and the countries
+            Product::Library => (l.text("Bibliotheken", "Libraries"), Self::pane(self.app.libraries_pane(palette(look), l))),
+            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Gis | Product::Ifcx | Product::Planner => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
 
@@ -2738,6 +2998,11 @@ impl Studio {
         let p = palette(look);
         // the GIS and Geo tabs belong to GIC
         let geo = self.product() == Product::Gis;
+        // Library: the editor of the picked build-up, or the fields of what is picked of the
+        // drawing standard
+        if self.product() == Product::Library {
+            return Self::pane(app.library_side(p, l));
+        }
         if self.product() != Product::Modeller {
             return Self::pane(app.properties_body_for(p, l, geo));
         }
@@ -2956,18 +3221,29 @@ fn desktop_only_text(l: Language, format: &str) -> String {
 }
 
 /// Opens `url` in the browser: a new tab on the web, the default browser on the desktop.
+/// The page the Planner shows in its web frame.
+pub(crate) const PLANNER_URL: &str = "https://open-planner-studio.open-aec.com/";
+/// The room the Planner's web frame makes for a tip of the app that hangs into the workspace:
+/// a line of text, its padding and the gap to its control.
+const PLANNER_TIP: f32 = 32.0;
+/// The same under the open ribbon: how far the tip of one of its large buttons hangs below it.
+const PLANNER_RIBBON_TIP: f32 = 16.0;
+
+/// The program that opens an address in the system's browser.
+#[cfg(not(target_arch = "wasm32"))]
+fn url_opener() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "explorer",
+        "macos" => "open",
+        _ => "xdg-open",
+    }
+}
+
 fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     return crate::web::open_url(url);
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let program = match std::env::consts::OS {
-            "windows" => "explorer",
-            "macos" => "open",
-            _ => "xdg-open",
-        };
-        std::process::Command::new(program).arg(url).spawn().map(|_| ()).map_err(|e| format!("Open {url}: {e}"))
-    }
+    std::process::Command::new(url_opener()).arg(url).spawn().map(|_| ()).map_err(|e| format!("Open {url}: {e}"))
 }
 
 /// The start screen's hint: the featured formats this build opens, from the loader registry
@@ -3018,7 +3294,7 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool)
     #[cfg(not(target_arch = "wasm32"))]
     let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(studio.edition.app_id(), VERSION) }, ..studio };
     let initial = std::sync::Mutex::new(Some(studio));
-    let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
+    let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update_with_frame, Studio::view)
         .title(Studio::title)
         .subscription(Studio::subscription)
         .theme(|s: &Studio| s.prefs.theme().iced())
@@ -3333,13 +3609,13 @@ mod tests {
         let _ = studio.update(Msg::App(Message::Navigate(crate::viewport::Navigate::Hover { x, y, width: w, height: h })));
         assert!(studio.app.modeller.aim.is_some(), "the cursor is over the wall");
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-window-nl.png")).expect("snapshot");
-        // the Project tab, and the Annotate tab in a floor plan
+        // the Project tab, and the Draw tab in a floor plan
         let _ = studio.update(Msg::App(Message::ModelTool(None)));
-        studio.ribbon_tab = 1;
+        studio.ribbon_tab = 2;
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-project-nl.png")).expect("snapshot");
         let level: std::sync::Arc<str> = studio.app.document.levels()[0].path.as_str().into();
         let _ = studio.update(Msg::App(Message::NewPlan(level)));
-        studio.ribbon_tab = 2;
+        studio.ribbon_tab = 1;
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-annotate-nl.png")).expect("snapshot");
         // a wall of an opened Revit file: its grips in the Modeller, then taken over by a drag of
         // its end, the project now an IFCX document
@@ -3426,6 +3702,150 @@ mod tests {
                 let name = format!("product-{}{}.png", product.key(), if model { "" } else { "-leeg" });
                 studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(name)).expect("snapshot");
             }
+        }
+    }
+
+    /// A floor plan of the demo building in its tab, with the fields of its kind of drawing open
+    /// in the View section of the right pane: target/shell-renders/view-kind.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_view_kind_render() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Viewer);
+        let level = std::sync::Arc::<str>::from(studio.app.document.levels()[0].path.as_str());
+        for message in [Message::NewPlan(level), Message::ViewKindEdit(true)] {
+            let _ = studio.update(Msg::App(message));
+        }
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("view-kind.png")).expect("snapshot");
+    }
+
+    /// The Library product with each of its sources: target/shell-renders/library-product-*.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_library_product_renders() {
+        use crate::app::libraries::{Country, Source};
+        use crate::app::LibrariesMessage;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let shots = [
+            ("general", LibrariesMessage::Source(Source::General)),
+            ("country-nl", LibrariesMessage::Country(Country::Netherlands)),
+            ("country-de", LibrariesMessage::Country(Country::Germany)),
+            ("company", LibrariesMessage::Source(Source::Company)),
+            ("project", LibrariesMessage::Source(Source::Project)),
+            ("search", LibrariesMessage::Search("beton 2".into())),
+            ("buildup", LibrariesMessage::Source(Source::Project)),
+            ("profile", LibrariesMessage::Source(Source::Project)),
+            ("material", LibrariesMessage::Source(Source::Project)),
+            ("system", LibrariesMessage::Source(Source::Project)),
+            ("system-layer", LibrariesMessage::Source(Source::Project)),
+            ("follow", LibrariesMessage::Source(Source::Project)),
+            ("search-steel", LibrariesMessage::Search("hea 2".into())),
+            ("hatches-nen47", LibrariesMessage::Country(Country::Netherlands)),
+            ("hatches-openaec", LibrariesMessage::Source(Source::Project)),
+            ("ifcx", LibrariesMessage::Source(Source::Project)),
+            ("ifcx-hatch", LibrariesMessage::Source(Source::General)),
+            ("search-hatch", LibrariesMessage::Search("isolatie".into())),
+            ("3d-system", LibrariesMessage::Source(Source::Project)),
+            ("3d-system-apart", LibrariesMessage::Source(Source::Project)),
+            ("3d-wall", LibrariesMessage::Source(Source::Project)),
+            ("3d-steel", LibrariesMessage::Source(Source::General)),
+        ];
+        for (name, show) in shots {
+            let mut studio = Studio::new(App::default());
+            studio.prefs.language = Language::Dutch;
+            studio.set_product(Product::Library);
+            let _ = studio.update(Msg::App(Message::Libraries(show)));
+            // the Netherlands with a kind of drawing picked, so the right pane shows its fields
+            // the project with its first wall picked, so the right pane is its editor
+            if name == "buildup" {
+                let id = studio.app.library.buildups[0].id.clone();
+                let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+            }
+            // the project with a column of the steel table picked, in its profile editor, and
+            // the series it is of shown under the types
+            if name == "profile" {
+                use crate::app::profiles::ProfileMessage;
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(crate::app::libraries::Category::Steel))));
+                for message in [ProfileMessage::Add, ProfileMessage::Steel("HEB 300".into()), ProfileMessage::Series(Some("HEB"))] {
+                    let _ = studio.update(Msg::App(Message::Profile(message)));
+                }
+            }
+            // the project with a material picked, in its editor
+            if name == "material" {
+                let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
+            }
+            // the project with a timber frame picked, in its editor: the face open, or a layer
+            if name.starts_with("system") {
+                use crate::app::systems::{Part, SystemMessage};
+                let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Pick("system.timber-frame-140".into()))));
+                if name == "system-layer" {
+                    let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Part(Part::Layer(3)))));
+                }
+            }
+            // the project with a model: a wall of the demo building given the first build-up,
+            // and the build-up then made thicker without its wall (as in a file whose elements
+            // are older than their type), so the pane says the wall is not as its type is now
+            if name == "follow" {
+                use crate::app::buildups::BuildUpMessage;
+                studio.app.add_demo_building();
+                let wall = studio.app.modeller.model.iter().find(|e| e.class() == "IfcWall").map(|e| e.id).expect("a wall of the demo");
+                let id = studio.app.library.buildups[0].id.clone();
+                studio.app.select_modelled(wall);
+                let _ = studio.update(Msg::App(Message::Library(crate::app::library::LibraryMessage::Assign(id.clone()))));
+                crate::app::buildups::change(&mut studio.app.library, &id, |b| b.layers[0].thickness = 0.12).expect("a thicker layer");
+                let _ = studio.update(Msg::App(Message::BuildUp(BuildUpMessage::Pick(id))));
+            }
+            // the hatches: the signs of NEN 47 with one looked at, the suite's own with a species
+            // of wood looked at
+            if name.starts_with("hatches") {
+                use crate::app::libraries::{Category, Item};
+                let (set, key) = if name == "hatches-nen47" { (bim_library::HatchSet::Nen47, "nen47-25") } else { (bim_library::HatchSet::OpenAec, "openaec-12-larch") };
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(set)))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch(key.into())))));
+            }
+            // the IFCX tab: the project's materials with one picked, and the general library's
+            // hatches with one looked at
+            if name == "ifcx" {
+                let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(crate::app::libraries::Page::Code))));
+            }
+            if name == "ifcx-hatch" {
+                use crate::app::libraries::{Category, Item};
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(bim_library::HatchSet::OpenAec)))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch("openaec-17-pir".into())))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(crate::app::libraries::Page::Code))));
+            }
+            // the 3D tab: a timber frame of the project as it lies and pulled apart, a wall of the
+            // project pulled apart, and a profile of the steel table
+            if name.starts_with("3d") {
+                use crate::app::libraries::{Item, Page};
+                match name {
+                    "3d-wall" => {
+                        let id = studio.app.library.buildups.iter().find(|b| b.layers.len() >= 4).map(|b| b.id.clone()).expect("a layered wall");
+                        let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+                    }
+                    "3d-steel" => {
+                        let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Steel("HEB 300".into())))));
+                    }
+                    _ => {
+                        let _ = studio.update(Msg::App(Message::SystemType(crate::app::systems::SystemMessage::Pick("system.timber-frame-140".into()))));
+                    }
+                }
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(Page::Solid))));
+                if name != "3d-system" {
+                    let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Apart(true))));
+                }
+            }
+            if name == "country-nl" {
+                let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));
+            }
+            studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-product-{name}.png"))).expect("snapshot");
         }
     }
 
@@ -3526,7 +3946,7 @@ mod tests {
         studio.dialog = Some(Dialog::Settings);
         studio.settings_page = SettingsPage::Extensions;
         let mut ui = iced_test::simulator(studio.view());
-        for product in Product::ALL {
+        for product in studio.extensions() {
             assert!(ui.find(product.full_name()).is_ok(), "{product:?}");
         }
     }
@@ -3606,6 +4026,29 @@ mod tests {
         for id in ["annotate.dimension", "annotate.standard-dimensions", "annotate.text", "annotate.section"] {
             assert!(studio.command(id).enabled, "{id} in a plan");
         }
+        // the Draw tab, second after Model: selecting, the six drawing tools, what is written and
+        // measured on the drawing, and changing what is selected; each a command that is there
+        let _ = studio.update(Msg::RibbonTab(1));
+        assert_eq!(studio.ribbon_page(), RibbonPage::Draw);
+        let groups = studio.ribbon_groups();
+        assert_eq!(groups.iter().map(|g| g.0).collect::<Vec<_>>(), ["Selection", "Draw", "Annotate", "Modify", "Edit"]);
+        let ids: Vec<&str> = groups
+            .iter()
+            .flat_map(|g| &g.1)
+            .flat_map(|part| match part {
+                RibbonPart::Large(id) => vec![*id],
+                RibbonPart::Smalls(ids) => ids.clone(),
+            })
+            .collect();
+        for kind in crate::app::DrawKind::ALL {
+            assert!(ids.contains(&kind.command()) && studio.command(kind.command()).enabled, "{kind:?}");
+        }
+        for id in &ids {
+            assert_eq!(studio.command(id).id, *id);
+        }
+        let _ = studio.update(studio.command("draw.arc").message);
+        assert_eq!(studio.app.draw_tool, Some(crate::app::DrawKind::Arc));
+        assert!(studio.command("draw.arc").kind == openaec_ui::design::command::CommandKind::Toggle(true));
         let _ = studio.update(studio.command("annotate.dimension").message);
         assert!(studio.app.dimension_tool && studio.command("annotate.dimension").kind == openaec_ui::design::command::CommandKind::Toggle(true));
         // the door and window tools are on the Model tab
@@ -3623,6 +4066,81 @@ mod tests {
     }
 
     #[test]
+    fn the_planner_lays_its_web_frame_over_the_workspace_and_hides_it_elsewhere() {
+        use openaec_ui::design::shell::{RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
+        let mut studio = Studio::new(App::default());
+        // a web frame in the window: on Windows, for now
+        assert_eq!(studio.products.contains(&Product::Planner), cfg!(windows));
+        if !Product::Planner.built() {
+            return;
+        }
+        let _ = studio.update(Msg::Product(Product::Planner));
+        assert_eq!((studio.product(), studio.ribbon_page()), (Product::Planner, RibbonPage::Planner));
+        // no window yet: no frame; under it the page names the program and opens it outside
+        assert_eq!(studio.planner_area(), None);
+        {
+            let mut ui = iced_test::simulator(studio.view());
+            assert!(ui.find("Open Planner Studio").is_ok() && ui.find("Open in browser").is_ok());
+        }
+        // the frame is the workspace: the window's width, from under the ribbon to the status bar
+        studio.window_open = true;
+        let _ = studio.update(Msg::Sized(iced::Size::new(1400.0, 900.0)));
+        // (but for the window's left and right edge, where a press resizes the window)
+        let (top, scale, edge) = (TITLEBAR + RIBBON_TABS + RIBBON, studio.prefs.scale() as f32, crate::resize_frame::EDGE);
+        assert_eq!(studio.planner_area(), Some([edge * scale, top * scale, (1400.0 - 2.0 * edge) * scale, (900.0 - top - STATUSBAR) * scale]));
+        // a maximized window has no edges to drag
+        studio.maximized = true;
+        assert_eq!(studio.planner_area(), Some([0.0, top * scale, 1400.0 * scale, (900.0 - top - STATUSBAR) * scale]));
+        studio.maximized = false;
+        // it follows the window
+        let _ = studio.update(Msg::Sized(iced::Size::new(1000.0, 700.0)));
+        assert_eq!(studio.planner_area().map(|[_, _, w, h]| (w, h)), Some(((1000.0 - 2.0 * edge) * scale, (700.0 - top - STATUSBAR) * scale)));
+        // and the app's interface size: the frame is laid in the window's own units
+        studio.prefs.scale = 1.5;
+        let _ = studio.update(Msg::Sized(iced::Size::new(800.0, 500.0)));
+        assert_eq!(studio.planner_area(), Some([edge * 1.5, top * 1.5, (800.0 - 2.0 * edge) * 1.5, (500.0 - top - STATUSBAR) * 1.5]));
+        studio.prefs.scale = scale as f64;
+        let _ = studio.update(Msg::Sized(iced::Size::new(1000.0, 700.0)));
+        // the pointer on the status bar: a tip there opens above it, and the frame makes room
+        let full = studio.planner_area().expect("frame");
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(900.0, 695.0))));
+        assert_eq!(studio.planner_area().map(|[_, y, _, h]| (y, h)), Some((full[1], full[3] - PLANNER_TIP * scale)));
+        // on the ribbon: the tip of a large button hangs a little below it
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(60.0, 100.0))));
+        assert_eq!(studio.planner_area().map(|[_, y, _, h]| (y, h)), Some((full[1] + PLANNER_RIBBON_TIP * scale, full[3] - PLANNER_RIBBON_TIP * scale)));
+        // on the title bar its tips end above the workspace, and over the page the app sees no pointer
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(60.0, 10.0))));
+        assert_eq!(studio.planner_area(), Some(full));
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(900.0, 695.0))));
+        let _ = studio.update(Msg::PlannerPointer(None));
+        assert_eq!(studio.planner_area(), Some(full));
+        // no web view on this computer: no frame, the page says so and still opens the browser
+        let _ = studio.update(Msg::PlannerFrame(Err("no runtime".into())));
+        assert_eq!(studio.planner_area(), None);
+        assert!(matches!(&studio.app.status, Status::Error(e) if e.contains("no runtime")));
+        {
+            let mut ui = iced_test::simulator(studio.view());
+            assert!(ui.find("The system's web view runtime (WebView2 Runtime) is missing or does not start. Open the planning in the browser, or choose Refresh to try again.").is_ok());
+            assert!(ui.find("Open in browser").is_ok());
+        }
+        assert_eq!(url_opener(), if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+        // Refresh tries again
+        let _ = studio.update(Msg::PlannerReload);
+        assert_eq!(studio.planner_area(), Some(full));
+        // a dialog and File are drawn by the app, which a frame would cover: it hides for them
+        studio.dialog = Some(Dialog::Settings);
+        assert_eq!(studio.planner_area(), None);
+        studio.dialog = None;
+        studio.backstage = true;
+        assert_eq!(studio.planner_area(), None);
+        studio.backstage = false;
+        assert!(studio.planner_area().is_some());
+        // and for every other product
+        let _ = studio.update(Msg::Product(Product::Viewer));
+        assert_eq!(studio.planner_area(), None);
+    }
+
+    #[test]
     fn docs_is_a_product_with_its_ribbon_its_page_and_the_folders_in_the_left_pane() {
         let root = project_folder("product");
         let mut studio = Studio::new(App::default());
@@ -3630,9 +4148,10 @@ mod tests {
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Docs, RibbonPage::Docs));
         assert!(studio.app.docs.open && studio.app.docs.shown, "its page shows");
         // it is on the switch once: a product there is, is no product to come; it stands where it
-        // was announced, after the Modeller (GIS came after it)
+        // was announced, after the Modeller (GIS and the Planner came after it)
         assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
-        assert_eq!(Product::ALL.last(), Some(&Product::Gis));
+        assert_eq!(Product::ALL[Product::Modeller.index() + 1], Product::Docs);
+        assert_eq!(Product::ALL.last(), Some(&Product::Planner));
         // no project folder yet: the page asks for one
         assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
         // with one: its folders are the left pane, its files the page
@@ -3679,14 +4198,14 @@ mod tests {
         let tabs = |studio: &Studio| -> Vec<String> { accessibility(studio).summary().into_iter().filter(|n| n.starts_with("Tab: ")).collect() };
         // the switch names the three products; the Viewer's ribbon has one tab, without modelling
         let shown = tabs(&studio);
-        for product in Product::ALL {
+        for product in studio.extensions() {
             assert!(shown.contains(&format!("Tab: {}", product.label())), "{shown:?}");
         }
         assert!(shown.contains(&"Tab: Home".to_string()) && !shown.contains(&"Tab: Model".to_string()), "{shown:?}");
         let _ = studio.update(Msg::Product(Product::Modeller));
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Modeller, RibbonPage::Model));
         let shown = tabs(&studio);
-        for tab in ["Tab: Model", "Tab: Project", "Tab: Annotate", "Tab: View"] {
+        for tab in ["Tab: Model", "Tab: Draw", "Tab: Project", "Tab: View"] {
             assert!(shown.contains(&tab.to_string()), "{shown:?}");
         }
         let _ = studio.update(Msg::RibbonTab(3));
@@ -3735,6 +4254,25 @@ mod tests {
         // older preferences have no product: the Viewer
         let prefs: Prefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
         assert_eq!(prefs.product, Product::Viewer);
+    }
+
+    #[test]
+    fn ifcx_is_a_product_of_its_own_and_shows_the_project_as_ifcx() {
+        // not a tab of the Modeller's ribbon: on the switch, for every project
+        assert!(Product::ALL.iter().all(|p| (*p == Product::Ifcx) == p.pages().contains(&RibbonPage::Ifcx)));
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        let _ = studio.update(Msg::Product(Product::Ifcx));
+        assert_eq!((studio.product(), studio.ribbon_page()), (Product::Ifcx, RibbonPage::Ifcx));
+        assert!(studio.app.ifc.full && studio.app.ifc.shown && studio.app.ifc.structure.is_some(), "the project's IFCX fills the workspace");
+        // another product gives the views back
+        let _ = studio.update(Msg::Product(Product::Viewer));
+        assert!(!studio.app.ifc.full && !studio.app.ifc.shown);
+        // without a model there is nothing to show yet, and no error either
+        let mut empty = Studio::new(App::default());
+        let _ = empty.update(Msg::Product(Product::Ifcx));
+        assert!(!empty.app.ifc.full && !matches!(empty.app.status, Status::Error(_)));
     }
 
     #[test]

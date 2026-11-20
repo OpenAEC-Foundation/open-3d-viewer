@@ -54,6 +54,18 @@ pub struct Revision {
     /// The file's size and time when it was recorded: how a later change is told.
     pub size: u64,
     pub modified: u64,
+    /// The copy of the file that was kept when it was recorded (its path in the project folder,
+    /// see [`keep`]); empty when none was kept.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub copy: String,
+}
+
+/// Who has a document checked out, and since when: the others see it is being worked on.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Out {
+    pub by: String,
+    pub since: String,
 }
 
 /// An element of a model that a document is about.
@@ -88,6 +100,9 @@ pub struct Document {
     /// When this entry was last changed, and by whom.
     pub changed: String,
     pub by: String,
+    /// Who has it checked out, if anyone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out: Option<Out>,
 }
 
 /// How a document's file stands against what was recorded of it.
@@ -125,9 +140,29 @@ impl Document {
 
     /// Records the file as it is now as revision `code`, which then stands.
     pub fn record(&mut self, code: &str, note: &str, file: &File, by: &str, now: &str) {
-        self.revisions.push(Revision { code: code.trim().into(), date: now.into(), by: by.into(), note: note.trim().into(), size: file.size, modified: file.modified });
+        self.revisions.push(Revision { code: code.trim().into(), date: now.into(), by: by.into(), note: note.trim().into(), size: file.size, modified: file.modified, copy: String::new() });
         self.revision = code.trim().into();
         self.touch(by, now);
+    }
+
+    /// `by` checks the document out: the others see who works on it.
+    pub fn check_out(&mut self, by: &str, now: &str) {
+        self.out = Some(Out { by: by.into(), since: now.into() });
+        self.touch(by, now);
+    }
+
+    /// The document is checked in again.
+    pub fn check_in(&mut self, by: &str, now: &str) {
+        self.out = None;
+        self.touch(by, now);
+    }
+
+    /// Where the copy of revision `code` of this document is kept: its path in the project folder.
+    pub fn copy_of(&self, code: &str) -> String {
+        // the code becomes part of a file name: what a name cannot hold becomes `_`
+        let code: String = code.trim().chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' }).collect();
+        let name = self.file.rsplit('/').next().unwrap_or(&self.file);
+        format!("{}/{}/{code} {name}", crate::VERSIONS_FOLDER, self.id)
     }
 
     /// Links the document to an element; `false` when it was linked already.
@@ -205,6 +240,37 @@ pub fn merge(a: Document, b: Document) -> Document {
         stands.link(element);
     }
     stands
+}
+
+/// Keeps a copy of the document's file as it is now, as revision `code`: in the suite's own folder
+/// of the project, so whoever shares the folder has it too. Gives the copy's path in the folder.
+pub fn keep(project: &Path, document: &Document, code: &str) -> Result<String, String> {
+    let copy = document.copy_of(code);
+    copy_over(&project.join(&document.file), &project.join(&copy))?;
+    Ok(copy)
+}
+
+/// Puts the copy kept of `revision` back in the place of the document's file.
+pub fn put_back(project: &Path, document: &Document, revision: &Revision) -> Result<(), String> {
+    // only a copy the suite kept: nothing outside its own folder is taken
+    let inside = format!("{}/", crate::VERSIONS_FOLDER);
+    if !revision.copy.starts_with(&inside) || revision.copy.split('/').any(|part| part == "..") {
+        return Err(format!("no copy was kept of {}", revision.code));
+    }
+    copy_over(&project.join(&revision.copy), &project.join(&document.file))
+}
+
+/// Copies `from` beside `to` and then in its place, so nobody opens half a file.
+fn copy_over(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(folder) = to.parent() {
+        std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    }
+    let temp = to.with_extension("part");
+    std::fs::copy(from, &temp).map_err(|e| format!("{}: {e}", from.display()))?;
+    std::fs::rename(&temp, to).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("{}: {e}", to.display())
+    })
 }
 
 /// Writes `bytes` beside `path` and then in its place, so nobody reads half a file.
@@ -455,5 +521,49 @@ mod tests {
     #[test]
     fn a_status_is_written_in_lower_case() {
         assert_eq!(serde_json::to_string(&Status::ALL).unwrap(), r#"["work","shared","published","archived"]"#);
+    }
+
+    #[test]
+    fn a_revision_keeps_a_copy_of_its_file_that_can_be_put_back() {
+        let root = project("copy");
+        std::fs::create_dir_all(root.join("drawings")).unwrap();
+        std::fs::write(root.join("drawings/A-101.pdf"), b"first").unwrap();
+        let mut d = plan();
+        // the copy lies in the suite's own folder, named by the document and the revision
+        let kept = keep(&root, &d, "P01").unwrap();
+        assert_eq!(kept, format!("_openaec/versions/{ID}/P01 A-101.pdf"));
+        assert_eq!(std::fs::read(root.join(&kept)).unwrap(), b"first");
+        d.revisions[0].copy = kept.clone();
+        // a code that cannot be part of a name still makes one
+        assert_eq!(keep(&root, &d, "C/02?").unwrap(), format!("_openaec/versions/{ID}/C_02_ A-101.pdf"));
+        // what is kept goes through the register file
+        let back = Document::from_ifcx(&serde_json::to_vec(&d.to_ifcx("test", "2026-11-18T10:00:00Z")).unwrap()).unwrap();
+        assert_eq!(back.revisions[0].copy, kept);
+        // the file changes, and the revision goes back in its place
+        std::fs::write(root.join("drawings/A-101.pdf"), b"second").unwrap();
+        put_back(&root, &d, &d.revisions[0]).unwrap();
+        assert_eq!(std::fs::read(root.join("drawings/A-101.pdf")).unwrap(), b"first");
+        // a revision recorded without a copy has nothing to put back
+        let mut bare = d.revisions[0].clone();
+        bare.copy.clear();
+        assert!(put_back(&root, &d, &bare).is_err());
+        // nor does a copy that points out of the suite's folder
+        bare.copy = "../elsewhere.pdf".into();
+        assert!(put_back(&root, &d, &bare).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_document_is_checked_out_by_one_person_and_checked_in_again() {
+        let mut d = plan();
+        assert!(d.out.is_none());
+        d.check_out("an", "2026-11-18T10:00:00Z");
+        assert_eq!(d.out.as_ref().map(|o| (o.by.as_str(), o.since.as_str())), Some(("an", "2026-11-18T10:00:00Z")));
+        assert_eq!(d.by, "an");
+        let back = Document::from_ifcx(&serde_json::to_vec(&d.to_ifcx("test", "2026-11-18T10:00:00Z")).unwrap()).unwrap();
+        assert_eq!(back.out, d.out);
+        d.check_in("an", "2026-11-18T11:00:00Z");
+        assert!(d.out.is_none());
+        assert_eq!(d.changed, "2026-11-18T11:00:00Z");
     }
 }

@@ -98,6 +98,55 @@ impl PlanKind {
     }
 }
 
+/// What the lines of a shape drawn on a view are together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShapeKind {
+    /// Lines on from each other, open or closed.
+    Polyline,
+    Rectangle,
+    Circle,
+    Arc,
+    Ellipse,
+}
+
+impl ShapeKind {
+    pub const ALL: [ShapeKind; 5] = [ShapeKind::Polyline, ShapeKind::Rectangle, ShapeKind::Circle, ShapeKind::Arc, ShapeKind::Ellipse];
+
+    /// Its name in IFCX (`shapes` of a view).
+    pub fn key(self) -> &'static str {
+        match self {
+            ShapeKind::Polyline => "polyline",
+            ShapeKind::Rectangle => "rectangle",
+            ShapeKind::Circle => "circle",
+            ShapeKind::Arc => "arc",
+            ShapeKind::Ellipse => "ellipse",
+        }
+    }
+
+    /// The kind named `key` in IFCX.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.key() == key)
+    }
+}
+
+/// A shape drawn on a view: a run of the view's lines that is one thing, picked and removed
+/// together. A line alone needs none. The lines stay what is drawn, exported and read by a
+/// program that knows no shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
+    pub kind: ShapeKind,
+    /// Its first line among the view's lines, and how many it has.
+    pub first: usize,
+    pub count: usize,
+}
+
+impl Shape {
+    /// The places of its lines among the view's.
+    pub fn run(&self) -> std::ops::Range<usize> {
+        self.first..self.first + self.count
+    }
+}
+
 /// A plan of a level: the model seen from above (or from below, a ceiling plan), cut at
 /// [`PlanView::cut`] above its level.
 #[derive(Debug, Clone, PartialEq)]
@@ -115,12 +164,17 @@ pub struct PlanView {
     pub depth: f64,
     /// The scale its texts and dimensions are sized for (1 : this), as in its own tab.
     pub scale: f64,
+    /// The kind of drawing it is, by the key the project's drawing standard has it under: it is
+    /// drawn by that kind's rules. `None`: the kind usual for what it is.
+    pub drawing: Option<String>,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
     /// Its texts, shown wherever it is placed.
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (x, y, metres).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// Which runs of those lines are one shape each (a rectangle, a circle).
+    pub shapes: Vec<Shape>,
     /// What the modelled project says on it by itself, made again after every change of the
     /// model and not kept in the file: the names and areas of its spaces.
     pub tags: Vec<Note>,
@@ -190,12 +244,17 @@ pub struct SectionView {
     pub depth: f64,
     /// The scale its texts and dimensions are sized for (1 : this), as in its own tab.
     pub scale: f64,
+    /// The kind of drawing it is, by the key the project's drawing standard has it under: it is
+    /// drawn by that kind's rules. `None`: the kind usual for what it is.
+    pub drawing: Option<String>,
     /// Its dimensions, in its drawing's (u, v).
     pub dimensions: Vec<Dimension>,
     /// Its texts, in its drawing's (u, v).
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (u, v).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// Which runs of those lines are one shape each (a rectangle, a circle).
+    pub shapes: Vec<Shape>,
     /// The regions drawn on it in one colour that are no model, under its lines.
     pub fills: Vec<Fill>,
     /// What it shows, in its drawing's (u, v); `None`: all of it.
@@ -251,6 +310,8 @@ pub struct View3d {
     pub layers: LayerSwitches,
     /// The elements hidden in it with Hide or Isolate.
     pub hidden: Arc<UnitKeySet>,
+    /// What it shows of the loads and results of a structural analysis model.
+    pub analysis: Option<crate::structural::diagrams::Shown>,
 }
 
 /// How the ends of a dimension line are marked.
@@ -486,6 +547,15 @@ pub struct Note {
     pub angle: f64,
     /// The typeface of its letters: the app's own unless its file names one.
     pub face: crate::typeface::Face,
+    /// A level mark of a section or an elevation: its text is the height it stands at
+    /// ([`level_text`]), kept so when it moves, and it is drawn with a triangle on that height.
+    pub level: bool,
+}
+
+/// What a level mark says of height `z` (metres): "+2.700", and "+0.000" at zero.
+pub fn level_text(z: f64) -> String {
+    let z = if z.abs() < 0.0005 { 0.0 } else { z };
+    format!("{z:+.3}")
 }
 
 /// The height of the letters of a new text on paper (metres).
@@ -496,6 +566,14 @@ pub const A3_LANDSCAPE: [f64; 2] = [0.420, 0.297];
 /// The ISO papers a sheet can have, landscape: name, width and height (metres).
 pub const PAPERS: [(&str, [f64; 2]); 5] =
     [("A4", [0.297, 0.210]), ("A3", A3_LANDSCAPE), ("A2", [0.594, 0.420]), ("A1", [0.841, 0.594]), ("A0", [1.189, 0.841])];
+/// A view's node with the kind of drawing it was given, when it was given one.
+fn with_drawing(mut view: Value, drawing: &Option<String>) -> Value {
+    if let Some(kind) = drawing {
+        view["drawing"] = kind.clone().into();
+    }
+    view
+}
+
 /// The scales a placed view can have (1 : this).
 pub const SCALES: [f64; 6] = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
 /// The scale a view gets when it is placed on a sheet (1 : this).
@@ -634,12 +712,22 @@ impl Document {
                 if n.angle != 0.0 {
                     note["angle"] = n.angle.into();
                 }
+                if n.level {
+                    note["level"] = true.into();
+                }
                 if let Some(font) = n.face.to_json() {
                     note["font"] = font;
                 }
                 note
             };
             n.iter().map(note).collect::<Vec<_>>()
+        };
+        // the shapes of a view's lines, where it has any: kind, first line, how many
+        let shaped = |mut view: Value, shapes: &[Shape]| -> Value {
+            if !shapes.is_empty() {
+                view["shapes"] = shapes.iter().map(|s| json!([s.kind.key(), s.first, s.count])).collect::<Vec<_>>().into();
+            }
+            view
         };
         let mut nodes = Vec::new();
         let mut children = serde_json::Map::new();
@@ -650,7 +738,8 @@ impl Document {
             let view = json!({
                 "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
-            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(view, &p.hidden)}}));
+            let view = shaped(view, &p.shapes);
+            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(with_drawing(view, &p.drawing), &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
@@ -658,15 +747,19 @@ impl Document {
             let view = json!({
                 "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "fills": fills(&s.fills), "layers": s.layers,
             });
-            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
+            let view = shaped(view, &s.shapes);
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(with_drawing(view, &s.drawing), &s.hidden)}}));
         }
         for (i, v) in self.views_3d.iter().enumerate() {
             children.insert(format!("3d view {}", i + 1), v.path.clone().into());
             let c = &v.camera;
             let section = v.section.map_or(Value::Null, |b| json!({"min": b.min, "max": b.max, "turn": b.turn, "pivot": b.pivot}));
-            let view = json!({
+            let mut view = json!({
                 "name": v.name, "camera": {"eye": c.eye, "target": c.target, "perspective": c.perspective, "fov": c.fov}, "box": section, "layers": v.layers,
             });
+            if let Some(shown) = &v.analysis {
+                view["analysis"] = shown.to_json();
+            }
             nodes.push(json!({"path": v.path, "attributes": {"o3v::view::3d": with_hidden(view, &v.hidden)}}));
         }
         for (i, s) in self.sheets.iter().enumerate() {
@@ -706,11 +799,31 @@ impl Document {
         };
         let notes = |v: Option<&Value>| -> Vec<Note> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
-            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0), face: crate::typeface::Face::from_json(n.get("font")) })).filter(|n| !n.text.trim().is_empty()).collect()
+            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0), face: crate::typeface::Face::from_json(n.get("font")), level: n.get("level").and_then(Value::as_bool).unwrap_or(false) })).filter(|n| !n.text.trim().is_empty()).collect()
         };
         let lines = |v: Option<&Value>| -> Vec<[[f64; 2]; 2]> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
             all.filter_map(|l| Some([pair(l.get(0)?)?, pair(l.get(1)?)?])).filter(|l| l.iter().flatten().all(|x| x.is_finite())).collect()
+        };
+        // the shapes of a view's lines: runs within them, one after the other; none where a line
+        // of the file was left out, since the runs then count other lines
+        let shapes = |view: &Value| -> Vec<Shape> {
+            let written = view.get("lines").and_then(Value::as_array).map_or(0, Vec::len);
+            if lines(view.get("lines")).len() != written {
+                return Vec::new();
+            }
+            let all = view.get("shapes").and_then(Value::as_array).into_iter().flatten();
+            let mut read: Vec<Shape> = all.filter_map(|s| Some(Shape { kind: ShapeKind::from_key(s.get(0)?.as_str()?)?, first: s.get(1)?.as_u64()? as usize, count: s.get(2)?.as_u64()? as usize })).collect();
+            read.sort_by_key(|s| s.first);
+            let mut end = 0;
+            read.retain(|s| {
+                let fits = s.count >= 1 && s.first >= end && s.first + s.count <= written;
+                if fits {
+                    end = s.first + s.count;
+                }
+                fits
+            });
+            read
         };
         let layers = |v: Option<&Value>| -> LayerSwitches {
             let all = v.and_then(Value::as_object).into_iter().flatten();
@@ -741,11 +854,13 @@ impl Document {
                     cut: number(p, "cut", cut),
                     depth: number(p, "depth", depth),
                     scale: scale(p),
+                    drawing: p.get("drawing").and_then(Value::as_str).map(String::from),
                     tags: Vec::new(),
                     symbols: Vec::new(),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     lines: lines(p.get("lines")),
+                    shapes: shapes(p),
                     fills: Fill::from_ifcx(p.get("fills")),
                     crop: rect(p.get("crop")),
                     layers: layers(p.get("layers")),
@@ -761,9 +876,11 @@ impl Document {
                     to,
                     depth: number(s, "depth", 100.0),
                     scale: scale(s),
+                    drawing: s.get("drawing").and_then(Value::as_str).map(String::from),
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
                     lines: lines(s.get("lines")),
+                    shapes: shapes(s),
                     fills: Fill::from_ifcx(s.get("fills")),
                     crop: rect(s.get("crop")),
                     layers: layers(s.get("layers")),
@@ -785,6 +902,7 @@ impl Document {
                     section,
                     layers: layers(v.get("layers")),
                     hidden: hidden(v),
+                    analysis: v.get("analysis").and_then(crate::structural::diagrams::Shown::from_json),
                 });
             }
         }
@@ -896,7 +1014,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -949,7 +1067,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), shapes: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -993,7 +1111,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("view3d/{}/{name}", self.added));
-        self.views_3d.push(View3d { path: path.clone(), name, camera, section, layers, hidden });
+        self.views_3d.push(View3d { path: path.clone(), name, camera, section, layers, hidden, analysis: None });
         path
     }
 
@@ -1010,6 +1128,17 @@ impl Document {
             return false;
         }
         (view.camera, view.section) = (camera, section);
+        true
+    }
+
+    /// Lets a 3D view show `analysis` of the loads and results (none: it has no say in them);
+    /// false when there is no such view or nothing changes.
+    pub fn set_view_3d_analysis(&mut self, path: &str, analysis: Option<crate::structural::diagrams::Shown>) -> bool {
+        let Some(view) = self.views_3d.iter_mut().find(|v| v.path == path) else { return false };
+        if view.analysis == analysis {
+            return false;
+        }
+        view.analysis = analysis;
         true
     }
 
@@ -1059,6 +1188,45 @@ impl Document {
     /// The scale a view's texts and dimensions are sized for (1 : this).
     pub fn view_scale(&self, path: &str) -> Option<f64> {
         self.plan(path).map(|p| p.scale).or_else(|| self.section(path).map(|s| s.scale))
+    }
+
+    /// Sets the scale a view's texts and dimensions are sized for (1 : `scale`).
+    pub fn set_view_scale(&mut self, path: &str, scale: f64) -> bool {
+        if !(scale.is_finite() && scale >= 1.0) {
+            return false;
+        }
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            p.scale = scale;
+            return true;
+        }
+        match self.sections.iter_mut().find(|s| s.path == path) {
+            Some(s) => {
+                s.scale = scale;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The kind of drawing a view was given: a key of the project's drawing standard.
+    pub fn view_drawing(&self, path: &str) -> Option<&str> {
+        self.plan(path).map(|p| &p.drawing).or_else(|| self.section(path).map(|s| &s.drawing))?.as_deref()
+    }
+
+    /// Gives a view a kind of drawing (a key of the project's drawing standard), or none: the
+    /// kind usual for what it is.
+    pub fn set_view_drawing(&mut self, path: &str, kind: Option<String>) -> bool {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            p.drawing = kind;
+            return true;
+        }
+        match self.sections.iter_mut().find(|s| s.path == path) {
+            Some(s) => {
+                s.drawing = kind;
+                true
+            }
+            None => false,
+        }
     }
 
     /// The dimensions and the crop of a view (floor plan, section or elevation).
@@ -1231,29 +1399,109 @@ impl Document {
         self.section(path).map_or(&[], |s| &s.lines[..])
     }
 
-    fn lines_mut(&mut self, path: &str) -> Option<&mut Vec<[[f64; 2]; 2]>> {
-        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
-            return Some(&mut p.lines);
+    /// The shapes drawn on a view: the runs of its lines that are one thing each.
+    pub fn view_shapes(&self, path: &str) -> &[Shape] {
+        if let Some(p) = self.plan(path) {
+            return &p.shapes;
         }
-        self.sections.iter_mut().find(|s| s.path == path).map(|s| &mut s.lines)
+        self.section(path).map_or(&[], |s| &s.shapes[..])
     }
 
-    /// Adds lines to a view's drawing (its own points, metres); one without length or with a
-    /// point that is not finite is left out. How many were added.
+    /// A view's lines and the shapes among them.
+    fn drawn_mut(&mut self, path: &str) -> Option<(&mut Vec<[[f64; 2]; 2]>, &mut Vec<Shape>)> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some((&mut p.lines, &mut p.shapes));
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| (&mut s.lines, &mut s.shapes))
+    }
+
+    /// Adds lines to a view's drawing (its own points, metres), each a line of its own; one
+    /// without length or with a point that is not finite is left out. How many were added.
     pub fn add_view_lines(&mut self, view: &str, lines: &[[[f64; 2]; 2]]) -> usize {
-        let Some(own) = self.lines_mut(view) else { return 0 };
+        let Some((own, _)) = self.drawn_mut(view) else { return 0 };
         let before = own.len();
         own.extend(lines.iter().filter(|l| l.iter().flatten().all(|v| v.is_finite()) && l[0] != l[1]));
         own.len() - before
     }
 
-    /// Removes a line of a view's drawing.
-    pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
-        let Some(own) = self.lines_mut(view) else { return false };
-        if index >= own.len() {
+    /// Adds a shape to a view's drawing: its lines, kept together as one thing. A shape of one
+    /// line is that line. How many lines were added.
+    pub fn add_view_shape(&mut self, view: &str, kind: ShapeKind, lines: &[[[f64; 2]; 2]]) -> usize {
+        let Some((own, shapes)) = self.drawn_mut(view) else { return 0 };
+        let first = own.len();
+        own.extend(lines.iter().filter(|l| l.iter().flatten().all(|v| v.is_finite()) && l[0] != l[1]));
+        let count = own.len() - first;
+        if count > 1 {
+            shapes.push(Shape { kind, first, count });
+        }
+        count
+    }
+
+    /// The lines of a view that are one thing with its line `index`: the run of its shape and
+    /// what that is, or the line alone.
+    pub fn shape_of(&self, view: &str, index: usize) -> (std::ops::Range<usize>, Option<ShapeKind>) {
+        match self.view_shapes(view).iter().find(|s| s.run().contains(&index)) {
+            Some(s) => (s.run(), Some(s.kind)),
+            None => (index..index + 1, None),
+        }
+    }
+
+    /// Puts the lines `run` of a view's drawing through `map`: where they are, or (`copy`) as new
+    /// lines after the others, a shape again when they were one. The run they are in now.
+    pub fn map_view_lines(&mut self, view: &str, run: std::ops::Range<usize>, copy: bool, map: &dyn Fn([f64; 2]) -> [f64; 2]) -> Option<std::ops::Range<usize>> {
+        let kind = self.view_shapes(view).iter().find(|s| s.run() == run).map(|s| s.kind);
+        let (own, shapes) = self.drawn_mut(view)?;
+        if run.is_empty() || run.end > own.len() {
+            return None;
+        }
+        let mapped: Vec<[[f64; 2]; 2]> = own[run.clone()].iter().map(|l| [map(l[0]), map(l[1])]).collect();
+        if !mapped.iter().flatten().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
+        if !copy {
+            own[run.clone()].copy_from_slice(&mapped);
+            return Some(run);
+        }
+        let first = own.len();
+        own.extend(mapped);
+        if let Some(kind) = kind {
+            shapes.push(Shape { kind, first, count: run.len() });
+        }
+        Some(first..first + run.len())
+    }
+
+    /// Gives line `index` of a view's drawing other ends. False for a line that is none.
+    pub fn set_view_line(&mut self, view: &str, index: usize, line: [[f64; 2]; 2]) -> bool {
+        let Some((own, _)) = self.drawn_mut(view) else { return false };
+        if index >= own.len() || line[0] == line[1] || !line.iter().flatten().all(|v| v.is_finite()) {
             return false;
         }
-        own.remove(index);
+        own[index] = line;
+        true
+    }
+
+    /// Makes the shape that line `index` of a view is part of loose lines again. False when the
+    /// line is of no shape.
+    pub fn explode_view_shape(&mut self, view: &str, index: usize) -> bool {
+        let Some((_, shapes)) = self.drawn_mut(view) else { return false };
+        let before = shapes.len();
+        shapes.retain(|s| !s.run().contains(&index));
+        shapes.len() != before
+    }
+
+    /// Removes a line of a view's drawing, with the shape it is part of.
+    pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
+        let (run, _) = self.shape_of(view, index);
+        let Some((own, shapes)) = self.drawn_mut(view) else { return false };
+        if run.end > own.len() {
+            return false;
+        }
+        own.drain(run.clone());
+        shapes.retain(|s| s.first != run.start || s.count != run.len());
+        // the shapes after it count their lines from where they are now
+        for s in shapes.iter_mut().filter(|s| s.first >= run.end) {
+            s.first -= run.len();
+        }
         true
     }
 
@@ -1272,7 +1520,18 @@ impl Document {
             return false;
         }
         let Some(notes) = self.notes_mut(view) else { return false };
-        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() });
+        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false });
+        true
+    }
+
+    /// Adds a level mark to a section or an elevation at a point of its drawing: it says the
+    /// height of that point. A floor plan has no heights to mark, so it gets none.
+    pub fn add_level_mark(&mut self, view: &str, at: [f64; 2]) -> bool {
+        if !at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(section) = self.sections.iter_mut().find(|s| s.path == view) else { return false };
+        section.notes.push(Note { at, text: level_text(at[1]), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: true });
         true
     }
 
@@ -1283,12 +1542,17 @@ impl Document {
         }
         let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
         note.at = at;
+        // a level mark says the height it stands at now
+        if note.level {
+            note.text = level_text(at[1]);
+        }
         true
     }
 
-    /// Gives a view's text another wording; it keeps one.
+    /// Gives a view's text another wording; it keeps one. A level mark's text is its height, so
+    /// it is not typed over.
     pub fn set_note_text(&mut self, view: &str, index: usize, text: &str) -> bool {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() || self.view_notes(view).and_then(|n| n.get(index)).is_some_and(|n| n.level) {
             return false;
         }
         let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
@@ -1338,13 +1602,14 @@ impl Document {
         self.sheets.len() < before
     }
 
-    /// Places a view (a floor plan, section or elevation) in the middle of a sheet at 1:100 and
-    /// gives its index on the sheet.
+    /// Places a view (a floor plan, section or elevation) in the middle of a sheet at the view's
+    /// own scale and gives its index on the sheet.
     pub fn place_plan(&mut self, sheet: &str, plan: &str) -> Option<usize> {
         self.view_name(plan)?;
+        let scale = self.view_scale(plan).unwrap_or(SHEET_SCALE);
         let sheet = self.sheets.iter_mut().find(|s| s.path == sheet)?;
         let at = [sheet.paper[0] / 2.0, sheet.paper[1] / 2.0];
-        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale: SHEET_SCALE });
+        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale });
         Some(sheet.views.len() - 1)
     }
 
@@ -1357,6 +1622,17 @@ impl Document {
             return false;
         }
         view.at = [at[0].clamp(0.0, paper[0]), at[1].clamp(0.0, paper[1])];
+        true
+    }
+
+    /// Puts a placed view's middle at `at`, wherever that is: the middle of all a view cuts may
+    /// lie off the paper while the part its crop keeps lies on it.
+    pub fn put_placed(&mut self, sheet: &str, index: usize, at: [f64; 2]) -> bool {
+        let Some(view) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.views.get_mut(index)) else { return false };
+        if !(at[0].is_finite() && at[1].is_finite()) {
+            return false;
+        }
+        view.at = at;
         true
     }
 
@@ -1761,6 +2037,13 @@ mod tests {
         assert_eq!(again.view_3d(&view).unwrap().camera, turned);
         assert_eq!(again.view_layers(&view), Some(&furniture_off));
         assert_eq!(again.view_3d(&parallel).unwrap().section, None);
+        // what a view shows of the loads and results goes with it
+        let shown = crate::structural::diagrams::Shown { deformed: true, plates: true, plate_value: 3, scale: 2.0, bands: 6, ..Default::default() };
+        assert!(document.set_view_3d_analysis(&parallel, Some(shown)) && !document.set_view_3d_analysis(&parallel, Some(shown)));
+        let nodes: Vec<(String, Value)> = document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut kept = Document::from_model(&model_with(&[("00", 0.0)]));
+        kept.adopt_ifcx(&nodes);
+        assert_eq!((kept.view_3d(&parallel).unwrap().analysis, kept.view_3d(&view).unwrap().analysis), (Some(shown), None));
         // a node without its camera is no 3D view; one without a field of view gets one
         let mut broken = nodes;
         for (path, attributes) in &mut broken {
@@ -1818,6 +2101,29 @@ mod tests {
         assert!(document.remove_sheet(&second));
         assert_eq!(document.add_sheet("Again").len(), 36);
         assert_eq!(document.sheets()[1].number, "A02");
+    }
+
+    #[test]
+    fn a_level_mark_says_its_height_follows_a_move_and_comes_back_from_the_file() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 0.0], [8.0, 0.0], 6.0).unwrap();
+        assert!(!document.add_level_mark(&plan, [1.0, 2.0]), "a floor plan has no heights");
+        assert!(document.add_level_mark(&section, [1.0, 2.7]));
+        let note = &document.view_notes(&section).unwrap()[0];
+        assert_eq!((note.text.as_str(), note.level), ("+2.700", true));
+        // moved: its text is the height it stands at; typed over: it is not
+        assert!(document.move_note(&section, 0, [1.0, -0.0001]));
+        assert_eq!(document.view_notes(&section).unwrap()[0].text, "+0.000");
+        assert!(!document.set_note_text(&section, 0, "Roof"));
+        assert!(document.move_note(&section, 0, [1.0, -1.25]));
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        let back = &again.view_notes(&section).unwrap()[0];
+        assert_eq!((back.text.as_str(), back.level, back.at), ("-1.250", true, [1.0, -1.25]));
     }
 
     #[test]
@@ -1900,6 +2206,57 @@ mod tests {
     }
 
     #[test]
+    fn the_shapes_drawn_on_a_view_are_runs_of_its_lines_and_are_saved_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        let square = [[[0.0, 0.0], [1.0, 0.0]], [[1.0, 0.0], [1.0, 1.0]], [[1.0, 1.0], [0.0, 1.0]], [[0.0, 1.0], [0.0, 0.0]]];
+        assert_eq!(document.add_view_lines(&plan, &[[[5.0, 5.0], [6.0, 5.0]]]), 1);
+        assert_eq!(document.add_view_shape(&plan, ShapeKind::Rectangle, &square), 4);
+        // a shape of one line is that line, and a line without length is no line
+        assert_eq!(document.add_view_shape(&plan, ShapeKind::Polyline, &[[[7.0, 7.0], [8.0, 7.0]], [[8.0, 7.0], [8.0, 7.0]]]), 1);
+        assert_eq!(document.add_view_shape(&plan, ShapeKind::Arc, &square[..2]), 2);
+        assert_eq!(document.add_view_shape(&section, ShapeKind::Polyline, &square[..3]), 3);
+        assert_eq!(document.add_view_shape("no view", ShapeKind::Circle, &square), 0);
+        let runs = |d: &Document, view: &str| d.view_shapes(view).iter().map(|s| (s.kind, s.run())).collect::<Vec<_>>();
+        assert_eq!(runs(&document, &plan), [(ShapeKind::Rectangle, 1..5), (ShapeKind::Arc, 6..8)]);
+        assert_eq!(document.shape_of(&plan, 5), (5..6, None));
+        assert_eq!(document.shape_of(&plan, 7), (6..8, Some(ShapeKind::Arc)));
+        // saved with the drawings and taken over again; the lines are what a reader without
+        // shapes sees
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let written = &nodes.iter().find(|(path, _)| *path == plan).unwrap().1["o3v::view::plan"];
+        assert_eq!(written["shapes"], json!([["rectangle", 1, 4], ["arc", 6, 2]]));
+        assert_eq!(written["lines"].as_array().unwrap().len(), 8);
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(runs(&again, &plan), runs(&document, &plan));
+        assert_eq!(runs(&again, &section), [(ShapeKind::Polyline, 0..3)]);
+        assert_eq!(again.view_lines(&plan), document.view_lines(&plan));
+        // a view without shapes writes none, and runs that do not fit its lines are not read
+        let bare = document.add_plan(&level).unwrap();
+        let nodes = document.ifcx_drawing_nodes();
+        let node = nodes.iter().find(|n| n["path"] == bare.as_str()).unwrap();
+        assert!(node["attributes"]["o3v::view::plan"].get("shapes").is_none());
+        let mut odd: Vec<(String, Value)> = nodes.iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let at = odd.iter().position(|(path, _)| *path == plan).unwrap();
+        odd[at].1["o3v::view::plan"]["shapes"] = json!([["rectangle", 1, 4], ["circle", 3, 2], ["arc", 6, 9], ["blob", 5, 1]]);
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&odd);
+        assert_eq!(runs(&again, &plan), [(ShapeKind::Rectangle, 1..5)], "one that overlaps, one past the end and one of no kind are left out");
+        // removing a line of a shape removes the shape; the ones after it count on
+        assert!(document.remove_view_line(&plan, 2));
+        assert_eq!(runs(&document, &plan), [(ShapeKind::Arc, 2..4)]);
+        assert!(document.remove_view_line(&plan, 0));
+        assert_eq!(runs(&document, &plan), [(ShapeKind::Arc, 1..3)]);
+        assert!(document.remove_view_line(&plan, 2));
+        assert!(document.view_shapes(&plan).is_empty() && document.view_lines(&plan).len() == 1);
+        assert!(!document.remove_view_line(&plan, 4));
+    }
+
+    #[test]
     fn views_keep_their_notes_and_save_them_in_ifcx() {
         let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
         let level = document.levels()[0].path.clone();
@@ -1916,7 +2273,7 @@ mod tests {
         assert!(!document.set_note_text(&plan, 1, ""), "a note keeps a text");
         assert!(!document.move_note(&plan, 7, [0.0, 0.0]));
         let notes = document.view_notes(&plan).unwrap();
-        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
+        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }]);
         assert!(document.remove_note(&plan, 0));
         assert!(!document.remove_note(&plan, 3));
         // saved with the drawings and taken over again
@@ -1924,8 +2281,8 @@ mod tests {
             document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
         let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
         again.adopt_ifcx(&nodes);
-        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
-        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
+        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }]);
+        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default(), level: false }]);
     }
 
     #[test]

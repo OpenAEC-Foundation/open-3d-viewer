@@ -61,18 +61,25 @@ fn content(d: &Drawing2d) -> String {
     let at = |q: [f64; 2]| format!("{} {}", num((q[0] - lo[0]) * k), num((q[1] - lo[1]) * k));
     let mut s = String::from("1 J 1 j 0 G 0 g\n");
     for pen in Pen::ALL {
-        let mut segments: Vec<([f64; 2], [f64; 2])> = d.lines.iter().filter(|l| l.pen == pen).map(|l| (l.a, l.b)).collect();
+        // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
+        // what is seen beyond it a width of its own
+        let mut groups: Vec<(f64, Vec<([f64; 2], [f64; 2])>)> =
+            d.widths(pen).into_iter().map(|width| (width, d.lines.iter().filter(|l| l.pen == pen && (l.width - width).abs() < 1e-9).map(|l| (l.a, l.b)).collect())).collect();
         if pen == Pen::Dimension {
-            segments.extend(d.dimensions.iter().flat_map(|dim| dim.lines()).map(|[a, b]| (a, b)));
+            let marks: Vec<([f64; 2], [f64; 2])> = d.dimensions.iter().flat_map(|dim| dim.lines()).map(|[a, b]| (a, b)).collect();
+            match groups.iter_mut().find(|(width, _)| (*width - pen.weight_mm()).abs() < 1e-9) {
+                Some((_, segments)) => segments.extend(marks),
+                None if !marks.is_empty() => groups.push((pen.weight_mm(), marks)),
+                None => {}
+            }
         }
-        if segments.is_empty() {
-            continue;
+        for (width, segments) in groups {
+            let _ = writeln!(s, "{} w", num(width * POINTS));
+            for (a, b) in segments {
+                let _ = writeln!(s, "{} m {} l", at(a), at(b));
+            }
+            s.push_str("S\n");
         }
-        let _ = writeln!(s, "{} w", num(pen.weight_mm() * POINTS));
-        for (a, b) in segments {
-            let _ = writeln!(s, "{} m {} l", at(a), at(b));
-        }
-        s.push_str("S\n");
     }
     let labels: Vec<Text2d> = d.dimensions.iter().map(|dim| dim.label()).collect();
     for t in d.texts.iter().chain(&labels) {
@@ -83,9 +90,15 @@ fn content(d: &Drawing2d) -> String {
             Align::Center => width / 2.0,
             Align::Right => width,
         };
-        let x = (t.at[0] - lo[0]) * k - shift;
-        let y = (t.at[1] - lo[1]) * k;
-        let _ = writeln!(s, "BT /F1 {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
+        // its start: back along its own direction from the point it stands on
+        let (sin, cos) = t.angle.sin_cos();
+        let x = (t.at[0] - lo[0]) * k - shift * cos;
+        let y = (t.at[1] - lo[1]) * k - shift * sin;
+        if t.angle == 0.0 {
+            let _ = writeln!(s, "BT /F1 {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
+        } else {
+            let _ = writeln!(s, "BT /F1 {} Tf {} {} {} {} {} {} Tm {} Tj ET", num(size), num(cos), num(sin), num(-sin), num(cos), num(x), num(y), literal(&t.text));
+        }
     }
     s
 }
@@ -173,10 +186,10 @@ mod tests {
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(A3_LANDSCAPE),
-            lines: vec![Line2d { pen: Pen::Cut, a: [0.05, 0.05], b: [0.30, 0.05] }, Line2d { pen: Pen::Beyond, a: [0.05, 0.10], b: [0.30, 0.10] }],
+            lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
             texts: vec![
-                Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left },
-                Text2d { pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right },
+                Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
+                Text2d { pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
             ],
             dimensions: Vec::new(),
         }
@@ -193,6 +206,25 @@ mod tests {
         assert!(s.contains("/MediaBox [0 0 1190.55 841.89]"), "{s}");
         assert!(s.contains("/Count 1"), "{s}");
         assert!(s.trim_end().ends_with("%%EOF"), "{s}");
+    }
+
+    #[test]
+    fn a_turned_text_is_written_with_its_matrix() {
+        let mut d = sheet();
+        // the same text level and from the left, and read from the right of the sheet, centred
+        let level = Text2d { pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
+        d.texts = vec![level.clone(), Text2d { align: Align::Center, angle: std::f64::consts::FRAC_PI_2, ..level }];
+        let s = text(&pdf(&d));
+        let lines: Vec<&str> = s.lines().filter(|l| l.contains("(HEA 200) Tj")).collect();
+        let place = |line: &str, op: &str| -> (f64, f64) {
+            let before: Vec<&str> = line.split(op).next().unwrap().split_whitespace().collect();
+            (before[before.len() - 2].parse().unwrap(), before[before.len() - 1].parse().unwrap())
+        };
+        let (x, y) = place(lines[0], " Td");
+        // cos sin -sin cos, then its start: at the point's x, half its width under the point
+        assert!(lines[1].contains(" 0 1 -1 0 "), "{}", lines[1]);
+        let (tx, ty) = place(lines[1], " Tm");
+        assert!((tx - x).abs() < 1e-6 && ty < y - 5.0 && ty > y - 40.0, "{lines:?}");
     }
 
     #[test]

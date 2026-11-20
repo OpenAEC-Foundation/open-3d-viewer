@@ -534,6 +534,10 @@ pub(crate) fn export_class(format: &str, layer: &str, props: &[(String, String)]
     identity(format, &Key::Element(0), layer, props).class
 }
 
+/// The property of an element with its NL-SfB code: written as a classification reference, not
+/// as a property.
+pub const NLSFB: &str = "NL-SfB";
+
 /// The material names of an element: Revit's "materials" list or a single "Material".
 fn materials(props: &[(String, String)]) -> Vec<String> {
     let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.trim()).filter(|v| !v.is_empty());
@@ -679,6 +683,8 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     let mut by_material: Vec<(Vec<String>, Vec<u64>)> = Vec::new();
     let mut by_build_up: Vec<(Layered, Vec<u64>)> = Vec::new();
     let mut by_layer: Vec<(String, Vec<u64>)> = Vec::new();
+    // the elements of each NL-SfB code
+    let mut by_code: Vec<(String, Vec<u64>)> = Vec::new();
     let mut material_ids: HashMap<String, u64> = HashMap::new();
     // the GlobalIds the source file gives its elements (Tekla's, from its object GUIDs), once each
     let mut own_ids: HashSet<String> = HashSet::new();
@@ -847,6 +853,12 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
                 None => by_material.push((mats, vec![element])),
             }
         }
+        if let Some(code) = props.iter().find(|(k, _)| k == NLSFB).map(|(_, v)| v.trim()).filter(|code| bim_library::nlsfb::valid(code)) {
+            match by_code.iter_mut().find(|(c, _)| c == code) {
+                Some((_, list)) => list.push(element),
+                None => by_code.push((code.to_string(), vec![element])),
+            }
+        }
         match by_layer.iter_mut().find(|(l, _)| *l == product.layer) {
             Some((_, list)) => list.extend(&representations),
             None => by_layer.push((product.layer.clone(), representations)),
@@ -864,6 +876,15 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
             refs(elements),
             storeys[i].0
         ))?;
+    }
+    // NL-SfB: the classification once, a reference per code, and the elements of each code
+    if !by_code.is_empty() {
+        let classification = f.add("IFCCLASSIFICATION('BNA','2005',$,'NL-SfB',$,'https://identifier.buildingsmart.org/uri/nlsfb/nlsfb2005/2.2',$)".to_string())?;
+        for (code, elements) in &by_code {
+            let name = bim_library::nlsfb::group_name(code, bim_library::Lang::En).unwrap_or_default();
+            let reference = f.add(format!("IFCCLASSIFICATIONREFERENCE({},{},{},#{classification},$,$)", text(&bim_library::nlsfb::uri(code)), text(code), text(name)))?;
+            f.add(format!("IFCRELASSOCIATESCLASSIFICATION({},$,$,$,{},#{reference})", text(&ids.get(&format!("nlsfb/{code}"))), refs(elements)))?;
+        }
     }
     for (mats, elements) in &by_material {
         let mut one = Vec::new();
@@ -957,7 +978,7 @@ fn property_set(
     object: u64,
 ) -> io::Result<()> {
     let mut values = Vec::new();
-    for (k, v) in props.iter().filter(|(k, v)| !k.is_empty() && !v.is_empty()) {
+    for (k, v) in props.iter().filter(|(k, v)| !k.is_empty() && !v.is_empty() && k != NLSFB) {
         // IfcLabel holds at most 255 characters
         let value = if v.chars().count() <= 255 { format!("IFCLABEL({})", text(v)) } else { format!("IFCTEXT({})", text(v)) };
         values.push(f.add(format!("IFCPROPERTYSINGLEVALUE({},$,{value},$)", text(k)))?);
@@ -1365,6 +1386,25 @@ mod tests {
         assert_eq!(s.matches("=IFCMATERIAL(").count(), 3);
         assert!(s.contains("IFCPROJECT(") && s.contains("'Caf\\X2\\00E9\\X0\\ ''t Hoekje'"));
         assert!(s.contains("IFCPRESENTATIONLAYERASSIGNMENT('Walls'"));
+    }
+
+    #[test]
+    fn nl_sfb_codes_are_classification_references() {
+        let mut model = revit_model();
+        let coded = |id: u64, code: &str| (id, format!(r#"{{"id":"{id}","category":"Walls","type":"W","NL-SfB":"{code}"}}"#));
+        model.props = [coded(101, "21.22"), coded(102, "21.22")].into_iter().collect();
+        let s = ifc(&model);
+        // the classification once, a reference for the code, both walls under it
+        assert_eq!((s.matches("=IFCCLASSIFICATION(").count(), s.matches("=IFCCLASSIFICATIONREFERENCE(").count(), s.matches("=IFCRELASSOCIATESCLASSIFICATION(").count()), (1, 1, 1));
+        assert!(s.contains("IFCCLASSIFICATIONREFERENCE('https://identifier.buildingsmart.org/uri/nlsfb/nlsfb2005/2.2/class/21.22','21.22','external walls',#"), "{}", s.lines().find(|l| l.contains("CLASSIFICATIONREFERENCE")).unwrap_or_default());
+        // (not as a property too)
+        assert!(!s.contains("IFCPROPERTYSINGLEVALUE('NL-SfB'"));
+        let relation = s.lines().find(|l| l.contains("=IFCRELASSOCIATESCLASSIFICATION(")).unwrap();
+        assert_eq!(relation.matches('#').count(), 4, "the relation, two walls and the reference: {relation}");
+        // without codes no classification is written; what is no code is left out
+        assert!(!ifc(&revit_model()).contains("IFCCLASSIFICATION"));
+        model.props = [coded(101, "wand")].into_iter().collect();
+        assert!(!ifc(&model).contains("IFCCLASSIFICATION"));
     }
 
     #[test]

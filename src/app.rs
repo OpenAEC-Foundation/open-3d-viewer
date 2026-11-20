@@ -721,6 +721,7 @@ pub enum Message {
     ArmDimensionReference(Option<(Arc<str>, usize)>),
     InsertDimensionReference(Arc<str>, usize, [f64; 2]),
     RemoveDimensionReference(Arc<str>, usize, usize),
+    AddChainTotal(Arc<str>, usize),
     /// The picked dimension looks otherwise: another style, or its style changed.
     DimensionLook(marks::LookEdit),
     /// Give a view (its path) its standard dimensions.
@@ -2757,6 +2758,7 @@ impl App {
                 self.document.insert_dimension_reference(&view, index, at, anchor);
                 self.reference_target = None;
             }
+            Message::AddChainTotal(view, index) => { self.document.add_dimension_chain_total(&view, index); }
             Message::RemoveDimensionReference(view, index, reference) => {
                 self.document.remove_dimension_reference(&view, index, reference);
                 self.reference_target = None;

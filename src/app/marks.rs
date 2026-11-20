@@ -481,6 +481,8 @@ impl App {
         if let Some(dimension) = self.document.view_marks(view).and_then(|(dims, _)| dims.get(index)) {
             let choices: Vec<_> = dimension.references().enumerate().map(|(i, (at, _))| ReferenceChoice(i, at)).collect();
             if choices.len() > 2 {
+                controls = controls.push(button(text(l.text("Totaalmaat buiten ketting", "Add outside overall dimension")).size(12))
+                    .on_press(Message::AddChainTotal(path.clone(), index)));
                 controls = controls.push(pick_list(choices, None::<ReferenceChoice>, move |r|
                     Message::RemoveDimensionReference(path.clone(), index, r.0))
                     .placeholder(l.text("Referentie verwijderen…", "Remove reference…")).text_size(12));

@@ -717,14 +717,20 @@ impl PlanView {
         // An ungrouped, unstyled perpendicular crossing the very same tick on the
         // reference's side is fallback witness ink. Leave shape and pen index ranges intact.
         if self.shapes.is_empty() && self.presentation["pens"].is_null() {
-            self.lines.retain(|[a,b]| !witnesses.iter().any(|&(axis,q,offset)| {
+            self.lines.retain(|[a,b]| {
+                // A centreline through a measured point (e.g. the head of a nearby
+                // pile) belongs to the drawing, even when another row crosses it.
+                let middle = [(a[0]+b[0])/2., (a[1]+b[1])/2.];
+                if witnesses.iter().any(|(_,q,_)| (middle[0]-q[0]).hypot(middle[1]-q[1]) < 1e-7) { return true; }
+                !witnesses.iter().any(|&(axis,q,offset)| {
                 let cross = 1-axis;
                 let side = (q[cross]-offset).signum();
                 let along = |p: [f64;2]| (p[cross]-offset)*side;
                 (a[axis]-q[axis]).abs() < 1e-7 && (b[axis]-q[axis]).abs() < 1e-7
                     && along(*a).min(along(*b)) < 0. && along(*a).max(along(*b)) > 0.
                     && along(*a).max(along(*b)) < (q[cross]-offset).abs()
-            }));
+                })
+            });
         }
         if let Some(obj) = self.presentation.as_object_mut() { obj.remove("dimensionChains"); }
     }

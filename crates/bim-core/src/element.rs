@@ -415,6 +415,12 @@ pub enum Fixity {
 }
 
 impl ConnectionKind {
+    /// Whether it is a fitting between service runs (a bend, a tee, a transition): a body of its
+    /// own in the run, where a butt or a mitre is only the way two members are cut.
+    pub fn is_fitting(&self) -> bool {
+        matches!(self, ConnectionKind::Bend(_) | ConnectionKind::Tee(_) | ConnectionKind::Transition(_))
+    }
+
     /// What a steel connection is to the analysis model: a fin plate is a hinge, an end plate
     /// passes moments on. `None` for a join that is no connection of its own (a butt, a mitre,
     /// a cut).

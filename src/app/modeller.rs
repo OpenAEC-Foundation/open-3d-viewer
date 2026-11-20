@@ -225,6 +225,8 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// What joins made automatically are called, in the interface language.
     pub join_word: &'static str,
+    /// The words fittings made automatically are named with: a bend, a tee, a transition.
+    pub fitting_words: [&'static str; 3],
     /// What the top of a beam is called on a structural plan, in the interface language ("b.k.").
     pub top_word: &'static str,
     /// What the pile schedule and its columns are called, in the interface language (see
@@ -722,7 +724,25 @@ impl App {
     /// ends that meet another linear element get one (see `bim_core::Model::update_joins`).
     pub(super) fn joins_follow(&mut self, changed: &[ElementId]) {
         let word = if self.modeller.join_word.is_empty() { "Connection" } else { self.modeller.join_word };
-        self.modeller.model.update_joins(word, Some(changed));
+        let (added, _) = self.modeller.model.update_joins(word, Some(changed));
+        // a fitting is named for what it is: a bend, a tee, a transition
+        for id in added {
+            let Some(mut e) = self.modeller.model.get(id).cloned() else { continue };
+            let Shape::Connection(c) = &e.shape else { continue };
+            let [bend, tee, transition] = self.modeller.fitting_words;
+            let word = match c.kind {
+                ConnectionKind::Bend(_) if !bend.is_empty() => bend,
+                ConnectionKind::Bend(_) => "Bend",
+                ConnectionKind::Tee(_) if !tee.is_empty() => tee,
+                ConnectionKind::Tee(_) => "Tee",
+                ConnectionKind::Transition(_) if !transition.is_empty() => transition,
+                ConnectionKind::Transition(_) => "Transition",
+                _ => continue,
+            };
+            let number = self.modeller.model.iter().filter(|o| matches!(&o.shape, Shape::Connection(k) if std::mem::discriminant(&k.kind) == std::mem::discriminant(&c.kind))).count();
+            e.name = format!("{word} {number}");
+            let _ = self.modeller.model.replace(e);
+        }
     }
 
     /// The modelled elements among the selection, in pick order.
@@ -1378,6 +1398,11 @@ mod tests {
         assert!((pipes[0].start - DVec3::new(0.0, 20.0, 0.3)).length() < 1e-9 && (pipes[0].end - DVec3::new(0.0, 20.0, 2.8)).length() < 1e-9, "{:?}", pipes[0]);
         assert!((pipes[1].start.z - 2.8).abs() < 1e-9 && (pipes[1].end.z - 2.8).abs() < 1e-9, "{:?}", pipes[1]);
         assert_eq!(app.modeller.model.iter().filter(|e| e.class() == "IfcPipeFitting").count(), 1);
+        // fittings are named for what they are, and have no mark over them: they are picked by their body
+        let names: Vec<&str> = app.modeller.model.iter().filter(|e| matches!(e.shape, Shape::Connection(_))).map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["Bend 1", "Bend 2", "Transition 1", "Bend 3"]);
+        app.set_model_tool(None);
+        assert!(app.join_marks(iced::Color::BLACK, iced::Color::WHITE).is_none());
     }
 
     #[test]

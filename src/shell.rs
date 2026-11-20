@@ -1834,6 +1834,7 @@ impl Studio {
                 }
                 // joins made automatically are named in the interface language
                 self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
+                self.app.modeller.fitting_words = [self.l().text("Bocht", "Bend"), self.l().text("T-stuk", "Tee"), self.l().text("Verloop", "Transition")];
                 self.app.modeller.space_word = self.l().text("Ruimte", "Space");
                 self.app.modeller.top_word = self.l().text("b.k.", "top");
                 self.app.modeller.pile_words = [

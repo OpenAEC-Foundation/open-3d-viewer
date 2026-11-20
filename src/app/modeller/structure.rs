@@ -87,16 +87,16 @@ pub fn to_level(height: f64) -> String {
 /// What a structural plan of `level` (at `elevation`, drawn at 1 : `scale`) says by itself;
 /// `top_word` is what the top of a beam is called (`b.k.`).
 pub fn tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &str) -> Vec<Note> {
-    member_tags(model, level, elevation, scale, top_word, true)
+    member_tags(model, level, elevation, scale, top_word, true, |_| true)
 }
 
-pub(super) fn member_tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &str, include_piles: bool) -> Vec<Note> {
+pub(super) fn member_tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &str, include_piles: bool, visible: impl Fn(&bim_core::Element) -> bool) -> Vec<Note> {
     // a millimetre on paper between a label and what it labels
     let gap = scale * 0.001;
     let note = |at: DVec2, text: String, align: Align, angle: f64| Note { at: at.to_array(), text, size: NOTE_HEIGHT, align, angle, level: false, face: crate::typeface::Face::default() };
     let piles = piles(model, level, elevation);
     let mut notes = Vec::new();
-    for (e, l) in members(model, level) {
+    for (e, l) in members(model, level).filter(|(e, _)| visible(e)) {
         let (side, up) = reach(&l);
         let what = match &e.grade {
             Some(grade) => format!("{} {grade}", l.profile.name()),

@@ -411,7 +411,12 @@ impl App {
             }
             if plan.kind.structural() {
                 let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);
-                let mut tags = super::structure::member_tags(model, &plan.level, elevation, plan.scale, top_word, !plan.pile_symbols);
+                let visible = |e: &bim_core::Element| {
+                    plan.layers.get(e.class()) != Some(&false) && !source.is_some_and(|model| {
+                        plan.hidden.contains(&crate::units::UnitKey::Element(crate::model::ElementKey { model, source: e.id.0 }))
+                    })
+                };
+                let mut tags = super::structure::member_tags(model, &plan.level, elevation, plan.scale, top_word, !plan.pile_symbols, visible);
                 let mut symbols = Vec::new();
                 if let Some(source) = source.filter(|_| plan.pile_symbols && plan.layers.get("IfcPile") != Some(&false)) {
                     super::pile_symbols::draw(model, plan, elevation, source, office_style, &mut tags, &mut symbols);

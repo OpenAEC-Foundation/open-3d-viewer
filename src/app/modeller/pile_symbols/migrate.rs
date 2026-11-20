@@ -44,6 +44,7 @@ pub(in crate::app::modeller) fn adopt_registered_symbols(
     let mut fills = BTreeSet::new();
     let mut notes = BTreeSet::new();
     let mut offsets = BTreeMap::new();
+    let mut heads = Vec::new();
     for &id in ids {
         let element = model.get(id)?;
         let number = element.pile_number?;
@@ -56,6 +57,7 @@ pub(in crate::app::modeller) fn adopt_registered_symbols(
             member.start
         }
         .truncate();
+        heads.push((head, id.0, usize::from(member.end.z >= member.start.z)));
         let symbol = HeadSymbol::from_member(&member)?;
         let (mut edges, mut quarters) = (Vec::new(), Vec::new());
         symbol.draw(head, 1.0, true, &mut edges, &mut quarters);
@@ -162,6 +164,21 @@ pub(in crate::app::modeller) fn adopt_registered_symbols(
     plan.shapes = shapes;
     if let Some(pens) = pens {
         plan.presentation["pens"] = pens;
+    }
+    // A supplied chain can name the measured coordinates without naming their elements.
+    // Bind only exact, unambiguous pile heads after the whole symbol set was verified.
+    for dimension in &mut plan.dimensions {
+        let count = dimension.references().count();
+        for i in 0..count {
+            let Some((at, anchor)) = dimension.reference_mut(i) else { continue };
+            if anchor.is_some() { continue; }
+            let mut matching = heads.iter().filter(|(head, _, _)| head.distance(DVec2::from(*at)) < 1e-8);
+            if let Some(&(_, element, point)) = matching.next() {
+                if matching.next().is_none() {
+                    *anchor = Some(crate::document::Anchor { element, point, offset: [0.0; 2], lost: false });
+                }
+            }
+        }
     }
     plan.presentation["pile_label_offsets"] = json!(offsets);
     plan.pile_symbols = true;

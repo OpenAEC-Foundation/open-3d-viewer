@@ -207,3 +207,20 @@ mod tests {
         assert!(!app.cuts.contains_key("plan"));
     }
 }
+
+#[cfg(test)]
+mod bar_projection_tests {
+    use super::*;
+    use glam::DVec3;
+
+    #[test]
+    fn a_reinforcing_axis_is_clipped_to_each_view_range() {
+        let plan = CutKind::Plan { kind: PlanKind::Structural, low: -1.0, high: 1.0 };
+        let axis = [DVec3::new(-2.0, 0.0, -2.0), DVec3::new(2.0, 0.0, 2.0)];
+        assert_eq!(plan.project_axis(axis), Some([[-1.0, 0.0], [1.0, 0.0]]));
+        let section = CutKind::Section { from: [0.0, 0.0], to: [5.0, 0.0], depth: 1.0 };
+        let axis = [DVec3::new(-2.0, -2.0, -2.0), DVec3::new(2.0, 2.0, 2.0)];
+        assert_eq!(section.project_axis(axis), Some([[0.0, 0.0], [1.0, 1.0]]));
+        assert!(section.project_axis([DVec3::new(0.0, 2.0, -5.0), DVec3::new(3.0, 3.0, 0.0)]).is_none());
+    }
+}

@@ -829,6 +829,7 @@ impl PaperDrawing {
 /// the point the pointer snaps to now.
 #[derive(Default)]
 struct PaperState {
+    note_drag: Option<(usize, usize, [f64; 2])>,
     hover: Option<usize>,
     drag: Option<(usize, [f64; 2])>,
     first: Option<(usize, [f64; 2])>,
@@ -864,6 +865,11 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let at = cursor.position_in(bounds).map(|p| fit.paper(p));
+                if let (Some((i, k, grip)), Some(at)) = (state.note_drag, at) {
+                    let q = self.to_model(i, at);
+                    let target = [q[0] + grip[0], q[1] + grip[1]];
+                    return Some(canvas::Action::publish(Message::MoveNote(self.placed[i].plan.clone(), k, target)).and_capture());
+                }
                 if let (Some((i, side)), Some(at)) = (state.crop, at) {
                     let plan = self.placed.get(i)?.plan.clone();
                     return Some(canvas::Action::publish(Message::CropPlan(plan, Some(self.crop_to(i, side, at)))).and_capture());
@@ -918,6 +924,9 @@ impl canvas::Program<Message> for PaperDrawing {
                     return Some(canvas::Action::request_redraw().and_capture());
                 }
                 if let Some((i, k)) = self.note_at(&fit, fit.point(at)) {
+                    let q = self.to_model(i, at);
+                    let pos = self.placed[i].notes[k].at;
+                    state.note_drag = Some((i, k, [pos[0] - q[0], pos[1] - q[1]]));
                     return Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::Note(i, k)))).and_capture());
                 }
                 if let Some((i, k)) = self.dimension_at(&fit, fit.point(at)) {
@@ -931,6 +940,7 @@ impl canvas::Program<Message> for PaperDrawing {
                 Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::View(i)))).and_capture())
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.note_drag = None;
                 let crop = state.crop.take();
                 state.drag.take().or(crop.map(|(i, _)| (i, [0.0; 2]))).map(|_| canvas::Action::request_redraw())
             }

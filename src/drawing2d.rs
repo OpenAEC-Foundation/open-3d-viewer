@@ -223,15 +223,7 @@ impl Dim2d {
                     let diagonal = [u[0] + n[0], u[1] + n[1]];
                     lines.push([add(q, diagonal, -tick), add(q, diagonal, tick)]);
                 }
-                Tick::Dot => {
-                    let point = |k: usize| {
-                        let t = std::f64::consts::TAU * k as f64 / 16.0;
-                        add(q, [t.cos(), t.sin()], tick * 0.5)
-                    };
-                    for k in 0..16 {
-                        lines.push([point(k), point(k + 1)]);
-                    }
-                }
+                Tick::Dot => {} // Filled round caps are emitted by strokes at the tick diameter.
                 Tick::Arrow => {
                     let back = add(q, u, inward * tick);
                     let (l, r) = (add(back, n, tick * 0.27), add(back, n, -tick * 0.27));
@@ -447,6 +439,11 @@ impl Drawing2d {
         }
         if pen == Pen::Dimension && !self.dimensions.is_empty() {
             groups.push((pen.weight_mm(), [0; 3], self.dimensions.iter().flat_map(Dim2d::lines).collect()));
+            for dim in self.dimensions.iter().filter(|d| d.style.tick == crate::document::Tick::Dot) {
+                if let Some((a, b)) = dim.line() {
+                    groups.push((dim.style.tick_size * 1000.0, [0; 3], vec![[a, a], [b, b]]));
+                }
+            }
         }
         groups
     }

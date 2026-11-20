@@ -93,9 +93,16 @@ impl App {
         }
         if self.document.view_presentation(view)["grids"] == false { return Vec::new(); }
         let Some(model) = self.model.as_ref().filter(|_| self.grids_shown()) else { return Vec::new() };
-        if self.document.plan(view).is_some() {
+        if let Some(plan) = self.document.plan(view) {
             let flat = |p: [f32; 3]| [f64::from(p[0]), f64::from(p[1])];
-            return model.project.grids.iter().map(|g| Datum2 { name: g.name.clone(), a: flat(g.a), b: flat(g.b), level: None }).collect();
+            return model.project.grids.iter().filter_map(|g| {
+                let (a, b) = (flat(g.a), flat(g.b));
+                let (a, b) = match plan.crop {
+                    Some((lo, hi)) => crate::drawing2d::clip(a, b, lo, hi)?,
+                    None => (a, b),
+                };
+                Some(Datum2 { name: g.name.clone(), a, b, level: None })
+            }).collect();
         }
         let Some(s) = self.document.section(view) else { return Vec::new() };
         let (along, _) = s.axes();

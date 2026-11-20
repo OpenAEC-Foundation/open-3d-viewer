@@ -185,6 +185,7 @@ pub(super) fn draw(
     groups: BTreeMap<Group, Row>,
     ids: Vec<u64>,
     numbers: &[u64],
+    style: &bim_library::house::HouseStyle,
 ) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
     let unit = plan.scale / 1000.0;
     let (left, top) = plan.crop.map_or((0.0, 0.0), |(lo, hi)| (lo[0], hi[1]));
@@ -211,8 +212,16 @@ pub(super) fn draw(
     }
     purple.extend([[194., 5.], [183., 16.]]);
     teal.extend([[w, 16.], [194., 16.]]);
-    d.area(&purple, [49, 19, 52], &mut plan.symbol_fills);
-    d.area(&teal, [99, 177, 168], &mut plan.symbol_fills);
+    d.area(
+        &purple,
+        style.colour("primary").unwrap_or([49, 19, 52]),
+        &mut plan.symbol_fills,
+    );
+    d.area(
+        &teal,
+        style.colour("accent").unwrap_or([99, 177, 168]),
+        &mut plan.symbol_fills,
+    );
     let heading = d.text(5., 12.8, title, 5.3);
     heading.face.bold = true;
     heading.face.color = Some([255; 3]);

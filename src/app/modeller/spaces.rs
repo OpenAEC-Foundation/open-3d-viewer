@@ -420,7 +420,7 @@ impl App {
                 super::pile_symbols::adopt_registered_symbols(model, &registered, plan);
             }
             if super::structure::is_pile_legend(plan) {
-                return super::structure::schedule_table(model, plan, office_style, &pile_types);
+                return super::structure::schedule_table(model, plan, &self.house, &pile_types);
             }
             if plan.kind.structural() {
                 let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);

@@ -105,9 +105,10 @@ fn adopt_legend(plan: &mut PlanView) -> bool {
 pub(in crate::app::modeller) fn schedule_table(
     model: &Model,
     plan: &mut PlanView,
-    office: bool,
+    house: &bim_library::house::HouseStyle,
     aliases: &[String],
 ) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
+    let office = house.key.eq_ignore_ascii_case("3bm");
     if registered(&plan.presentation) && plan.drawing.as_deref() != Some("pile-schedule") {
         if !adopt_legend(plan) {
             return (Vec::new(), Vec::new());
@@ -206,7 +207,7 @@ pub(in crate::app::modeller) fn schedule_table(
     }
     if office || legend["layout"] == "pile-renvooi" {
         let numbers: Vec<_> = model.iter().filter_map(|e| e.pile_number).collect();
-        return office::draw(plan, groups, ids, &numbers);
+        return office::draw(plan, groups, ids, &numbers, house);
     }
     let nap = legend["nap"].as_bool().unwrap_or(false);
     let title = legend["title"].as_str().unwrap_or("Paallegenda");

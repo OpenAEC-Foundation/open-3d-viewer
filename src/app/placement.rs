@@ -93,14 +93,16 @@ pub struct Settings {
     pub grade: Option<String>,
     /// What the Slab tool makes: a floor, a roof or a ceiling.
     pub role: bim_core::SlabRole,
+    /// The service a duct, pipe or cable tray is drawn in; `None`: not given.
+    pub service: Option<bim_core::Service>,
 }
 
 impl Settings {
     /// What a tool places when nothing was typed.
     pub fn default_for(tool: ModelTool) -> Self {
-        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, grade: None, role: bim_core::SlabRole::Floor };
+        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, grade: None, role: bim_core::SlabRole::Floor, service: None };
         use super::element_props::{DOOR, WINDOW};
-        use super::modeller::{BEAM, COLUMN, OBJECT, SLAB_THICKNESS, WALL_THICKNESS};
+        use super::modeller::{BEAM, CABLE_TRAY, COLUMN, DUCT, OBJECT, PIPE, ROUND_DUCT, SERVICE_HEIGHT, SLAB_THICKNESS, WALL_THICKNESS};
         match tool {
             ModelTool::Wall => plain(WALL_THICKNESS, 0.0, None),
             ModelTool::Slab => plain(SLAB_THICKNESS, 0.0, None),
@@ -108,6 +110,10 @@ impl Settings {
             ModelTool::Beam => plain(BEAM.0, BEAM.1, None),
             ModelTool::System => plain(0.0, 0.0, None),
             ModelTool::Point => plain(OBJECT.x, OBJECT.y, Some(OBJECT.z)),
+            ModelTool::Duct => plain(DUCT.0, DUCT.1, Some(SERVICE_HEIGHT)),
+            ModelTool::RoundDuct => plain(ROUND_DUCT, ROUND_DUCT, Some(SERVICE_HEIGHT)),
+            ModelTool::Pipe => plain(PIPE, PIPE, Some(SERVICE_HEIGHT)),
+            ModelTool::CableTray => plain(CABLE_TRAY.0, CABLE_TRAY.1, Some(SERVICE_HEIGHT)),
             ModelTool::Door => plain(DOOR.0, 0.0, Some(DOOR.1)),
             ModelTool::Window => Settings { sill: WINDOW.2, ..plain(WINDOW.0, 0.0, Some(WINDOW.1)) },
         }
@@ -141,6 +147,8 @@ pub enum PlaceMessage {
     Grade(Option<String>),
     /// What the Slab tool makes; its type goes, as types are per role.
     Role(bim_core::SlabRole),
+    /// The service a run is drawn in (`None`: not given).
+    Service(Option<bim_core::Service>),
     Chain(bool),
     /// The Wall tool draws a rectangle, or single walls.
     Rectangle(bool),
@@ -173,6 +181,21 @@ impl Placement {
     fn set(&mut self, tool: ModelTool, settings: Settings) {
         self.settings.insert(tool, settings);
     }
+
+    /// A run of a service was placed with a rise: the next one starts at the height it ended
+    /// at. One that went straight up or down (`vertical`) was a riser, so the next runs level.
+    pub(super) fn risen(&mut self, tool: ModelTool, vertical: bool) {
+        let mut s = self.of(tool);
+        if tool.service().is_none() || s.offset == 0.0 {
+            return;
+        }
+        s.height = Some(s.height.unwrap_or(super::modeller::SERVICE_HEIGHT) + s.offset);
+        if vertical {
+            s.offset = 0.0;
+        }
+        self.typing = None;
+        self.set(tool, s);
+    }
 }
 
 impl App {
@@ -191,6 +214,21 @@ impl App {
                 }
             }
             Shape::Linear(d) => {
+                // a run of a building service: its tool by its role and the shape of its profile
+                if d.role.is_service() {
+                    use bim_library::ProfileShape as P;
+                    let (tool, width, depth) = match (d.role, &d.profile) {
+                        (bim_core::LinearRole::Pipe, bim_core::ProfileDef::Catalogue { shape: P::Chs { d, .. }, .. }) => (ModelTool::Pipe, *d, *d),
+                        (_, bim_core::ProfileDef::Catalogue { shape: P::Chs { d, .. }, .. }) => (ModelTool::RoundDuct, *d, *d),
+                        (bim_core::LinearRole::CableTray, p) => {
+                            let (w, h) = p.profile().map_or((0.3, 0.06), |q| (2.0 * q.support(glam::DVec2::X), 2.0 * q.support(glam::DVec2::Y)));
+                            (ModelTool::CableTray, w, h)
+                        }
+                        (_, bim_core::ProfileDef::Catalogue { shape: P::Rhs { h, b, .. }, .. }) => (ModelTool::Duct, *b, *h),
+                        _ => (ModelTool::Duct, of(ModelTool::Duct).width, of(ModelTool::Duct).depth),
+                    };
+                    (tool, Settings { width, depth, service: e.service.filter(|v| Some(v.role()) == tool.service()), ..of(tool) })
+                } else {
                 let tool = if e.class() == "IfcColumn" { ModelTool::Column } else { ModelTool::Beam };
                 let mut s = of(tool);
                 match &d.profile {
@@ -204,6 +242,7 @@ impl App {
                 }
                 s.grade = e.grade.clone();
                 (tool, s)
+                }
             }
             Shape::System(d) => (ModelTool::System, Settings { kind: d.system_type.as_ref().map(|t| t.id.clone()), height: e.top.is_none().then_some(d.height), ..of(ModelTool::System) }),
             Shape::Point(d) => {
@@ -240,6 +279,35 @@ impl std::fmt::Display for Choice {
     }
 }
 
+/// A service in the strip (`None`: not given), named in the interface language.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Served(Option<bim_core::Service>, &'static str);
+
+impl std::fmt::Display for Served {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+
+/// The name of a service in the interface language.
+pub fn service_label(service: bim_core::Service, l: Language) -> &'static str {
+    use bim_core::Service as S;
+    match service {
+        S::SupplyAir => l.text("Toevoerlucht", "Supply air"),
+        S::ReturnAir => l.text("Retourlucht", "Return air"),
+        S::ExhaustAir => l.text("Afvoerlucht", "Exhaust air"),
+        S::HeatingSupply => l.text("Verwarming aanvoer", "Heating supply"),
+        S::HeatingReturn => l.text("Verwarming retour", "Heating return"),
+        S::ColdWater => l.text("Koud water", "Cold water"),
+        S::HotWater => l.text("Warm water", "Hot water"),
+        S::Waste => l.text("Vuilwater", "Waste water"),
+        S::RainWater => l.text("Hemelwater", "Rain water"),
+        S::Gas => l.text("Gas", "Gas"),
+        S::Power => l.text("Elektra", "Power"),
+        S::Data => l.text("Data", "Data"),
+    }
+}
+
 /// A location line in the strip, named in the interface language.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Located(LocationLine, &'static str);
@@ -264,6 +332,8 @@ fn fields(tool: ModelTool, l: Language) -> Vec<(PlaceField, &'static str)> {
         ModelTool::Beam => vec![width, (F::Depth, l.text("Profielhoogte", "Profile height")), (F::Height, l.text("Bovenkant", "Top height"))],
         ModelTool::System => vec![height, base],
         ModelTool::Point => vec![width, depth, height, base],
+        ModelTool::Duct | ModelTool::CableTray => vec![width, (F::Depth, l.text("Hoogte", "Height")), (F::Height, l.text("Hart boven niveau", "Centre above level")), (F::Offset, l.text("Stijging", "Rise"))],
+        ModelTool::RoundDuct | ModelTool::Pipe => vec![(F::Width, l.text("Diameter", "Diameter")), (F::Height, l.text("Hart boven niveau", "Centre above level")), (F::Offset, l.text("Stijging", "Rise"))],
         ModelTool::Door => vec![width, height],
         ModelTool::Window => vec![width, height, (F::Sill, l.text("Borstwering", "Sill"))],
     }
@@ -283,7 +353,8 @@ fn shown(s: &Settings, field: PlaceField) -> String {
 
 /// `s` with `field` typed as `typed`, if that is a value it can take: sizes above 0, a sill not
 /// below 0, a height left empty (up to the next level) where the tool allows it. A beam's height
-/// is where its top lies to its level, so it may be 0 or below it (a foundation beam).
+/// is where its top lies to its level, so it may be 0 or below it (a foundation beam); so may a
+/// service run's centre (a pipe under the floor).
 fn with_typed(tool: ModelTool, s: &Settings, field: PlaceField, typed: &str) -> Option<Settings> {
     let mut s = s.clone();
     let typed = typed.trim();
@@ -296,7 +367,7 @@ fn with_typed(tool: ModelTool, s: &Settings, field: PlaceField, typed: &str) -> 
     match field {
         PlaceField::Width if v > 0.0 => s.width = v,
         PlaceField::Depth if v > 0.0 => s.depth = v,
-        PlaceField::Height if v > 0.0 || tool == ModelTool::Beam => s.height = Some(v),
+        PlaceField::Height if v > 0.0 || tool == ModelTool::Beam || tool.service().is_some() => s.height = Some(v),
         PlaceField::Offset => s.offset = v,
         PlaceField::Sill if v >= 0.0 => s.sill = v,
         _ => return None,
@@ -319,6 +390,7 @@ impl App {
             PlaceMessage::Kind(kind) => s.kind = kind,
             PlaceMessage::Location(location) => s.location = location,
             PlaceMessage::Grade(grade) => s.grade = grade,
+            PlaceMessage::Service(service) => s.service = service,
             PlaceMessage::Role(role) => {
                 if s.role != role {
                     s.role = role;
@@ -472,6 +544,13 @@ impl App {
             let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Grade(c.id))).text_size(12).padding([2, 6]).width(150);
             bar = bar.push(pair(label(l.text("Sterkteklasse", "Grade")), pick));
         }
+        if let Some(role) = tool.service() {
+            // the service the run is of: it is coloured by it and joins only runs of its own
+            let options: Vec<Served> = std::iter::once(Served(None, "-")).chain(bim_core::Service::ALL.into_iter().filter(|v| v.role() == role).map(|v| Served(Some(v), service_label(v, l)))).collect();
+            let picked = options.iter().find(|o| o.0 == s.service).copied();
+            let pick = pick_list(options, picked, |o: Served| Message::Place(PlaceMessage::Service(o.0))).text_size(12).padding([2, 6]).width(170);
+            bar = bar.push(pair(label(l.text("Systeem", "System")), pick));
+        }
         if matches!(tool, ModelTool::Wall | ModelTool::Beam) {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(tool, l))).collect();
             let picked = options.iter().find(|o| o.0 == s.location).copied();
@@ -521,7 +600,7 @@ impl App {
                     }
                 }
             }
-            ModelTool::Point | ModelTool::Door | ModelTool::Window => return None,
+            ModelTool::Point | ModelTool::Door | ModelTool::Window | ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => return None,
         }
         Some(choices)
     }

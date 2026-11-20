@@ -1,6 +1,8 @@
-//! The marks of joins: a small diamond where the members of every join of modelled linear
-//! elements meet. A click on one selects its join, so a mitre or a butt (which has no body of
-//! its own) can be picked as an end plate can by its plate.
+//! The marks of joins: a small diamond where the members of a join of modelled linear elements
+//! meet. A click on one selects its join, so a mitre or a butt (which has no body of its own)
+//! can be picked as an end plate can by its plate. A fitting between service runs (a bend, a tee,
+//! a transition) is a body of its own and is picked by it: it gets a mark only while selected,
+//! so a network of pipes is not hidden under its marks.
 
 use super::{App, Message};
 use bim_core::ElementId;
@@ -32,6 +34,7 @@ impl App {
             .modeller
             .model
             .iter()
+            .filter(|e| picked.contains(&e.id) || !matches!(&e.shape, bim_core::Shape::Connection(c) if c.kind.is_fitting()))
             .filter_map(|e| Some((e.id, self.modeller.model.join_node(e.id)?.as_vec3(), picked.contains(&e.id))))
             .collect();
         (!marks.is_empty()).then(|| JoinMarks { marks, view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, fill })

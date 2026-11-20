@@ -766,7 +766,7 @@ mod tests {
         let mut app = modelling();
         app.camera.set_preset(crate::viewport::camera::ViewPreset::Front);
         let id = app
-            .add_element("Column", None, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }))
+            .add_element("Column", None, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0, role: Default::default() }))
             .unwrap();
         app.select_modelled(id);
         let _ = app.update(Message::EditMode);
@@ -783,7 +783,7 @@ mod tests {
     fn every_shape_gives_its_points_back_unchanged() {
         let shapes = [
             Shape::Point(PointDef { at: DVec3::new(1.0, 2.0, 0.5), rotation: 0.3, size: DVec3::ONE, opening: None }),
-            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 }),
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() }),
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 1.0), base: 3.0, height: 2.7 }, thickness: 0.2, openings: Vec::new(), build_up: None }),
             Shape::Planar(PlanarDef {
                 form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0)], holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None },

@@ -264,7 +264,7 @@ mod tests {
 
     fn column(app: &App, x: f64, id: &str) -> Shape {
         let profile = linear_profile(&app.library, id).expect("a linear type of the library");
-        Shape::Linear(LinearDef { start: DVec3::new(x, 10.0, 0.0), end: DVec3::new(x, 10.0, 3.0), profile, roll: 0.0 })
+        Shape::Linear(LinearDef { start: DVec3::new(x, 10.0, 0.0), end: DVec3::new(x, 10.0, 3.0), profile, roll: 0.0, role: Default::default() })
     }
 
     fn thickness(app: &App, id: ElementId) -> f64 {

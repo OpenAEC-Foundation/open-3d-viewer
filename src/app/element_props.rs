@@ -730,7 +730,7 @@ mod tests {
     fn a_member_shows_its_ends_and_its_length() {
         let mut app = App::default();
         app.new_model("Level 0");
-        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 1.0, 2.8), end: DVec3::new(3.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 1.0, 2.8), end: DVec3::new(3.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() });
         let id = app.add_element("Beam", None, beam).unwrap();
         app.select_modelled(id);
         let rows = app.member_rows(app.defined().unwrap(), openaec_ui::Language::English);
@@ -793,10 +793,10 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let column = app
-            .add_element("Column", None, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }))
+            .add_element("Column", None, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0, role: Default::default() }))
             .unwrap();
         let beam = app
-            .add_element("Beam", None, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 }))
+            .add_element("Beam", None, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() }))
             .unwrap();
         let joint = app.add_element("Joint", None, Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: column, secondary: beam })).unwrap();
         let kind = |app: &App| match &app.modeller.model.get(joint).unwrap().shape {
@@ -969,7 +969,7 @@ mod tests {
     fn a_grade_typed_is_kept_with_the_member_and_shown_in_its_properties() {
         let mut app = App::default();
         app.new_model("Level 0");
-        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(4.0, 0.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.8), end: DVec3::new(4.0, 0.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() });
         let id = app.add_element("Beam", None, beam).unwrap();
         app.select_modelled(id);
         type_in(&mut app, ElementField::Grade, " S355 ");
@@ -993,8 +993,8 @@ mod tests {
         use ElementField as F;
         let shapes = [
             Shape::Point(PointDef { at: DVec3::new(1.0, 2.0, 0.5), rotation: 0.3, size: DVec3::ONE, opening: None }),
-            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.1 }),
-            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 0.0), profile: ProfileDef::Circle { diameter: 0.3 }, roll: 0.0 }),
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.1, role: Default::default() }),
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 0.0), profile: ProfileDef::Circle { diameter: 0.3 }, roll: 0.0, role: Default::default() }),
             wall_selected().modeller.model.get(ElementId(1)).unwrap().shape.clone(),
         ];
         for shape in shapes {

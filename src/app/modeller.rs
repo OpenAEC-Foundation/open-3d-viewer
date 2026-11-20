@@ -54,6 +54,11 @@ pub enum ModelTool {
     Door,
     /// A window in the wall clicked: an opening above a sill.
     Window,
+    /// Runs of building services: a rectangular and a round air duct, a pipe and a cable tray.
+    Duct,
+    RoundDuct,
+    Pipe,
+    CableTray,
 }
 
 impl ModelTool {
@@ -61,6 +66,18 @@ impl ModelTool {
     pub const ALL: [ModelTool; 6] = [ModelTool::Wall, ModelTool::Slab, ModelTool::Column, ModelTool::Beam, ModelTool::System, ModelTool::Point];
     /// The tools that make an opening in a wall.
     pub const OPENINGS: [ModelTool; 2] = [ModelTool::Door, ModelTool::Window];
+    /// The tools that draw a run of a building service.
+    pub const SERVICES: [ModelTool; 4] = [ModelTool::Duct, ModelTool::RoundDuct, ModelTool::Pipe, ModelTool::CableTray];
+
+    /// The role of the runs it draws; none for a tool of the building itself.
+    pub fn service(self) -> Option<bim_core::LinearRole> {
+        match self {
+            ModelTool::Duct | ModelTool::RoundDuct => Some(bim_core::LinearRole::Duct),
+            ModelTool::Pipe => Some(bim_core::LinearRole::Pipe),
+            ModelTool::CableTray => Some(bim_core::LinearRole::CableTray),
+            _ => None,
+        }
+    }
 
     /// Whether it makes an opening in a wall rather than an element.
     pub fn opens(self) -> bool {
@@ -78,6 +95,10 @@ impl ModelTool {
             ModelTool::System => "model.system",
             ModelTool::Door => "model.door",
             ModelTool::Window => "model.window",
+            ModelTool::Duct => "mep.duct",
+            ModelTool::RoundDuct => "mep.round-duct",
+            ModelTool::Pipe => "mep.pipe",
+            ModelTool::CableTray => "mep.cable-tray",
         }
     }
 
@@ -92,6 +113,10 @@ impl ModelTool {
             ModelTool::System => l.text("Vliesgevel", "Curtain wall"),
             ModelTool::Door => l.text("Deur", "Door"),
             ModelTool::Window => l.text("Raam", "Window"),
+            ModelTool::Duct => l.text("Kanaal", "Duct"),
+            ModelTool::RoundDuct => l.text("Rond kanaal", "Round duct"),
+            ModelTool::Pipe => l.text("Leiding", "Pipe"),
+            ModelTool::CableTray => l.text("Kabelgoot", "Cable tray"),
         }
     }
 
@@ -106,6 +131,8 @@ impl ModelTool {
             ModelTool::System => "curtain.new",
             ModelTool::Door => "frame.new-door",
             ModelTool::Window => "frame.new-turn-tilt",
+            ModelTool::Duct | ModelTool::CableTray => "draw.l-shape",
+            ModelTool::RoundDuct | ModelTool::Pipe => "draw.line",
         }
     }
 
@@ -114,7 +141,7 @@ impl ModelTool {
         use bim_core::BaseKind;
         match self {
             ModelTool::Point => BaseKind::Point,
-            ModelTool::Column | ModelTool::Beam => BaseKind::Linear,
+            ModelTool::Column | ModelTool::Beam | ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => BaseKind::Linear,
             ModelTool::Wall | ModelTool::Slab | ModelTool::Door | ModelTool::Window => BaseKind::Planar,
             ModelTool::System => BaseKind::System,
         }
@@ -124,13 +151,13 @@ impl ModelTool {
     pub(super) fn clicks(self) -> usize {
         match self {
             ModelTool::Point | ModelTool::Column | ModelTool::Door | ModelTool::Window => 1,
-            ModelTool::Beam | ModelTool::Wall | ModelTool::Slab | ModelTool::System => 2,
+            ModelTool::Beam | ModelTool::Wall | ModelTool::Slab | ModelTool::System | ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => 2,
         }
     }
 
     /// Whether the next element can start where the last one ended (the strip's Chain).
     pub(super) fn chains(self) -> bool {
-        matches!(self, ModelTool::Wall | ModelTool::Beam | ModelTool::System)
+        matches!(self, ModelTool::Wall | ModelTool::Beam | ModelTool::System) || self.service().is_some()
     }
 
     /// What to click next, `placed` points in.
@@ -153,6 +180,13 @@ pub(super) const WALL_THICKNESS: f64 = 0.2;
 pub(super) const SLAB_THICKNESS: f64 = 0.25;
 pub(super) const COLUMN: f64 = 0.3;
 pub(super) const BEAM: (f64, f64) = (0.2, 0.4);
+/// A rectangular duct's width and height, a round duct's and a pipe's diameter, a cable tray's
+/// width and height, and how high above its level the centre of a run lies.
+pub(super) const DUCT: (f64, f64) = (0.4, 0.2);
+pub(super) const ROUND_DUCT: f64 = 0.25;
+pub(super) const PIPE: f64 = 0.054;
+pub(super) const CABLE_TRAY: (f64, f64) = (0.3, 0.06);
+pub(super) const SERVICE_HEIGHT: f64 = 2.6;
 pub(super) const OBJECT: DVec3 = DVec3::new(0.6, 0.6, 0.9);
 const SYSTEM_SPACING: DVec2 = DVec2::new(1.5, 1.5);
 const SYSTEM_MEMBER: DVec2 = DVec2::new(0.05, 0.15);
@@ -191,6 +225,8 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// What joins made automatically are called, in the interface language.
     pub join_word: &'static str,
+    /// The words fittings made automatically are named with: a bend, a tee, a transition.
+    pub fitting_words: [&'static str; 3],
     /// What the top of a beam is called on a structural plan, in the interface language ("b.k.").
     pub top_word: &'static str,
     /// What the pile schedule and its columns are called, in the interface language (see
@@ -597,12 +633,17 @@ impl App {
             self.move_wall_end(last, start);
         }
         let name = self.placed_name(tool, name);
+        // a run of a service starting where one ends at another height: a riser between them
+        let service = self.modeller.placement.of(tool).service.filter(|v| Some(v.role()) == tool.service());
+        if let Some(riser) = self.riser_to(tool, service, &shape) {
+            let _ = self.add_element_served(name, level.clone(), None, service, riser);
+        }
         // with no height typed, what stands reaches the level above, when there is one
         let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
         let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
         // a column or a beam takes the strip's strength class
         let grade = self.modeller.placement.of(tool).grade.filter(|_| matches!(tool, ModelTool::Column | ModelTool::Beam));
-        let added = self.add_element_reaching(name, level, top, shape);
+        let added = self.add_element_served(name, level, top, service, shape);
         if let (Ok(id), Some(grade)) = (&added, grade) {
             if let Some(mut graded) = self.modeller.model.get(*id).cloned() {
                 graded.grade = Some(grade);
@@ -611,6 +652,12 @@ impl App {
             }
         }
         match added {
+            Ok(_) if tool.service().is_some() => {
+                self.modeller.placement.risen(tool, a.truncate().distance(b.truncate()) < 1e-6);
+                if self.modeller.placement.chain {
+                    self.modeller.points = vec![b];
+                }
+            }
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];
                 self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
@@ -620,6 +667,49 @@ impl App {
         }
     }
 
+    /// The riser a run of a building service needs before it: when `shape`, a run `tool` is
+    /// about to place, starts straight above or below the end of a run of the same kind and
+    /// service (and it starts on none), a vertical run of that one's profile from that end to the
+    /// start. A rectangular riser keeps its width across the run it comes from.
+    fn riser_to(&self, tool: ModelTool, service: Option<bim_core::Service>, shape: &Shape) -> Option<Shape> {
+        let role = tool.service()?;
+        let Shape::Linear(run) = shape else { return None };
+        // a run that is a riser itself needs none before it
+        if (run.end - run.start).truncate().length() < 1e-6 {
+            return None;
+        }
+        let grid = self.modeller.model.grid;
+        let mut found: Option<(DVec3, DVec3, ProfileDef)> = None;
+        for e in self.modeller.model.iter() {
+            let Shape::Linear(l) = e.shape_in_project(&grid) else { continue };
+            if l.role != role || e.service != service {
+                continue;
+            }
+            // it starts on a run (a riser passing by, say): that is where it joins
+            if bim_core::join::to_segment(run.start, l.start, l.end) < 1e-3 {
+                return None;
+            }
+            for (end, other) in [(l.start, l.end), (l.end, l.start)] {
+                let apart = end - run.start;
+                if apart.truncate().length() > 1e-3 {
+                    continue;
+                }
+                if apart.z.abs() < 1e-6 {
+                    return None;
+                }
+                if found.as_ref().is_none_or(|(at, ..)| apart.z.abs() < (*at - run.start).z.abs()) {
+                    found = Some((end, end - other, l.profile.clone()));
+                }
+            }
+        }
+        let (from, along, profile) = found?;
+        let flat = along.truncate().try_normalize().or_else(|| (run.end - run.start).truncate().try_normalize())?;
+        // across the run it comes from: the riser's own x, by its roll (see `linear_axes`)
+        let across = DVec2::new(-flat.y, flat.x);
+        let roll = if run.start.z > from.z { across.y.atan2(across.x) } else { (-across.y).atan2(across.x) };
+        Some(Shape::Linear(LinearDef { start: from, end: run.start, profile, roll, role }))
+    }
+
     /// Adds an element defined in scene coordinates, named `name` and a number, and shows it.
     pub(super) fn add_element(&mut self, name: &str, level: Option<String>, shape: Shape) -> Result<ElementId, Refusal> {
         self.add_element_reaching(name, level, None, shape)
@@ -627,9 +717,16 @@ impl App {
 
     /// As [`App::add_element`], the element reaching `top` with its top (see `tops`).
     pub(super) fn add_element_reaching(&mut self, name: &str, level: Option<String>, top: Option<bim_core::Top>, shape: Shape) -> Result<ElementId, Refusal> {
+        self.add_element_served(name, level, top, None, shape)
+    }
+
+    /// As [`App::add_element_reaching`], the element of `service` when one is given: it joins
+    /// only what is of its own service or of none.
+    pub(super) fn add_element_served(&mut self, name: &str, level: Option<String>, top: Option<bim_core::Top>, service: Option<bim_core::Service>, shape: Shape) -> Result<ElementId, Refusal> {
         let grid = self.modeller.model.grid;
         let mut element = Element::in_project(&grid, name, level, shape);
         element.top = top;
+        element.service = service;
         // numbered per IFC class: Wall 1, Wall 2, Slab 1
         let number = self.modeller.model.iter().filter(|e| e.class() == element.class()).count() + 1;
         element.name = format!("{name} {number}");
@@ -643,7 +740,25 @@ impl App {
     /// ends that meet another linear element get one (see `bim_core::Model::update_joins`).
     pub(super) fn joins_follow(&mut self, changed: &[ElementId]) {
         let word = if self.modeller.join_word.is_empty() { "Connection" } else { self.modeller.join_word };
-        self.modeller.model.update_joins(word, Some(changed));
+        let (added, _) = self.modeller.model.update_joins(word, Some(changed));
+        // a fitting is named for what it is: a bend, a tee, a transition
+        for id in added {
+            let Some(mut e) = self.modeller.model.get(id).cloned() else { continue };
+            let Shape::Connection(c) = &e.shape else { continue };
+            let [bend, tee, transition] = self.modeller.fitting_words;
+            let word = match c.kind {
+                ConnectionKind::Bend(_) if !bend.is_empty() => bend,
+                ConnectionKind::Bend(_) => "Bend",
+                ConnectionKind::Tee(_) if !tee.is_empty() => tee,
+                ConnectionKind::Tee(_) => "Tee",
+                ConnectionKind::Transition(_) if !transition.is_empty() => transition,
+                ConnectionKind::Transition(_) => "Transition",
+                _ => continue,
+            };
+            let number = self.modeller.model.iter().filter(|o| matches!(&o.shape, Shape::Connection(k) if std::mem::discriminant(&k.kind) == std::mem::discriminant(&c.kind))).count();
+            e.name = format!("{word} {number}");
+            let _ = self.modeller.model.replace(e);
+        }
     }
 
     /// The modelled elements among the selection, in pick order.
@@ -692,7 +807,7 @@ impl App {
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
             ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
-            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) | ConnectionKind::Transition(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -852,10 +967,10 @@ impl App {
         add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() }));
         // a pergola beside it: two columns and three beams in a U; the joins come by themselves
         // (butts at the columns, mitres at the far corners), and one butt becomes an end plate
-        let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 });
+        let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0, role: Default::default() });
         let c1 = add(self, "Column", column(p(13.0, 0.0)));
         add(self, "Column", column(p(13.0, 6.0)));
-        let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.6), end: b.extend(2.6), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 });
+        let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.6), end: b.extend(2.6), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0, role: Default::default() });
         add(self, "Beam", beam(p(13.0, 6.0), p(17.0, 6.0)));
         let b3 = add(self, "Beam", beam(p(13.0, 0.0), p(17.0, 0.0)));
         add(self, "Beam", beam(p(17.0, 0.0), p(17.0, 6.0)));
@@ -877,6 +992,23 @@ impl App {
 /// What `tool` places from its first point `a` to its last `b` (scene coordinates), on a work
 /// plane at height `z` with a storey of `storey` above it, with the type and sizes `s` (types
 /// from `library`). A wall's `a` and `b` are its axis ends, already on its location line.
+/// The profile of a run of a building service: a duct of 1 mm sheet `width` × `depth`, a round
+/// duct or a pipe of diameter `width` (a pipe's wall a twentieth of it, at least 1 mm), a cable
+/// tray `width` wide with sides `depth` high, of 2 mm sheet, open above.
+pub(super) fn service_profile(tool: ModelTool, width: f64, depth: f64) -> ProfileDef {
+    let mm = |v: f64| format!("{}", (v * 1000.0).round());
+    match tool {
+        ModelTool::RoundDuct => ProfileDef::Catalogue { designation: format!("Ø{}", mm(width)), shape: bim_library::ProfileShape::Chs { d: width, t: 0.001 } },
+        ModelTool::Pipe => ProfileDef::Catalogue { designation: format!("Ø{}", mm(width)), shape: bim_library::ProfileShape::Chs { d: width, t: (width / 20.0).max(0.001) } },
+        ModelTool::CableTray => {
+            let (w, h, t) = (width / 2.0, depth, 0.002);
+            let outer = vec![DVec2::new(-w, -h / 2.0), DVec2::new(w, -h / 2.0), DVec2::new(w, h / 2.0), DVec2::new(w - t, h / 2.0), DVec2::new(w - t, -h / 2.0 + t), DVec2::new(-w + t, -h / 2.0 + t), DVec2::new(-w + t, h / 2.0), DVec2::new(-w, h / 2.0)];
+            ProfileDef::Polygon { outer, holes: Vec::new() }
+        }
+        _ => ProfileDef::Catalogue { designation: format!("{}×{}", mm(width), mm(depth)), shape: bim_library::ProfileShape::Rhs { h: depth, b: width, t: 0.001, r_out: 0.0, r_in: 0.0 } },
+    }
+}
+
 pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64, s: &Settings, library: &bim_library::Library) -> Shape {
     // up to the next level, unless a height was typed
     let up_to = |base: f64| s.height.unwrap_or(z + storey - base);
@@ -896,14 +1028,20 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
         }
         ModelTool::Column => {
             let base = z + s.offset;
-            Shape::Linear(LinearDef { start: a.truncate().extend(base), end: a.truncate().extend(base + up_to(base)), profile: profile(), roll: 0.0 })
+            Shape::Linear(LinearDef { start: a.truncate().extend(base), end: a.truncate().extend(base + up_to(base)), profile: profile(), roll: 0.0, role: Default::default() })
         }
         // a beam's top lies at the top of the storey, or at the height typed above its level
         ModelTool::Beam => {
             let profile = profile();
             let half = profile.profile().map_or(s.depth / 2.0, |p| p.outer().iter().map(|q| q.y).fold(0.0, f64::max));
             let up = DVec3::Z * (z + s.height.unwrap_or(storey) - half - a.z);
-            Shape::Linear(LinearDef { start: a + up, end: b + up, profile, roll: 0.0 })
+            Shape::Linear(LinearDef { start: a + up, end: b + up, profile, roll: 0.0, role: Default::default() })
+        }
+        ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => {
+            let up = DVec3::Z * (z + s.height.unwrap_or(SERVICE_HEIGHT) - a.z);
+            let role = tool.service().unwrap_or_default();
+            // its rise takes its end up (a slope; a riser when both clicks are one point)
+            Shape::Linear(LinearDef { start: a + up, end: b + up + DVec3::Z * s.offset, profile: service_profile(tool, s.width, s.depth), roll: 0.0, role })
         }
         ModelTool::Wall => {
             let base = z + s.offset;
@@ -975,6 +1113,25 @@ impl App {
     }
 }
 
+/// The colour of what belongs to a service (sRGB): supply warm or fresh, return and waste dull.
+fn service_colour(service: bim_core::Service) -> [f32; 3] {
+    use bim_core::Service as S;
+    match service {
+        S::SupplyAir => [0.30, 0.58, 0.90],
+        S::ReturnAir => [0.80, 0.50, 0.72],
+        S::ExhaustAir => [0.56, 0.70, 0.36],
+        S::HeatingSupply => [0.86, 0.26, 0.22],
+        S::HeatingReturn => [0.24, 0.36, 0.72],
+        S::ColdWater => [0.30, 0.74, 0.86],
+        S::HotWater => [0.94, 0.52, 0.20],
+        S::Waste => [0.52, 0.42, 0.32],
+        S::RainWater => [0.28, 0.62, 0.58],
+        S::Gas => [0.92, 0.82, 0.24],
+        S::Power => [0.88, 0.72, 0.28],
+        S::Data => [0.58, 0.46, 0.80],
+    }
+}
+
 /// The colour of a layer of modelled elements, by IFC class (sRGB).
 fn class_colour(class: &str) -> [f32; 3] {
     match class {
@@ -988,6 +1145,9 @@ fn class_colour(class: &str) -> [f32; 3] {
         "IfcCurtainWall" => [0.62, 0.80, 0.92],
         "IfcDoor" => [0.72, 0.55, 0.38],
         "IfcWindow" => [0.95, 0.95, 0.93],
+        "IfcDuctSegment" | "IfcDuctFitting" => [0.45, 0.68, 0.86],
+        "IfcPipeSegment" | "IfcPipeFitting" => [0.36, 0.66, 0.42],
+        "IfcCableCarrierSegment" | "IfcCableCarrierFitting" => [0.88, 0.72, 0.28],
         _ => [0.90, 0.60, 0.30],
     }
 }
@@ -1037,7 +1197,9 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
             let origin = grid.origin(part.tile);
             let base = (layer.positions.len() / 3) as u32;
             let material = part.material.as_deref().and_then(|key| library.material(key));
-            let colour = material.map_or_else(|| class_colour(part.class).map(|c| (c * 255.0).round() as u8), |m| m.colour);
+            // of a service: in its colour, so the systems are told apart
+            let plain = element.service.map_or_else(|| class_colour(part.class), service_colour);
+            let colour = material.map_or_else(|| plain.map(|c| (c * 255.0).round() as u8), |m| m.colour);
             let colours = layer.colors.get_or_insert_with(Vec::new);
             colours.extend(std::iter::repeat_n([colour[0], colour[1], colour[2], 255], mesh.positions.len()));
             for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
@@ -1097,6 +1259,11 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
     if let Some(level) = level {
         put("level", level.into());
     }
+    // the service it is of, and the kind of system that is in IFC
+    if let Some(service) = e.service {
+        put("Service", service.name().into());
+        put("System type", service.ifc_system().into());
+    }
     // the definitions an IFCX file keeps and gives back: the element's, and those of the
     // connections it is the primary member of (a connection has no body, so no node of its own)
     let joints = model.iter().filter(|c| matches!(&c.shape, Shape::Connection(j) if j.primary == e.id));
@@ -1141,6 +1308,9 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
                 ConnectionKind::FinPlate(_) => "Fin plate",
+                ConnectionKind::Bend(_) => "Bend",
+                ConnectionKind::Tee(_) => "Tee",
+                ConnectionKind::Transition(_) => "Transition",
                 ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
@@ -1192,6 +1362,107 @@ mod tests {
     pub(super) fn click(app: &mut App, x: f64, y: f64) {
         let (sx, sy) = app.on_screen(DVec3::new(x, y, 0.0), 1000.0, 800.0).unwrap();
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
+    }
+
+    #[test]
+    fn ducts_drawn_one_after_another_get_a_bend_where_they_turn_and_a_branch_gets_a_tee() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Duct, "Duct")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 10.0, 0.0);
+        // the chain goes on from the end of the first
+        click(&mut app, 10.0, 8.0);
+        app.set_model_tool(Some((ModelTool::RoundDuct, "Round duct")));
+        click(&mut app, 5.0, 0.0);
+        click(&mut app, 5.0, -6.0);
+        app.set_model_tool(None);
+        let classes = |app: &App| {
+            let mut c: Vec<&'static str> = app.modeller.model.iter().map(|e| e.class()).collect();
+            c.sort();
+            c
+        };
+        // two ducts and their bend; the round branch is a duct too, and ends on the first in a tee
+        assert_eq!(classes(&app), ["IfcDuctFitting", "IfcDuctFitting", "IfcDuctSegment", "IfcDuctSegment", "IfcDuctSegment"]);
+        let grid = app.modeller.model.grid;
+        let duct = app.modeller.model.iter().find(|e| e.class() == "IfcDuctSegment").unwrap();
+        let Shape::Linear(l) = duct.shape_in_project(&grid) else { panic!() };
+        assert_eq!((l.start.z, l.role, l.profile.name().as_str()), (SERVICE_HEIGHT, bim_core::LinearRole::Duct, "400×200"));
+        // every fitting has a body
+        for e in app.modeller.model.iter().filter(|e| e.class() == "IfcDuctFitting") {
+            assert!(!app.modeller.model.evaluate(e.id).unwrap().is_empty(), "{}", e.name);
+        }
+        // a pipe and a cable tray are runs of their own kind, and get no fitting to a duct
+        app.set_model_tool(Some((ModelTool::Pipe, "Pipe")));
+        click(&mut app, -20.0, 5.0);
+        click(&mut app, -10.0, 5.0);
+        app.set_model_tool(Some((ModelTool::CableTray, "Cable tray")));
+        click(&mut app, -20.0, 9.0);
+        click(&mut app, -10.0, 9.0);
+        app.set_model_tool(None);
+        let all = classes(&app);
+        assert!(all.contains(&"IfcPipeSegment") && all.contains(&"IfcCableCarrierSegment"), "{all:?}");
+    }
+
+    #[test]
+    fn a_duct_drawn_on_at_another_height_gets_a_riser_and_at_another_size_a_transition() {
+        use super::super::placement::{PlaceField, PlaceMessage};
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Duct, "Duct")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 10.0, 0.0);
+        // the chain goes on 0.9 higher: a riser at the end of the first, a bend at its foot and top
+        app.place_message(PlaceMessage::Field(PlaceField::Height, "3.5".into()));
+        click(&mut app, 20.0, 0.0);
+        let grid = app.modeller.model.grid;
+        let runs: Vec<LinearDef> = app.modeller.model.iter().filter_map(|e| match e.shape_in_project(&grid) { Shape::Linear(l) => Some(l), _ => None }).collect();
+        assert_eq!(runs.len(), 3);
+        let riser = &runs[1];
+        assert!((riser.start - DVec3::new(10.0, 0.0, 2.6)).length() < 1e-9 && (riser.end - DVec3::new(10.0, 0.0, 3.5)).length() < 1e-9, "{riser:?}");
+        let fittings: Vec<_> = app.modeller.model.iter().filter(|e| e.class() == "IfcDuctFitting").map(|e| e.id).collect();
+        assert_eq!(fittings.len(), 2);
+        for id in fittings {
+            assert_eq!(app.modeller.model.evaluate(id).unwrap().len(), 6);
+        }
+        // and on, at the same height but smaller: a transition
+        app.place_message(PlaceMessage::Field(PlaceField::Width, "0.2".into()));
+        click(&mut app, 30.0, 0.0);
+        let kinds: Vec<_> = app.modeller.model.iter().filter_map(|e| match &e.shape { Shape::Connection(c) => Some(c.kind), _ => None }).collect();
+        assert!(matches!(kinds.last(), Some(bim_core::ConnectionKind::Transition(_))), "{kinds:?}");
+        // a pipe with a rise typed and both clicks on one point is a riser; the next starts at its top
+        app.set_model_tool(Some((ModelTool::Pipe, "Pipe")));
+        app.place_message(PlaceMessage::Field(PlaceField::Height, "0.3".into()));
+        app.place_message(PlaceMessage::Field(PlaceField::Offset, "2.5".into()));
+        click(&mut app, 0.0, 20.0);
+        click(&mut app, 0.0, 20.0);
+        click(&mut app, 6.0, 20.0);
+        let pipes: Vec<LinearDef> = app.modeller.model.iter().filter(|e| e.class() == "IfcPipeSegment").filter_map(|e| match e.shape_in_project(&grid) { Shape::Linear(l) => Some(l), _ => None }).collect();
+        assert_eq!(pipes.len(), 2);
+        assert!((pipes[0].start - DVec3::new(0.0, 20.0, 0.3)).length() < 1e-9 && (pipes[0].end - DVec3::new(0.0, 20.0, 2.8)).length() < 1e-9, "{:?}", pipes[0]);
+        assert!((pipes[1].start.z - 2.8).abs() < 1e-9 && (pipes[1].end.z - 2.8).abs() < 1e-9, "{:?}", pipes[1]);
+        assert_eq!(app.modeller.model.iter().filter(|e| e.class() == "IfcPipeFitting").count(), 1);
+        // a pipe drawn in a service is of it, as is the fitting to the next; one of another service
+        // ending at the same point is not joined to them
+        use bim_core::Service;
+        app.place_message(PlaceMessage::Field(PlaceField::Offset, "0".into()));
+        app.modeller.points.clear();
+        app.place_message(PlaceMessage::Service(Some(Service::HeatingSupply)));
+        click(&mut app, 0.0, 40.0);
+        click(&mut app, 6.0, 40.0);
+        click(&mut app, 6.0, 46.0);
+        app.modeller.points.clear();
+        app.place_message(PlaceMessage::Service(Some(Service::ColdWater)));
+        click(&mut app, 6.0, 46.0);
+        click(&mut app, 12.0, 46.0);
+        let served: Vec<(&str, Option<Service>)> = app.modeller.model.iter().filter(|e| e.service.is_some()).map(|e| (e.class(), e.service)).collect();
+        let (pipe, fitting) = ("IfcPipeSegment", "IfcPipeFitting");
+        assert_eq!(served, [(pipe, Some(Service::HeatingSupply)), (pipe, Some(Service::HeatingSupply)), (fitting, Some(Service::HeatingSupply)), (pipe, Some(Service::ColdWater))]);
+        let scene = app.model.as_ref().unwrap();
+        assert_eq!(scene.elements_with("System type", "HEATING").len(), 3);
+        // fittings are named for what they are, and have no mark over them: they are picked by their body
+        let names: Vec<&str> = app.modeller.model.iter().filter(|e| matches!(e.shape, Shape::Connection(_))).map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["Bend 1", "Bend 2", "Transition 1", "Bend 3", "Bend 4"]);
+        app.set_model_tool(None);
+        assert!(app.join_marks(iced::Color::BLACK, iced::Color::WHITE).is_none());
     }
 
     #[test]

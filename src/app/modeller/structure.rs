@@ -172,7 +172,7 @@ mod tests {
         let grid = TileGrid::default();
         let mut model = Model::new(grid);
         let mut add = |name: &str, grade: Option<&str>, start: DVec3, end: DVec3, profile: ProfileDef| {
-            let mut e = Element::in_project(&grid, name, Some("ground".into()), Shape::Linear(LinearDef { start, end, profile, roll: 0.0 }));
+            let mut e = Element::in_project(&grid, name, Some("ground".into()), Shape::Linear(LinearDef { start, end, profile, roll: 0.0, role: Default::default() }));
             e.grade = grade.map(str::to_string);
             model.add(e).unwrap()
         };

@@ -12,7 +12,7 @@ use crate::boolean::{boolean, BooleanOp};
 use crate::element::{linear_axes, LinearDef, PartSolid};
 use crate::model::JOIN_TOLERANCE;
 use crate::profile::Profile;
-use crate::solid::{Axes, Plane, Solid};
+use crate::solid::{Axes, Face, Plane, Solid};
 use crate::Refusal;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -84,7 +84,71 @@ pub enum JoinKind {
     /// The second member stops a gap short of the first's face; a steel plate welded square to
     /// that face lies against the second's web and is bolted through it: a pinned connection.
     FinPlate(FinPlate),
+    /// Both members stop short of the corner they meet at; a fitting turns from the one into the
+    /// other.
+    Bend(Bend),
+    /// The second member stops short of the face of the first, which runs through; a fitting on
+    /// that face takes its end.
+    Tee(Tee),
+    /// Two members in one line with different profiles both stop short of where they meet; a
+    /// fitting goes from the one profile over into the other.
+    Transition(Transition),
 }
+
+/// A transition between two runs of a building service in one line (metres).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Transition {
+    /// The fitting's length, half of it taken from each run.
+    pub length: f64,
+    pub role: crate::element::LinearRole,
+}
+
+impl Transition {
+    /// A transition 300 mm long.
+    pub fn of(role: crate::element::LinearRole) -> Self {
+        Self { length: 0.3, role }
+    }
+}
+
+/// How many sides a transition has around.
+const TRANSITION_SIDES: usize = 32;
+
+/// A bend between two runs of a building service (metres). The fitting is made of straight
+/// pieces of the runs' profile, each turning at most [`BEND_STEP`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Bend {
+    /// The radius of the bend's centre line, as a multiple of the profile's size in the plane of
+    /// the bend. At 0.5 the inner side is a sharp corner.
+    pub radius: f64,
+    /// What the runs are, and so what the fitting is.
+    pub role: crate::element::LinearRole,
+}
+
+impl Bend {
+    /// A bend with a centre-line radius of once the profile's size.
+    pub fn of(role: crate::element::LinearRole) -> Self {
+        Self { radius: 1.0, role }
+    }
+}
+
+/// A tee between two runs of a building service (metres).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Tee {
+    /// How far the branch stops short of the face of the run it ends on: the length of the
+    /// fitting's branch.
+    pub length: f64,
+    pub role: crate::element::LinearRole,
+}
+
+impl Tee {
+    /// A tee whose branch is 100 mm long.
+    pub fn of(role: crate::element::LinearRole) -> Self {
+        Self { length: 0.1, role }
+    }
+}
+
+/// The most one piece of a bend turns (radians): 15°.
+pub const BEND_STEP: f64 = std::f64::consts::PI / 12.0;
 
 /// A fin plate's sizes (metres). Editable geometric defaults, not a checked structural design.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -177,6 +241,9 @@ pub fn cuts(kind: JoinKind, members: &[Member]) -> Result<JoinResult, Refusal> {
         }
         JoinKind::EndPlate(plate) => end_plate(first, second, &plate, &mut result)?,
         JoinKind::FinPlate(plate) => fin_plate(first, second, &plate, &mut result)?,
+        JoinKind::Bend(b) => bend(first, second, &b, &mut result)?,
+        JoinKind::Tee(t) => tee(first, second, &t, &mut result)?,
+        JoinKind::Transition(t) => transition(first, second, &t, &mut result)?,
     }
     Ok(result)
 }
@@ -299,6 +366,167 @@ fn fin_plate(first: &Member, second: &Member, plate: &FinPlate, result: &mut Joi
     Ok(())
 }
 
+/// A bend between `first` and `second`, whose nearest ends meet: both stop where the bend's arc
+/// leaves their axis, and the fitting follows the arc in straight pieces of the first's profile.
+fn bend(first: &Member, second: &Member, b: &Bend, result: &mut JoinResult) -> Result<(), Refusal> {
+    if !(b.radius.is_finite() && b.radius >= 0.5) {
+        return Err(Refusal::NotPositive);
+    }
+    let ((e0, e1), _) = mitre(first, second)?;
+    let ((q0, into0), (q1, into1)) = (first.end_of(e0), second.end_of(e1));
+    let corner = (q0 + q1) / 2.0;
+    // the way the flow turns: from along the first (towards the corner) to along the second
+    let (from, to) = (-into0, into1);
+    let turn = from.dot(to).clamp(-1.0, 1.0).acos();
+    let axis = from.cross(to).try_normalize().ok_or(Refusal::Parallel)?;
+    // towards the inside of the bend, square to the first
+    let inward = axis.cross(from);
+    let across = DVec2::new(inward.dot(first.axes.x), inward.dot(first.axes.y));
+    let size = first.profile.support(across) + first.profile.support(-across);
+    let radius = b.radius * size;
+    let tangent = radius * (turn / 2.0).tan();
+    if tangent >= first.length - crate::LINEAR_TOLERANCE || tangent >= second.length - crate::LINEAR_TOLERANCE {
+        return Err(Refusal::TooShortForFitting);
+    }
+    let (t0, t1) = (corner + into0 * tangent, corner + into1 * tangent);
+    result.trims.push((0, e0, Plane { point: t0, normal: from }));
+    result.trims.push((1, e1, Plane { point: t1, normal: -to }));
+    let centre = t0 + inward * radius;
+    let turned = |v: DVec3, angle: f64| glam::DQuat::from_axis_angle(axis, angle) * v;
+    let pieces = ((turn / BEND_STEP).ceil() as usize).max(1);
+    let step = turn / pieces as f64;
+    // the profile keeps the side it shows in the first member: its frame runs with the member
+    let with = if e0 == MemberEnd::End { 1.0 } else { -1.0 };
+    for k in 0..pieces {
+        let (a0, a1) = (step * k as f64, step * (k + 1) as f64);
+        let (p0, p1) = (centre + turned(t0 - centre, a0), centre + turned(t0 - centre, a1));
+        let middle = (a0 + a1) / 2.0;
+        let axes = Axes::new(p0, turned(first.axes.x, middle), turned(from, middle) * with)?;
+        let (start, end) = (Plane { point: p0, normal: -turned(from, a0) }, Plane { point: p1, normal: turned(from, a1) });
+        let solid = if with > 0.0 { Solid::sweep_between(&first.profile, &axes, start, end) } else { Solid::sweep_between(&first.profile, &axes, end, start) }?;
+        result.parts.push(PartSolid { class: b.role.fitting_class(), solid, material: None });
+    }
+    Ok(())
+}
+
+/// A tee between `first` (which runs through) and `second`, which ends on its side: the second
+/// stops `length` short of the first's face, and the fitting's branch, of the second's profile,
+/// reaches from that face to the second's end.
+fn tee(first: &Member, second: &Member, t: &Tee, result: &mut JoinResult) -> Result<(), Refusal> {
+    if !(t.length.is_finite() && t.length > crate::LINEAR_TOLERANCE) {
+        return Err(Refusal::NotPositive);
+    }
+    let (which, face) = butt(first, second)?;
+    let (_, into) = second.end_of(which);
+    // along the branch, from the face outwards: how far its axis is from the face to its stop
+    let slant = (-face.normal).dot(into).abs().max(1e-9);
+    let stop = Plane { point: face.point - face.normal * t.length, normal: face.normal };
+    if t.length / slant >= second.length - crate::LINEAR_TOLERANCE {
+        return Err(Refusal::TooShortForFitting);
+    }
+    result.trims.push((1, which, stop));
+    // the branch: the second's profile between the face and the stop
+    let inner = Plane { point: face.point, normal: face.normal };
+    let outer = Plane { point: stop.point, normal: -stop.normal };
+    let solid = match which {
+        MemberEnd::Start => Solid::sweep_between(&second.profile, &second.axes, inner, outer),
+        MemberEnd::End => Solid::sweep_between(&second.profile, &second.axes, outer, inner),
+    }?;
+    result.parts.push(PartSolid { class: t.role.fitting_class(), solid, material: None });
+    Ok(())
+}
+
+/// A transition between `first` and `second`, which lie in one line and whose nearest ends meet:
+/// each stops half the fitting's length short, and the fitting goes from the outline of the first
+/// to that of the second. It is hollow when both profiles are (one hole each); else solid.
+fn transition(first: &Member, second: &Member, t: &Transition, result: &mut JoinResult) -> Result<(), Refusal> {
+    if !(t.length.is_finite() && t.length > crate::LINEAR_TOLERANCE) {
+        return Err(Refusal::NotPositive);
+    }
+    let ends = [MemberEnd::Start, MemberEnd::End];
+    let (e0, e1) = ends
+        .iter()
+        .flat_map(|&p| ends.iter().map(move |&s| (p, s)))
+        .min_by(|&(p1, s1), &(p2, s2)| {
+            let d = |p, s| (first.end_of(p).0 - second.end_of(s).0).length();
+            d(p1, s1).total_cmp(&d(p2, s2))
+        })
+        .ok_or(Refusal::TwoMembers)?;
+    let ((q0, into0), (q1, into1)) = (first.end_of(e0), second.end_of(e1));
+    if q0.distance(q1) > JOIN_TOLERANCE {
+        return Err(Refusal::NotTouching);
+    }
+    // in one line, running away from each other
+    if into0.cross(into1).length() > 1e-6 || into0.dot(into1) > 0.0 {
+        return Err(Refusal::NotInLine);
+    }
+    let half = t.length / 2.0;
+    if half >= first.length - crate::LINEAR_TOLERANCE || half >= second.length - crate::LINEAR_TOLERANCE {
+        return Err(Refusal::TooShortForFitting);
+    }
+    let along = -into0;
+    let (t0, t1) = (q0 + into0 * half, q1 + into1 * half);
+    result.trims.push((0, e0, Plane { point: t0, normal: along }));
+    result.trims.push((1, e1, Plane { point: t1, normal: -along }));
+    // the fitting's frame: along the line from the first to the second
+    let frame = Axes::new(t0, first.axes.x, along)?;
+    // a ring of a member's profile at `at`, where the frame's directions meet it
+    let ring = |m: &Member, at: DVec3, outline: &[DVec2]| -> Result<Vec<DVec3>, Refusal> {
+        (0..TRANSITION_SIDES)
+            .map(|k| {
+                let d = DVec2::from_angle(std::f64::consts::TAU * k as f64 / TRANSITION_SIDES as f64);
+                let dir = frame.x * d.x + frame.y * d.y;
+                let own = DVec2::new(dir.dot(m.axes.x), dir.dot(m.axes.y));
+                Ok(at + dir * reach(outline, own).ok_or(Refusal::Degenerate)?)
+            })
+            .collect()
+    };
+    let mut positions = ring(first, t0, first.profile.outer())?;
+    positions.extend(ring(second, t1, second.profile.outer())?);
+    let n = TRANSITION_SIDES as u32;
+    let mut rings: Vec<Vec<u32>> = vec![(0..n).collect()];
+    if let ([h0], [h1]) = (first.profile.holes(), second.profile.holes()) {
+        positions.extend(ring(first, t0, h0)?);
+        positions.extend(ring(second, t1, h1)?);
+        rings.push((0..n).rev().map(|i| 2 * n + i).collect());
+    }
+    // ring i lies at the first's end, i + n at the second's
+    let mut faces = vec![
+        Face { rings: rings.iter().map(|r| r.iter().rev().copied().collect()).collect() },
+        Face { rings: rings.iter().map(|r| r.iter().map(|i| i + n).collect()).collect() },
+    ];
+    for r in &rings {
+        for k in 0..r.len() {
+            let (a, b) = (r[k], r[(k + 1) % r.len()]);
+            faces.push(Face { rings: vec![vec![a, b, b + n]] });
+            faces.push(Face { rings: vec![vec![a, b + n, a + n]] });
+        }
+    }
+    let solid = Solid { positions, faces };
+    solid.check()?;
+    result.parts.push(PartSolid { class: t.role.fitting_class(), solid, material: None });
+    Ok(())
+}
+
+/// How far `outline` reaches from the origin in direction `dir` (a unit vector): the farthest
+/// point of it on that ray.
+fn reach(outline: &[DVec2], dir: DVec2) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for k in 0..outline.len() {
+        let (a, b) = (outline[k], outline[(k + 1) % outline.len()]);
+        let edge = b - a;
+        let den = dir.perp_dot(edge);
+        if den.abs() < 1e-12 {
+            continue;
+        }
+        let (along, on) = (a.perp_dot(edge) / den, a.perp_dot(dir) / den);
+        if along > 0.0 && (-1e-9..=1.0 + 1e-9).contains(&on) {
+            best = Some(best.map_or(along, |b| b.max(along)));
+        }
+    }
+    best
+}
+
 /// A member's body as its joins leave it: its profile swept between its trims (its own square
 /// ends where none), its additions united with it and its removals taken out.
 pub fn finish(member: &Member, start: Option<Plane>, end: Option<Plane>, additions: &[Solid], removals: &[Solid]) -> Result<Solid, Refusal> {
@@ -318,7 +546,7 @@ pub fn finish(member: &Member, start: Option<Plane>, end: Option<Plane>, additio
 }
 
 /// The distance from `q` to the segment `a`–`b`.
-pub(crate) fn to_segment(q: DVec3, a: DVec3, b: DVec3) -> f64 {
+pub fn to_segment(q: DVec3, a: DVec3, b: DVec3) -> f64 {
     let ab = b - a;
     let t = if ab.length_squared() > 0.0 { ((q - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
     (a + ab * t - q).length()
@@ -373,7 +601,7 @@ mod tests {
     use crate::profile::ProfileDef;
 
     fn member(start: DVec3, end: DVec3) -> Member {
-        Member::of(&LinearDef { start, end, profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 }).unwrap()
+        Member::of(&LinearDef { start, end, profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0, role: Default::default() }).unwrap()
     }
 
     #[test]
@@ -390,7 +618,7 @@ mod tests {
     #[test]
     fn an_end_plate_shortens_the_beam_bolts_the_plate_and_drills_the_column() {
         // a beam 200 wide and 400 high ending on a 300 × 300 column's face
-        let column = Member::of(&LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }).unwrap();
+        let column = Member::of(&LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0, role: Default::default() }).unwrap();
         let beam = member(DVec3::new(0.0, 0.0, 2.5), DVec3::new(5.0, 0.0, 2.5));
         let plate = EndPlate::default();
         let r = cuts(JoinKind::EndPlate(plate), &[column, beam]).unwrap();
@@ -414,7 +642,7 @@ mod tests {
 
     #[test]
     fn bolts_that_do_not_fit_are_refused() {
-        let column = Member::of(&LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }).unwrap();
+        let column = Member::of(&LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0, role: Default::default() }).unwrap();
         let beam = member(DVec3::new(0.0, 0.0, 2.5), DVec3::new(5.0, 0.0, 2.5));
         let tight = EndPlate { margin: 0.02, ..EndPlate::default() };
         assert_eq!(cuts(JoinKind::EndPlate(tight), &[column.clone(), beam.clone()]), Err(Refusal::BoltsDoNotFit));

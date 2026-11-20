@@ -320,7 +320,8 @@ fn shown(s: &Settings, field: PlaceField) -> String {
 
 /// `s` with `field` typed as `typed`, if that is a value it can take: sizes above 0, a sill not
 /// below 0, a height left empty (up to the next level) where the tool allows it. A beam's height
-/// is where its top lies to its level, so it may be 0 or below it (a foundation beam).
+/// is where its top lies to its level, so it may be 0 or below it (a foundation beam); so may a
+/// service run's centre (a pipe under the floor).
 fn with_typed(tool: ModelTool, s: &Settings, field: PlaceField, typed: &str) -> Option<Settings> {
     let mut s = s.clone();
     let typed = typed.trim();
@@ -333,7 +334,7 @@ fn with_typed(tool: ModelTool, s: &Settings, field: PlaceField, typed: &str) -> 
     match field {
         PlaceField::Width if v > 0.0 => s.width = v,
         PlaceField::Depth if v > 0.0 => s.depth = v,
-        PlaceField::Height if v > 0.0 || tool == ModelTool::Beam => s.height = Some(v),
+        PlaceField::Height if v > 0.0 || tool == ModelTool::Beam || tool.service().is_some() => s.height = Some(v),
         PlaceField::Offset => s.offset = v,
         PlaceField::Sill if v >= 0.0 => s.sill = v,
         _ => return None,

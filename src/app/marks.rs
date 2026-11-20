@@ -488,7 +488,7 @@ impl App {
                     .on_press(Message::AddChainTotal(path.clone(), index)));
                 controls = controls.push(pick_list(choices, None::<ReferenceChoice>, move |r|
                     Message::RemoveDimensionReference(path.clone(), index, r.0))
-                    .placeholder(l.text("Referentie verwijderen…", "Remove reference…")).text_size(12));
+                    .placeholder(l.text("Referentie verwijderen...", "Remove reference...")).text_size(12));
             }
         }
         controls.into()

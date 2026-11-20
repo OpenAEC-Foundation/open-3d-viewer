@@ -1101,12 +1101,13 @@ impl canvas::Program<Message> for PaperDrawing {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
                 draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color, &self.styles[d.style.min(self.styles.len() - 1)]);
             }
-            super::marks::draw_detail_lines(&mut frame, &placed.lines, &placed.pens, ink, &|q| Some(fit.point(self.to_paper(i, q))), (fit.scale / 1000.0) as f32);
+            super::marks::draw_detail_lines(&mut frame, &placed.lines, &placed.pens, placed.crop, ink, &|q| Some(fit.point(self.to_paper(i, q))), (fit.scale / 1000.0) as f32);
             for d in &placed.datums {
                 let (a, b) = (fit.point(self.to_paper(i, d.a)), fit.point(self.to_paper(i, d.b)));
                 super::marks::draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), ink, Color::WHITE);
             }
             for (k, note) in placed.notes.iter().enumerate() {
+                if crate::drawing2d::crop_segment(note.at, note.at, placed.crop).is_none() { continue; }
                 let picked = self.pick == Some(SheetPick::Note(i, k));
                 let at = fit.point(self.to_paper(i, note.at));
                 let at = if note.level { super::marks::draw_level_mark(&mut frame, at, Self::note_size(&fit, note), if picked { p.accent } else { ink }) } else { at };

@@ -430,15 +430,18 @@ impl Drawing2d {
             polygon.points.iter_mut().for_each(|q| *q = to(*q));
             self.polygons.push(polygon);
         }
-        let start = self.lines.len();
-        self.detail(doc.view_lines(view), to);
-        for (range, rgb, width) in doc.detail_pens(view) {
-            for l in &mut self.lines[start+range.start..start+range.end] {
-                l.color = Some(rgb);
-                l.width = width;
+        let crop = doc.view_marks(view).and_then(|(_, crop)| crop);
+        let pens = doc.detail_pens(view);
+        let lines = doc.view_lines(view).iter().chain(doc.view_symbols(view));
+        for (index, &[a, b]) in lines.enumerate() {
+            let Some((a, b)) = crop_segment(a, b, crop) else { continue };
+            let mut line = Line2d::new(Pen::Detail, to(a), to(b));
+            if let Some((_, rgb, width)) = pens.iter().find(|(range, _, _)| range.contains(&index)) {
+                line.color = Some(*rgb);
+                line.width = *width;
             }
+            self.lines.push(line);
         }
-        self.detail(doc.view_symbols(view), to);
     }
 
     /// Coloured strokes for a writer that emits one path per width and colour.
@@ -544,6 +547,7 @@ impl Drawing2d {
             self.dimensions.push(Dim2d { from: to(d.from), to: to(d.to), value: d.length(), offset: DIMENSION_OFFSET * unit, style: doc.dimension_style(d.style).clone(), text_height: rules.text * unit });
         }
         for n in notes {
+            if crop_segment(n.at, n.at, crop).is_none() { continue; }
             let align = match n.align {
                 crate::document::Align::Left => Align::Left,
                 crate::document::Align::Center => Align::Center,
@@ -595,6 +599,10 @@ pub(crate) fn view_polygons(doc: &Document, path: &str) -> Vec<Polygon2d> {
         }
     }
     out
+}
+
+pub(crate) fn crop_segment(a: [f64; 2], b: [f64; 2], crop: Option<([f64; 2], [f64; 2])>) -> Option<([f64; 2], [f64; 2])> {
+    match crop { Some((lo, hi)) => clip(a, b, lo, hi), None => Some((a, b)) }
 }
 
 /// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky), as a sheet crops.

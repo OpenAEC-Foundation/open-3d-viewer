@@ -1129,7 +1129,7 @@ impl canvas::Program<Message> for ViewMarks {
             frame.fill(&picked, canvas::Fill { style: canvas::Style::Solid(Color { a: 0.35, ..p.accent }), rule: canvas::fill::Rule::EvenOdd });
             frame.stroke(&picked, Stroke::default().with_color(p.accent).with_width(2.0));
         }
-        draw_detail_lines(&mut frame, &self.lines, &self.pens, ink, &|q| self.px(&screen, q), self.paper(&screen, [0.0, 0.0]) / 1000.0);
+        draw_detail_lines(&mut frame, &self.lines, &self.pens, self.crop, ink, &|q| self.px(&screen, q), self.paper(&screen, [0.0, 0.0]) / 1000.0);
         // the line picked, with the shape it is part of, and what a drawing tool would draw to
         // where the pointer is
         let through = |lines: &[[[f64; 2]; 2]]| {
@@ -1286,12 +1286,13 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
     });
 }
 
-pub(super) fn draw_detail_lines(frame: &mut Frame, lines: &[[[f64; 2]; 2]], pens: &[(std::ops::Range<usize>, [u8; 3], f64)], ink: Color, to: &dyn Fn([f64; 2]) -> Option<Point>, px_per_mm: f32) {
+pub(super) fn draw_detail_lines(frame: &mut Frame, lines: &[[[f64; 2]; 2]], pens: &[(std::ops::Range<usize>, [u8; 3], f64)], crop: Option<([f64; 2], [f64; 2])>, ink: Color, to: &dyn Fn([f64; 2]) -> Option<Point>, px_per_mm: f32) {
     let mut draw = |range: std::ops::Range<usize>, color, width| {
         if range.is_empty() { return; }
         let path = Path::new(|p| {
-            for [a, b] in &lines[range] {
-                if let (Some(a), Some(b)) = (to(*a), to(*b)) {
+            for &[a, b] in &lines[range] {
+                let Some((a, b)) = crate::drawing2d::crop_segment(a, b, crop) else { continue };
+                if let (Some(a), Some(b)) = (to(a), to(b)) {
                     p.move_to(a);
                     p.line_to(b);
                 }

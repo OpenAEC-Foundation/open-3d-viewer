@@ -191,6 +191,10 @@ pub enum Category {
     Objects(bim_library::object::ObjectGroup),
     /// The connection types of a library, by their family: steel, timber and the rest.
     Connections(bim_library::connection::Family),
+    /// The service types of a library, by what they carry: ducts, pipes, cable trays and the rest.
+    Services(bim_library::service::Carrier),
+    /// The insulation and lining types of a library.
+    Covers,
     /// Every type of a library at one level of development.
     Lod(bim_library::lod::Lod),
     /// The libraries of the online place, to add to the project.
@@ -213,6 +217,7 @@ pub enum Heading {
     Hatches,
     Objects,
     Connections,
+    Services,
     Lod,
     Codes,
     Sets,
@@ -233,6 +238,7 @@ impl Heading {
             Heading::Sets => l.text("Annotatie", "Annotation"),
             Heading::Objects => l.text("Objecten", "Objects"),
             Heading::Connections => l.text("Verbindingen", "Connections"),
+            Heading::Services => l.text("Kanalen en leidingen", "Ducts and pipes"),
             Heading::Lod => l.text("Uitwerkingsniveau", "Level of development"),
             Heading::Online => l.text("Online", "Online"),
             Heading::House => l.text("Huisstijl", "House style"),
@@ -270,6 +276,8 @@ impl Category {
             Category::ViewTemplates => l.text("Weergavesjablonen", "View templates"),
             Category::Objects(group) => group.name(super::library::lang(l)),
             Category::Connections(family) => family.name(super::library::lang(l)),
+            Category::Services(carrier) => carrier.name(super::library::lang(l)),
+            Category::Covers => l.text("isolatie en bekleding", "insulation and lining"),
             Category::Lod(lod) => lod.name(),
             Category::Online => l.text("Open BIM Library", "Open BIM Library"),
             Category::Colours => l.text("Kleuren", "Colours"),
@@ -568,6 +576,7 @@ impl App {
         // (an object picked of another library stays picked; one that is gone shows the hint)
         (self.object_view.draft, self.object_view.refused) = (None, None);
         (self.connection_view.draft, self.connection_view.refused) = (None, None);
+        (self.service_view.draft, self.service_view.refused) = (None, None);
         // (a layer that is gone shows no fields: the face does)
         let layers = system.picked.as_deref().and_then(|id| library.system_type(id)).map_or(0, |t| t.layers.len());
         if matches!(system.part, super::systems::Part::Layer(k) if k >= layers) {
@@ -630,6 +639,8 @@ impl App {
             Category::ViewTemplates => of(&|lib| lib.view_templates.len()),
             Category::Objects(group) => of(&|lib| lib.object_types_of(group).count()),
             Category::Connections(family) => of(&|lib| lib.connection_types_of(family).count()),
+            Category::Services(carrier) => of(&|lib| lib.service_types_of(carrier).count()),
+            Category::Covers => of(&|lib| lib.cover_types.len()),
             Category::Lod(lod) => of(&|lib| bim_library::remote::levels(lib)[bim_library::lod::Lod::ALL.iter().position(|l| *l == lod).unwrap_or(0)]),
             Category::Online => self.online.index.as_ref().map_or(0, |index| index.libraries.len()),
             Category::Colours => self.house.colours.len(),
@@ -660,6 +671,7 @@ impl App {
                 (Heading::Systems, has(counted(SystemGroup::ALL.map(Category::Systems).to_vec()))),
                 (Heading::Objects, has(counted(bim_library::object::ObjectGroup::ALL.map(Category::Objects).to_vec()))),
                 (Heading::Connections, has(counted(bim_library::connection::Family::ALL.map(Category::Connections).to_vec()))),
+                (Heading::Services, has(counted(bim_library::service::Carrier::ALL.map(Category::Services).into_iter().chain([Category::Covers]).collect()))),
                 (Heading::Lod, has(counted(bim_library::lod::Lod::ALL.map(Category::Lod).to_vec()))),
                 (Heading::Codes, has(counted(vec![Category::Codes]))),
                 (Heading::Sets, has(counted(vec![Category::ViewTemplates, Category::DrawingSets]))),
@@ -855,6 +867,12 @@ impl App {
         if let (Category::Connections(_), true, Some(shelf)) = (self.category(), view.query.trim().chars().count() < 2, self.shown_shelf()) {
             return self.connection_pane(p, l, self.shelf(shelf), shelf);
         }
+        if let (Category::Services(_), true, Some(shelf)) = (self.category(), view.query.trim().chars().count() < 2, self.shown_shelf()) {
+            return self.service_pane(p, l, self.shelf(shelf), shelf);
+        }
+        if let (Category::Covers, true, Some(shelf)) = (self.category(), view.query.trim().chars().count() < 2, self.shown_shelf()) {
+            return self.cover_pane(p, l, self.shelf(shelf), shelf);
+        }
         if self.category() == Category::ViewTemplates && view.query.trim().chars().count() < 2 {
             if let Some(library) = self.shown_shelf().map(|shelf| self.shelf(shelf)) {
                 return self.view_template_pane(p, l, library);
@@ -1009,6 +1027,8 @@ impl App {
                 tiles
             }
             (Category::Connections(family), Some(_), Some(library)) => self.connection_tiles(p, l, library, family),
+            (Category::Services(carrier), Some(_), Some(library)) => self.service_tiles(p, l, library, carrier),
+            (Category::Covers, Some(_), Some(library)) => self.cover_tiles(p, l, library),
             (Category::Lod(lod), Some(_), Some(library)) => self.lod_tiles(p, l, library, lod),
             (Category::Online, _, _) => self.online_tiles(p, l),
             (Category::ViewTemplates, Some(_), Some(library)) => self.view_template_tiles(p, l, library),
@@ -1456,7 +1476,7 @@ mod tests {
         // the general library: materials, the planar elements together, the linear ones with the
         // steel table, the systems, and the hatches: the suite's own, and those of its standard
         let general = app.library_tree();
-        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Objects, Heading::Connections, Heading::Lod, Heading::Codes, Heading::Sets, Heading::Hatches]);
+        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Objects, Heading::Connections, Heading::Services, Heading::Lod, Heading::Codes, Heading::Sets, Heading::Hatches]);
         assert_eq!(general.iter().find(|(heading, _)| *heading == Heading::Codes).map(|(_, list)| list.clone()), Some(vec![(Category::Codes, Library::starter().codes.len())]));
         assert_eq!(categories(&general, Heading::Planar), Role::ALL.map(Category::Planar));
         assert_eq!(general[0].1, [(Category::Materials, Library::starter().materials.len())]);

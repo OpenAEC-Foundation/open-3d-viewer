@@ -169,6 +169,8 @@ pub fn nodes(library: &Library) -> Vec<Value> {
     }
     nodes.extend(library.object_types.iter().map(crate::object::node));
     nodes.extend(library.connection_types.iter().map(crate::connection::node));
+    nodes.extend(library.service_types.iter().map(crate::service::node));
+    nodes.extend(library.cover_types.iter().map(|c| crate::service::cover_node(c, &library.materials)));
     nodes.extend(library.codes.iter().map(nlsfb::code_node));
     nodes.extend(library.drawing_sets.iter().map(crate::annotate::node));
     nodes.extend(library.view_templates.iter().map(crate::template::node));
@@ -217,6 +219,8 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
     let mut system_types: Vec<SystemType> = Vec::new();
     let mut object_types: Vec<crate::object::ObjectType> = Vec::new();
     let mut connection_types: Vec<crate::connection::ConnectionType> = Vec::new();
+    let mut service_types: Vec<crate::service::ServiceType> = Vec::new();
+    let mut cover_types: Vec<crate::service::CoverType> = Vec::new();
     for path in order {
         let attributes = &composed[path];
         if let Some(own) = attributes.get(MATERIAL) {
@@ -284,6 +288,16 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
             }
             connection_types.push(connection);
         }
+        if let Some(own) = attributes.get(crate::service::SERVICE_TYPE) {
+            let mut service: crate::service::ServiceType = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?;
+            if let Some(class) = &class {
+                service.code = Some(class.clone()).filter(|class| class != service.carrier.code());
+            }
+            service_types.push(service);
+        }
+        if let Some(own) = attributes.get(crate::service::COVER_TYPE) {
+            cover_types.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
+        }
         if let Some(own) = attributes.get(SYSTEM_TYPE) {
             let mut system: SystemType = serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?;
             if let Some(class) = &class {
@@ -311,6 +325,12 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
     }
     for c in connection_types {
         library.add_connection_type(c)?;
+    }
+    for s in service_types {
+        library.add_service_type(s)?;
+    }
+    for c in cover_types {
+        library.add_cover_type(c)?;
     }
     Ok(library)
 }
@@ -361,7 +381,7 @@ mod tests {
         assert_eq!(masonry["attributes"][SYSTEM_TYPE]["grid"]["pattern"], "running_bond");
         let ceiling = nodes.iter().find(|n| n["path"] == system_type_path("system.ceiling-600x600")).unwrap();
         assert_eq!(ceiling["attributes"]["bsi::ifc::prop::PredefinedType"], "CEILING");
-        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len() + library.view_templates.len() + library.object_types.len() + library.connection_types.len());
+        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.codes.len() + library.drawing_sets.len() + library.view_templates.len() + library.object_types.len() + library.connection_types.len() + library.service_types.len() + library.cover_types.len());
         // paths are stable
         assert_eq!(nodes, self::nodes(&Library::starter()));
     }

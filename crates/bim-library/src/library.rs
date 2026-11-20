@@ -8,6 +8,7 @@ use crate::nlsfb::{self, Code};
 use crate::connection::{self, ConnectionType, Family};
 use crate::object::{self, ObjectGroup, ObjectType};
 use crate::profile::{self, LinearRole, LinearType};
+use crate::service::{self, Carrier, CoverType, ServiceType};
 use crate::system::{self, SystemGroup, SystemType};
 use crate::template::{self, ViewTemplate};
 use crate::{Lang, LibraryError};
@@ -44,6 +45,13 @@ pub struct Library {
     /// Its connection types: how elements are joined where they meet ([`crate::connection`]).
     #[serde(default)]
     pub connection_types: Vec<ConnectionType>,
+    /// Its service types: ducts, pipes, cable trays, ladders and conduits with their sizes
+    /// and fittings ([`crate::service`]).
+    #[serde(default)]
+    pub service_types: Vec<ServiceType>,
+    /// Its cover types: the insulation round a run and the lining inside it.
+    #[serde(default)]
+    pub cover_types: Vec<CoverType>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -91,7 +99,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), connection_types: connection::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), connection_types: connection::starter(), service_types: service::starter(), cover_types: service::covers(), drawing_sets: annotate::starter(), view_templates: template::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -285,6 +293,42 @@ impl Library {
         Ok(())
     }
 
+    /// The service type with key `id`.
+    pub fn service_type(&self, id: &str) -> Option<&ServiceType> {
+        self.service_types.iter().find(|s| s.id == id)
+    }
+
+    /// The service types of `carrier`, in the order they were added.
+    pub fn service_types_of(&self, carrier: Carrier) -> impl Iterator<Item = &ServiceType> {
+        self.service_types.iter().filter(move |s| s.carrier == carrier)
+    }
+
+    /// Adds a service type. Refused when it does not hold together, its key is taken, or it
+    /// is of a material the library lacks.
+    pub fn add_service_type(&mut self, service: ServiceType) -> Result<(), LibraryError> {
+        service.check(&self.materials)?;
+        if self.service_type(&service.id).is_some() {
+            return Err(LibraryError::Duplicate(service.id));
+        }
+        self.service_types.push(service);
+        Ok(())
+    }
+
+    /// The cover type with key `id`.
+    pub fn cover_type(&self, id: &str) -> Option<&CoverType> {
+        self.cover_types.iter().find(|c| c.id == id)
+    }
+
+    /// Adds a cover type, refused as a service type is.
+    pub fn add_cover_type(&mut self, cover: CoverType) -> Result<(), LibraryError> {
+        cover.check(&self.materials)?;
+        if self.cover_type(&cover.id).is_some() {
+            return Err(LibraryError::Duplicate(cover.id));
+        }
+        self.cover_types.push(cover);
+        Ok(())
+    }
+
     /// The object types of `group`, in the order they were added.
     pub fn object_types_of(&self, group: ObjectGroup) -> impl Iterator<Item = &ObjectType> {
         self.object_types.iter().filter(move |o| o.group == group)
@@ -359,7 +403,7 @@ impl Library {
     }
 
     /// The types that have `code`, by their ids: build-ups, linear types, system types,
-    /// object types and connection types. With
+    /// object types, connection types and service types. With
     /// `deeper`, also those of a code under it ("21" has the types of "21.22").
     pub fn coded(&self, code: &str, deeper: bool) -> Vec<&str> {
         let has = |of: String| of == code || deeper && of.strip_prefix(code).is_some_and(|rest| rest.starts_with('.') || code.contains('.'));
@@ -368,7 +412,8 @@ impl Library {
         let systems = self.system_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
         let objects = self.object_types.iter().filter(|o| has(o.nlsfb())).map(|o| o.id.as_str());
         let connections = self.connection_types.iter().filter(|c| c.nlsfb().is_some_and(&has)).map(|c| c.id.as_str());
-        buildups.chain(linear).chain(systems).chain(objects).chain(connections).collect()
+        let services = self.service_types.iter().filter(|s| has(s.nlsfb())).map(|s| s.id.as_str());
+        buildups.chain(linear).chain(systems).chain(objects).chain(connections).chain(services).collect()
     }
 
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
@@ -440,6 +485,17 @@ impl Library {
                 added += 1;
             }
         }
+        // (service and cover types by their keys too, each once its material is there)
+        for s in &other.service_types {
+            if self.add_service_type(s.clone()).is_ok() {
+                added += 1;
+            }
+        }
+        for c in &other.cover_types {
+            if self.add_cover_type(c.clone()).is_ok() {
+                added += 1;
+            }
+        }
         added
     }
 }
@@ -462,6 +518,12 @@ mod tests {
         }
         for t in &lib.system_types {
             fresh.add_system_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        }
+        for t in &lib.service_types {
+            fresh.add_service_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        }
+        for c in &lib.cover_types {
+            fresh.add_cover_type(c.clone()).unwrap_or_else(|e| panic!("{}: {e}", c.id));
         }
         assert_eq!(fresh, lib);
         assert_eq!(lib.name("roof.flat-concrete-pir", Lang::Nl).unwrap(), "Isolatie PIR-beton 320");

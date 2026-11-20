@@ -39,6 +39,7 @@ pub mod object;
 pub mod ocondat;
 pub mod profile;
 pub mod remote;
+pub mod service;
 pub mod system;
 pub mod template;
 
@@ -103,6 +104,8 @@ pub enum LibraryError {
     BadObject(String),
     /// A connection type does not hold together; the text says what it needs.
     BadConnection(String),
+    /// A service type or a cover type does not hold together; the text says what it needs.
+    BadService(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -119,6 +122,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::UnknownSetting(key) => write!(f, "The drawing standard has no \"{key}\"."),
             LibraryError::BadObject(what) => write!(f, "Not an object: it needs {what}."),
             LibraryError::BadConnection(what) => write!(f, "Not a connection: it needs {what}."),
+            LibraryError::BadService(what) => write!(f, "Not a service type: it needs {what}."),
             LibraryError::BadHouseStyle(what) => write!(f, "Not a house style: {what}."),
             LibraryError::BadCode(code) => write!(f, "\"{code}\" is no NL-SfB code (21, 21.2 or 21.22)."),
         }

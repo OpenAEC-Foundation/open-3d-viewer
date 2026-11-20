@@ -32,6 +32,8 @@ pub(super) enum Typing {
     CodeName(String, Lang),
     /// A size of a connection type (its key).
     Connection(String, super::connections::Field),
+    /// A field of a service type or of a cover type (its key).
+    Service(String, super::services::Field),
     /// A field of an object (its id).
     Object(String, super::objects::Field),
     /// The name typed for a build-up (its id).
@@ -52,6 +54,8 @@ impl App {
             Message::Material(MaterialMessage::Graded(_)) => Some(Typing::MaterialGrade(self.material_view.picked.clone()?)),
             Message::Code(super::codes::CodeMessage::Named(lang, _)) => Some(Typing::CodeName(self.code_view.picked.clone()?, *lang)),
             Message::Connection(super::connections::ConnectionMessage::Typed(field, _)) => Some(Typing::Connection(self.connection_view.picked.clone()?, *field)),
+            Message::Service(super::services::ServiceMessage::Typed(super::services::Field::Cover, _)) => Some(Typing::Service(self.service_view.cover.clone()?, super::services::Field::Cover)),
+            Message::Service(super::services::ServiceMessage::Typed(field, _)) => Some(Typing::Service(self.service_view.picked.clone()?, *field)),
             Message::Object(super::objects::ObjectMessage::Typed(field, _)) => Some(Typing::Object(self.object_view.picked.clone()?, *field)),
             Message::BuildUp(BuildUpMessage::Named(_)) => Some(Typing::BuildUpName(self.buildup_view.picked.clone()?)),
             Message::Profile(ProfileMessage::Named(_)) => Some(Typing::ProfileName(self.profile_view.picked.clone()?)),

@@ -53,6 +53,7 @@ pub mod drawing_sets;
 pub mod view_templates;
 pub mod house;
 pub mod connections;
+pub mod services;
 pub mod objects;
 pub mod online;
 pub mod libraries;
@@ -410,6 +411,7 @@ pub struct App {
     pub code_view: codes::CodeView,
     pub object_view: objects::ObjectView,
     pub connection_view: connections::ConnectionView,
+    pub service_view: services::ServiceView,
     /// The online libraries: the place, its index once fetched, and what was added from it.
     pub online: online::OnlineView,
     pub drawing_set_view: drawing_sets::DrawingSetView,
@@ -623,6 +625,7 @@ pub enum Message {
     Code(codes::CodeMessage),
     Object(objects::ObjectMessage),
     Connection(connections::ConnectionMessage),
+    Service(services::ServiceMessage),
     /// The selected join takes the type of the project's library with this key.
     JoinType(String),
     Online(online::OnlineMessage),
@@ -1163,6 +1166,7 @@ impl Default for App {
             code_view: codes::CodeView::default(),
             object_view: objects::ObjectView::default(),
             connection_view: connections::ConnectionView::default(),
+            service_view: services::ServiceView::default(),
             online: online::OnlineView::default(),
             drawing_set_view: drawing_sets::DrawingSetView::default(),
             view_template_view: view_templates::ViewTemplateView::default(),
@@ -2589,6 +2593,7 @@ impl App {
             Message::Code(message) => return self.code_update(message),
             Message::Object(message) => self.object_update(message),
             Message::Connection(message) => self.connection_update(message),
+            Message::Service(message) => self.service_update(message),
             Message::JoinType(id) => self.set_join_type(&id),
             Message::Online(message) => return self.online_update(message),
             Message::DrawingSet(message) => self.drawing_set_update(message),

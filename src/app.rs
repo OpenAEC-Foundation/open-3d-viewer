@@ -3122,6 +3122,8 @@ impl App {
             }
             // Enter while a distance is typed in a move puts the move down
             Message::MeasureFinish if self.tool_enter() => {}
+            Message::MeasureFinish if self.modeller.sketch.is_some() => self.finish_sketch(),
+            Message::MeasureFinish if self.modeller.tool.is_some() => self.set_model_tool(None),
             // in Docs Enter opens the picked file
             Message::MeasureFinish if self.docs.shown => return self.docs_update(DocsMessage::Enter),
             Message::MeasureFinish if self.put_grab_down() => {}

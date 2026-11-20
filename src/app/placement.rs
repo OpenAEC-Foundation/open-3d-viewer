@@ -488,7 +488,9 @@ impl App {
             let chain = button(text(l.text("Ketting", "Chain")).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Chain(!on)));
             bar = bar.push(chain);
         }
-        Some(container(bar).padding([2, 8]).width(Fill).into())
+        let finish = button(text(l.text("Klaar (Enter)", "Finish (Enter)")).size(12))
+            .padding([3, 10]).style(move |_, st| p.ribbon_button(false, st)).on_press(Message::ModelTool(None));
+        Some(container(bar.push(finish)).padding([2, 8]).width(Fill).into())
     }
 
     /// The types `tool` can take, generic first; `None` for a tool without types.

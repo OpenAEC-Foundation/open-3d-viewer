@@ -347,6 +347,7 @@ impl App {
     pub(super) fn set_model_tool(&mut self, tool: Option<(ModelTool, &'static str)>) {
         let same = tool.map(|t| t.0) == self.modeller.tool.map(|t| t.0);
         self.modeller.tool = if same { None } else { tool };
+        self.modeller.length_typed.clear();
         self.modeller.grid_tool = false;
         self.modeller.points.clear();
         self.modeller.cursor = None;
@@ -1225,6 +1226,18 @@ mod tests {
         assert_eq!(walls.elements.len(), 2);
         assert!(app.escape_model_tool() && app.modeller.tool.is_some(), "Esc drops the points first");
         assert!(app.escape_model_tool() && app.modeller.tool.is_none(), "then the tool");
+    }
+
+    #[test]
+    fn enter_finishes_a_wall_chain_without_placing_an_extra_segment() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 5.0, 0.0);
+        let _ = app.update(Message::MeasureFinish);
+        assert!(app.modeller.tool.is_none() && app.modeller.points.is_empty());
+        click(&mut app, 7.0, 2.0);
+        assert_eq!(app.modeller.model.len(), 1);
     }
 
     #[test]

@@ -327,6 +327,17 @@ impl Sketch {
     }
 
     /// A click of the Line, the Rectangle or the Arc tool at `p`.
+    fn append_contour_edge(&mut self, edge: Segment) {
+        let meets_end = self.segments.iter().any(|s| s.a.distance(edge.b) <= MEET || s.b.distance(edge.b) <= MEET);
+        self.segments.push(edge);
+        self.first = Some(edge.b);
+        self.second = None;
+        if meets_end && loops(&self.segments).is_ok() {
+            self.first = None;
+            self.tool = SketchTool::Pick;
+        }
+    }
+
     fn place(&mut self, p: DVec2) {
         self.error = None;
         match (self.tool, self.first, self.second) {
@@ -340,8 +351,7 @@ impl Sketch {
             }
             (SketchTool::Copy, None, _) if self.picked.is_some() => self.first = Some(p),
             (SketchTool::Line, Some(a), _) if a.distance(p) > MEET => {
-                self.segments.push(Segment::line(a, p));
-                self.first = Some(p);
+                self.append_contour_edge(Segment::line(a, p));
             }
             (SketchTool::Rectangle, Some(a), _) if (a.x - p.x).abs() > MEET && (a.y - p.y).abs() > MEET => {
                 self.segments.extend(rectangle(a, p));
@@ -349,8 +359,7 @@ impl Sketch {
             }
             (SketchTool::Arc, Some(a), None) if a.distance(p) > MEET => self.second = Some(p),
             (SketchTool::Arc, Some(a), Some(b)) => {
-                self.segments.push(Segment::through(a, b, p));
-                (self.first, self.second) = (None, None);
+                self.append_contour_edge(Segment::through(a, b, p));
             }
             (SketchTool::Line | SketchTool::Rectangle | SketchTool::Arc, None, _) => self.first = Some(p),
             _ => {}
@@ -473,8 +482,10 @@ impl App {
             't' => SketchTool::Trim,
             _ => return,
         };
+        let continues = matches!((sketch.tool, tool), (SketchTool::Line, SketchTool::Arc) | (SketchTool::Arc, SketchTool::Line));
         sketch.tool = if sketch.tool == tool { SketchTool::Pick } else { tool };
-        (sketch.first, sketch.second) = (None, None);
+        if !continues { sketch.first = None; }
+        sketch.second = None;
         sketch.picked = None;
     }
 
@@ -657,6 +668,8 @@ impl App {
             SketchTool::Copy => l.text("Kopiëren: kies het doelpunt", "Copy: pick the destination point"),
             SketchTool::Line => l.text("Lijn: klik de punten · Esc: stoppen · Tab: klaar", "Line: click the points · Esc: stop · Tab: done"),
             SketchTool::Rectangle => l.text("Rechthoek: klik twee hoeken · Esc: stoppen · Tab: klaar", "Rectangle: click two corners · Esc: stop · Tab: done"),
+            SketchTool::Arc if sketch.second.is_some() => l.text("Klik een punt op de boog", "Click a point on the arc"),
+            SketchTool::Arc if sketch.first.is_some() => l.text("Klik het eindpunt van de boog", "Click the end of the arc"),
             SketchTool::Arc => l.text(
                 "Boog: klik het begin, het eind en een punt op de boog · Esc: stoppen · Tab: klaar",
                 "Arc: click its start, its end and a point on it · Esc: stop · Tab: done",
@@ -929,6 +942,9 @@ mod tests {
         click(&mut app, 0.05, 0.05);
         click(&mut app, 3.95, 0.05);
         assert_eq!(app.modeller.sketch.as_ref().unwrap().segments[3], seg((0.0, 0.0), (4.0, 0.0)));
+        assert_eq!(app.modeller.sketch.as_ref().unwrap().tool, SketchTool::Pick);
+        let _ = app.update(Message::EditKey('l'));
+        click(&mut app, 8.0, 8.0);
         // Esc: the line under way stops, then the tool goes, then the sketch leaves
         let _ = app.update(Message::Escape);
         assert!(app.modeller.sketch.as_ref().is_some_and(|s| s.first.is_none() && s.tool == SketchTool::Line));
@@ -937,6 +953,29 @@ mod tests {
         let _ = app.update(Message::Escape);
         assert!(app.modeller.sketch.is_none());
         assert_eq!(slab_of(&app, id).0.len(), 4, "the floor as it was");
+    }
+
+    #[test]
+    fn line_and_arc_share_the_endpoint_and_enter_commits_only_a_closed_floor() {
+        let (mut app, id) = floor();
+        let _ = app.update(Message::EditMode);
+        click(&mut app, 2.0, 0.0);
+        let _ = app.update(Message::DeletePicked);
+        let _ = app.update(Message::EditKey('l'));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 2.0, -1.0);
+        let _ = app.update(Message::MeasureFinish);
+        assert!(app.modeller.sketch.as_ref().unwrap().error.is_some());
+        let _ = app.update(Message::EditKey('a'));
+        click(&mut app, 4.0, 0.0);
+        click(&mut app, 4.0, -3.0);
+        let sketch = app.modeller.sketch.as_ref().unwrap();
+        assert_eq!(sketch.tool, SketchTool::Pick);
+        let _ = app.update(Message::MeasureFinish);
+        assert!(app.modeller.sketch.is_none());
+        let (outline, _, bows) = slab_of(&app, id);
+        assert_eq!(outline.len(), 5);
+        assert_eq!(bows.iter().filter(|b| **b != 0.0).count(), 1);
     }
 
     #[test]

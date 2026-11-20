@@ -58,12 +58,14 @@ use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use std::iter::once;
 
+mod assembly;
 mod corner;
 mod lying;
 mod tee;
 
 pub(crate) use corner::{connection, connection_node, joined_parts};
-pub use corner::{corners, joined_units, Meeting};
+pub use assembly::{assemblies, mark, Assembly};
+pub use corner::{corners, joined_frame, joined_units, Meeting};
 pub use tee::{tees, Abutment, Tees};
 
 /// The most parts one system is generated as; a system that would have more is refused.

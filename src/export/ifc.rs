@@ -154,6 +154,8 @@ impl Units {
 enum Key {
     Element(u64),
     Layer(String),
+    /// An assembly of an element (a prefab unit of a framed system): the element and its number.
+    Assembly(u64, u32),
 }
 
 /// An element to write: its key and where it is drawn (layer, first index, index count).
@@ -208,6 +210,10 @@ fn products(model: &Model) -> Vec<Product> {
                 add(loose.clone(), (li, covered, first - covered), name, false);
             }
             add(Key::Element(id), (li, first, count), name, false);
+            // the element's assemblies after it, each with its own part of the element's triangles
+            for a in model.project.assemblies_of(li, id).filter(|a| a.first >= first && a.first + a.count <= first + count) {
+                add(Key::Assembly(id, a.number), (li, a.first, a.count), name, false);
+            }
             covered = covered.max(first + count);
         }
         let len = layer.indices.len() as u32;
@@ -688,17 +694,35 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     let mut material_ids: HashMap<String, u64> = HashMap::new();
     // the GlobalIds the source file gives its elements (Tekla's, from its object GUIDs), once each
     let mut own_ids: HashSet<String> = HashSet::new();
+    // the elements written as their assemblies: the assemblies of each, and each one's own entity
+    let mut assembled: Vec<(u64, u64, Vec<u64>)> = Vec::new();
     for product in products(model) {
         let Some(body) = body(model, &product, units) else { continue };
-        let props = match product.key {
-            Key::Element(id) => model.element_props(id),
-            Key::Layer(_) => Vec::new(),
+        let unit = match product.key {
+            Key::Assembly(id, number) => product.ranges.first().and_then(|r| model.project.assemblies_of(r.0, id).find(|a| a.number == number)),
+            _ => None,
+        };
+        let props = match (&product.key, unit) {
+            (Key::Element(id), _) => model.element_props(*id),
+            // an assembly: on its element's level, with what it is of that element
+            (Key::Assembly(id, _), Some(a)) => {
+                let mut props: Vec<(String, String)> = model.element_props(*id).into_iter().filter(|(k, _)| k == "level").collect();
+                props.extend([("Name".to_string(), a.mark.clone()), ("Unit".to_string(), format!("{} / {}", a.number, a.of)), ("Length".to_string(), format!("{:.3} m", a.length)), ("Parts".to_string(), a.parts.to_string())]);
+                props
+            }
+            _ => Vec::new(),
         };
         let key = match &product.key {
             Key::Element(id) => format!("element/{id}"),
             Key::Layer(name) => format!("layer/{name}"),
+            Key::Assembly(id, number) => format!("element/{id}/assembly/{number}"),
         };
         let mut who = identity(&model.format, &product.key, &product.layer, &props);
+        if unit.is_some() {
+            (who.class, who.predefined) = ("IFCELEMENTASSEMBLY", "NOTDEFINED");
+        }
+        // an element written as its assemblies has no body of its own: they have it
+        let whole = matches!(product.key, Key::Element(id) if product.ranges.iter().any(|r| model.project.assemblies_of(r.0, id).next().is_some()));
         if body.sets.is_empty() {
             // curves only
             who.class = "IFCANNOTATION";
@@ -713,7 +737,7 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
         let (_, storey_placement, elevation) = storeys[storey];
 
         let mut items = Vec::new();
-        for (colour, set) in &body.sets {
+        for (colour, set) in body.sets.iter().filter(|_| !whole) {
             let style = match styles.get(colour) {
                 Some(&s) => s,
                 None => {
@@ -791,7 +815,7 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
         if !curve_items.is_empty() {
             representations.push(f.add(format!("IFCSHAPEREPRESENTATION(#{},'Annotation','Curve3D',{})", annotation_context.unwrap_or(body_context), refs(&curve_items)))?);
         }
-        let shape = f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,{})", refs(&representations)))?;
+        let shape = if representations.is_empty() { "$".to_string() } else { format!("#{}", f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,{})", refs(&representations)))?) };
         let at = [body.origin[0], body.origin[1], body.origin[2] - elevation];
         let point = f.add(format!(
             "IFCCARTESIANPOINT(({},{},{}))",
@@ -805,7 +829,7 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
         // else one derived from the file and the element
         let global_id = own_global_id(&props).filter(|g| own_ids.insert(g.clone())).unwrap_or_else(|| ids.get(&key));
         let head = format!(
-            "{}({},$,{},$,{},#{placement},#{shape},{}",
+            "{}({},$,{},$,{},#{placement},{shape},{}",
             who.class,
             text(&global_id),
             text(&who.name),
@@ -815,7 +839,7 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
         let element = f.add(match who.class {
             // an annotation has no tag; a predefined type in IFC 4x3 only
             "IFCANNOTATION" => format!(
-                "IFCANNOTATION({},$,{},$,{},#{placement},#{shape}{})",
+                "IFCANNOTATION({},$,{},$,{},#{placement},{shape}{})",
                 text(&ids.get(&key)),
                 text(&who.name),
                 opt(who.object_type.as_deref()),
@@ -828,12 +852,22 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
             "IFCMECHANICALFASTENER" => format!("{head},$,$,.{}.)", who.predefined),
             // the tag is the long name; an element of its storey, not a composite
             "IFCSPACE" => format!("{head},.ELEMENT.,.{}.,$)", who.predefined),
+            // made in the workshop
+            "IFCELEMENTASSEMBLY" => format!("{head},.FACTORY.,.{}.)", who.predefined),
             _ => format!("{head},.{}.)", who.predefined),
         })?;
         property_set(&mut f, &ids, &key, &model.format, &props, element)?;
+        if let (true, Key::Element(id)) = (whole, &product.key) {
+            assembled.push((*id, element, Vec::new()));
+        }
 
         // a space is part of its storey (IfcRelAggregates), not contained in it
-        if who.class == "IFCSPACE" {
+        if let Key::Assembly(id, _) = product.key {
+            // part of its element, which is in the storey
+            if let Some((_, _, units)) = assembled.iter_mut().find(|(of, _, _)| *of == id) {
+                units.push(element);
+            }
+        } else if who.class == "IFCSPACE" {
             spaces[storey].push(element);
         } else {
             contained[storey].push(element);
@@ -866,6 +900,9 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     }
 
     // relations
+    for (id, element, units) in assembled.iter().filter(|(_, _, units)| !units.is_empty()) {
+        f.add(format!("IFCRELAGGREGATES({},$,$,$,#{element},{})", text(&ids.get(&format!("assemblies/{id}"))), refs(units)))?;
+    }
     for (i, elements) in spaces.iter().enumerate().filter(|(_, e)| !e.is_empty()) {
         f.add(format!("IFCRELAGGREGATES({},$,$,$,#{},{})", text(&ids.get(&format!("spaces/{i}"))), storeys[i].0, refs(elements)))?;
     }

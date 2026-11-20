@@ -738,7 +738,7 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let (mut layers, parts) = viewer_layers(&self.modeller.model, &levels, &self.library);
+        let (mut layers, parts, assemblies) = viewer_layers(&self.modeller.model, &levels, &self.library);
         // the spaces its walls close in stand beside its elements, on a layer of their own
         layers.extend(spaces::space_layer(&self.spaces(), &levels));
         let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
@@ -749,6 +749,8 @@ impl App {
         built.project.cut_patterns = crate::hatching::library_patterns(&self.library);
         // an element of several materials is cut a face per part, each hatched as its material
         built.project.parts = parts;
+        // a framed system is an assembly per prefab unit
+        built.project.assemblies = assemblies;
         built.project.part_materials = crate::hatching::part_materials(&self.library);
         // and its drawing standard: the kinds of drawing and their settings, a node each
         built.project.types.extend(bim_library::drawing::nodes(&self.standard));
@@ -999,9 +1001,10 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// `levels` names the levels by path.
 /// A part of a layered element has the colour of its layer's material in `library`.
 pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
-    let (layers, parts) = viewer_layers(model, levels, library);
+    let (layers, parts, assemblies) = viewer_layers(model, levels, library);
     let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
     built.project.parts = parts;
+    built.project.assemblies = assemblies;
     built.project.part_materials = crate::hatching::part_materials(library);
     built.project.cut_patterns = crate::hatching::library_patterns(library);
     built
@@ -1010,15 +1013,31 @@ pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], librar
 /// The layers of the model shown: one per class, each element with its properties; and the
 /// parts of the elements that are of several materials (see `ProjectData::parts`): the layer,
 /// the first index and the index count of each part, and its material in the library's order.
-fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> (Vec<Layer>, Vec<(usize, u32, u32, u32)>) {
+/// And the assemblies of the framed systems (see `ProjectData::assemblies`): the parts of such
+/// a system are drawn assembly by assembly.
+#[allow(clippy::type_complexity)]
+fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> (Vec<Layer>, Vec<(usize, u32, u32, u32)>, Vec<crate::model::Assembly>) {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
     let mut of_parts: Vec<(usize, u32, u32, u32)> = Vec::new();
+    let mut of_assemblies: Vec<crate::model::Assembly> = Vec::new();
     for element in model.iter() {
-        let Ok(parts) = model.evaluate(element.id) else { continue };
+        let Ok(mut parts) = model.evaluate(element.id) else { continue };
         if parts.is_empty() {
             continue;
         }
+        // a framed system: its parts in the order of its prefab units, and where each unit ends
+        let units = bim_core::system::assemblies(model, element, &parts).unwrap_or_default();
+        let mut ends: Vec<usize> = Vec::with_capacity(units.len());
+        if !units.is_empty() && units.iter().map(|u| u.parts.len()).sum::<usize>() == parts.len() {
+            let mut taken: Vec<Option<bim_core::Part>> = parts.into_iter().map(Some).collect();
+            parts = Vec::with_capacity(taken.len());
+            for u in &units {
+                parts.extend(u.parts.iter().filter_map(|&i| taken[i].take()));
+                ends.push(parts.len());
+            }
+        }
+        let mut unit_firsts: Vec<u32> = Vec::with_capacity(ends.len() + 1);
         let class = element.class();
         let k = match layers.iter().position(|l| l.name == class) {
             Some(k) => k,
@@ -1031,7 +1050,10 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
         let first = layer.indices.len() as u32;
         // of several materials: each part is told from the others where it is cut
         let several = parts.iter().filter_map(|p| p.material.as_deref()).collect::<std::collections::HashSet<_>>().len() > 1;
-        for part in &parts {
+        for (n, part) in parts.iter().enumerate() {
+            if n == 0 || ends.contains(&n) {
+                unit_firsts.push(layer.indices.len() as u32);
+            }
             let Ok(mesh) = Mesh::of(&part.solid) else { continue };
             let part_first = layer.indices.len() as u32;
             // tile-local f64 to the scene's f32, through the tile origin in f64
@@ -1051,12 +1073,21 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
             }
         }
         let count = layer.indices.len() as u32 - first;
+        unit_firsts.push(layer.indices.len() as u32);
+        if !ends.is_empty() {
+            let mut from = 0;
+            for ((u, range), &to) in units.iter().zip(unit_firsts.windows(2)).zip(&ends) {
+                of_assemblies.push(crate::model::Assembly { layer: k, first: range[0], count: range[1] - range[0], element: element.id.0, number: u.number as u32, of: units.len() as u32, mark: u.mark(element), length: u.length(), parts: (to - from) as u32 });
+                from = to;
+            }
+        }
         layer.elements.push((element.id.0, first, count));
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
         layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
     of_parts.sort_unstable();
-    (layers, of_parts)
+    of_assemblies.sort_by_key(|a| (a.layer, a.first));
+    (layers, of_parts, of_assemblies)
 }
 
 /// The NL-SfB code of an element: of its build-up, its linear type (found by the name its
@@ -1131,6 +1162,11 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Length", m((s.end - s.start).length()));
             put("Height", m(s.height));
             put("Parts", parts.len().to_string());
+            // the prefab units it is made of, by their marks
+            let units = bim_core::system::assemblies(model, e, parts).unwrap_or_default();
+            if !units.is_empty() {
+                put("Assemblies", units.iter().map(|u| u.mark(e)).collect::<Vec<_>>().join(", "));
+            }
             if let Some(t) = &s.system_type {
                 put("Type", library.system_name(&t.id, bim_library::Lang::En).unwrap_or_else(|| t.id.clone()));
             }
@@ -1286,6 +1322,61 @@ mod tests {
         app.sel.set(Some(Pickable::Element(shown)));
         assert!(app.delete_modelled());
         assert_eq!(app.modeller.model.len(), 1);
+    }
+
+    #[test]
+    fn a_timber_frame_is_exported_as_an_assembly_for_every_prefab_unit() {
+        // 7.2 m of timber frame: three units of 2400
+        let mut app = App::default();
+        let generic = bim_core::SystemDef { start: glam::DVec2::new(2.0, 1.0), end: glam::DVec2::new(9.2, 1.0), base: 0.0, height: 2.7, spacing: glam::DVec2::new(1.5, 1.5), member: glam::DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
+        let s = generic.typed_from(&app.library, "system.timber-frame-140").unwrap();
+        let grid = app.modeller.model.grid;
+        let id = app.modeller.model.add(Element::in_project(&grid, "Frame", None, Shape::System(s))).unwrap();
+        app.show_modelled();
+        let scene = app.model.clone().unwrap();
+        let units = &scene.project.assemblies;
+        assert_eq!(units.iter().map(|a| (a.element, a.number, a.of, a.mark.as_str())).collect::<Vec<_>>(), [(id.0, 1, 3, "Frame 1-1"), (id.0, 2, 3, "Frame 1-2"), (id.0, 3, 3, "Frame 1-3")]);
+        // together they are the element's triangles, one after the other
+        let (li, &(_, first, count)) = scene.layers.iter().enumerate().find_map(|(li, l)| l.elements.iter().find(|e| e.0 == id.0).map(|e| (li, e))).unwrap();
+        assert!(units.iter().all(|a| a.layer == li && a.count > 0));
+        assert_eq!((units[0].first, units[1].first, units[2].first + units[2].count), (first, units[0].first + units[0].count, first + count));
+        assert!(scene.element_props(id.0).iter().any(|(k, v)| k == "Assemblies" && v == "Frame 1-1, Frame 1-2, Frame 1-3"));
+
+        // IFCX: the frame without a mesh, its three assemblies under it with theirs
+        let bytes = crate::export::to_bytes(&scene, &app.document, "frame.ifcx").expect("IFCX");
+        let file: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let nodes = file["data"].as_array().unwrap();
+        let class = |n: &serde_json::Value| n["attributes"]["bsi::ifc::class"]["code"].as_str().unwrap_or_default().to_string();
+        let frame = nodes.iter().find(|n| class(n) == "IfcCurtainWall").unwrap();
+        assert!(frame["attributes"].get("usd::usdgeom::mesh").is_none() && frame["attributes"].get("openaec::element").is_some());
+        let children: Vec<&str> = frame["children"].as_object().unwrap().values().filter_map(|v| v.as_str()).collect();
+        let made: Vec<&serde_json::Value> = nodes.iter().filter(|n| class(n) == "IfcElementAssembly").collect();
+        assert_eq!(made.len(), 3);
+        for n in &made {
+            assert!(children.contains(&n["path"].as_str().unwrap()));
+            assert!(!n["attributes"]["usd::usdgeom::mesh"]["points"].as_array().unwrap().is_empty());
+            assert_eq!(n["attributes"]["bsi::ifc::prop::Length"], "2.400 m");
+        }
+        // read back: the one frame, to be edited as before
+        let source = crate::loaders::Source::Bytes { name: "frame.ifcx".into(), data: Arc::new(bytes) };
+        let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        let mut back = App::default();
+        back.set_model(Arc::new(loaded));
+        assert_eq!(back.modeller.model.iter().count(), 1);
+
+        // IFC: the curtain wall without a shape, three assemblies made in the workshop, part of it
+        let ifc = String::from_utf8(crate::export::to_bytes(&scene, &app.document, "frame.ifc").expect("IFC")).unwrap();
+        let wall = ifc.lines().find(|l| l.contains("=IFCCURTAINWALL(")).unwrap();
+        assert!(wall.contains(",$,'1',"), "no shape: {wall}");
+        let made: Vec<&str> = ifc.lines().filter(|l| l.contains("=IFCELEMENTASSEMBLY(")).collect();
+        assert_eq!(made.len(), 3);
+        assert!(made.iter().all(|l| l.contains(".FACTORY.") && l.contains("'Frame 1-")), "{made:?}");
+        let number = |l: &str| l.split('=').next().unwrap().to_string();
+        let parts = format!("{},({},{},{}))", number(wall), number(made[0]), number(made[1]), number(made[2]));
+        assert!(ifc.lines().any(|l| l.contains("=IFCRELAGGREGATES(") && l.ends_with(&format!("{parts};"))), "{parts}");
+        // in the storey: the wall, not its assemblies
+        let contained = ifc.lines().find(|l| l.contains("=IFCRELCONTAINEDINSPATIALSTRUCTURE(")).unwrap();
+        assert!(contained.contains(&number(wall)) && !contained.contains(&number(made[0])), "{contained}");
     }
 
     #[test]

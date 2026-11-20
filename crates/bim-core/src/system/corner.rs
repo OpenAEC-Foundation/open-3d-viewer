@@ -435,10 +435,16 @@ pub(crate) fn joined_parts(model: &Model, element: &Element, s: &SystemDef) -> R
 /// [`units`], with its frame ending at its corners and its T junctions and with the doors and
 /// windows standing in it, as the model makes it. None for an element that is not a system.
 pub fn joined_units(model: &Model, element: &Element) -> Result<Vec<f64>, Refusal> {
-    let Shape::System(s) = &element.shape else { return Ok(Vec::new()) };
+    joined_frame(model, element).map(|(_, units)| units)
+}
+
+/// Where the frame of `element` starts in `model`, along its line from the line's start, and the
+/// lengths of the prefab units it is made of from there (see [`joined_units`]).
+pub fn joined_frame(model: &Model, element: &Element) -> Result<(f64, Vec<f64>), Refusal> {
+    let Shape::System(s) = &element.shape else { return Ok((0.0, Vec::new())) };
     let of = |s: &SystemDef| match joined_ends(model, element, s).and_then(|ends| plan(s, &ends).ok()) {
-        Some(plan) => Ok(plan.units()),
-        None => units(s),
+        Some(plan) => Ok((plan.spans[0].lo, plan.units())),
+        None => units(s).map(|units| (0.0, units)),
     };
     // as the model makes it: with the doors and windows standing in it, where it can be made
     // with them
@@ -446,8 +452,8 @@ pub fn joined_units(model: &Model, element: &Element) -> Result<Vec<f64>, Refusa
     if !standing.is_empty() {
         let mut with = s.clone();
         with.openings.extend(standing);
-        if let Ok(units) = of(&with) {
-            return Ok(units);
+        if let Ok(frame) = of(&with) {
+            return Ok(frame);
         }
     }
     of(s)

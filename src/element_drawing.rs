@@ -4,7 +4,10 @@
 //! For every unit, made straight from the parts the kernel generates, without a view, a cut or
 //! the graphics card: first the frame seen from its interior, every member as its outline; the
 //! unit's length, its height, its studs centre to centre and its openings dimensioned; and under
-//! it the list of its members, alike ones counted together. Then one drawing for every layer
+//! it the list of its members, alike ones counted together and numbered, each member with its
+//! number beside it; over it the unit cut level through all its layers, as thick as it is built.
+//! The drawing carries the mark of the unit's assembly ([`bim_core::system::mark`]), as an
+//! export names it. Then one drawing for every layer
 //! across it that has boards or battens (the sheathing, the service zone, the lining, the cavity
 //! battens, the cladding), seen the same way: every board and batten as its outline, the seams
 //! between the boards dimensioned, and the list of what to cut. Membranes are not drawn. A drawing
@@ -122,7 +125,8 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
     let mut lo = start;
     for (k, length) in units.iter().enumerate() {
         let hi = lo + length;
-        let mut d = Drawing2d { name: format!("{} {}-{}", element.name, element.id.0, k + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+        let mark = bim_core::system::mark(element, k + 1);
+        let mut d = Drawing2d { name: mark.clone(), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
         let mut own: Vec<Member> = members.iter().copied().filter(|m| (m.u.0 + m.u.1) / 2.0 > lo - tol && (m.u.0 + m.u.1) / 2.0 < hi + tol).collect();
         own.sort_by(|a, b| a.u.0.total_cmp(&b.u.0).then(a.v.0.total_cmp(&b.v.0)));
         for m in &own {
@@ -178,9 +182,33 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
         }
         // its name, and the list of its members: alike ones counted together, the longest first
         let depth = mm(s.member.y);
-        let title = |what: &str| format!("{} · {}/{} · {what}{} × {} mm · 1:{}", element.name, k + 1, units.len(), mm(*length), mm(height), SCALE as i64);
+        let title = |what: &str| format!("{mark} · {}/{} · {what}{} × {} mm · 1:{}", k + 1, units.len(), mm(*length), mm(height), SCALE as i64);
         let counted: Vec<(i64, i64)> = own.iter().map(|m| (mm(m.section().0), mm(m.section().1))).collect();
-        write_list(&mut d, -(off * (rows + 1.5) + text), text, title(""), &counted, &|width, long| format!("{width}×{depth} L={long}"));
+        let numbers = write_list(&mut d, -(off * (rows + 1.5) + text), text, title(""), &counted, &|width, long| format!("{width}×{depth} L={long}"));
+        number(&mut d, &own, &numbers, lo, text);
+        // over it the unit cut level, a metre up (lower in a low one), through all its layers
+        let (first, last) = (k == 0, k + 1 == units.len());
+        let cut = height.min(2.5) * 0.4;
+        let through: Vec<&Item> = items
+            .iter()
+            .filter(|i| i.at.v.0 < cut && i.at.v.1 > cut && i.across.1 - i.across.0 >= MEMBRANE)
+            .filter(|i| (i.at.u.1 > lo + 1e-4 || first) && (i.at.u.0 < hi - 1e-4 || last))
+            .collect();
+        if let Some((inner, outer)) = through.iter().map(|i| i.across).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1))) {
+            // its interior face towards the frame's elevation
+            let foot = height + off * 3.5 - inner;
+            let mut left = f64::INFINITY;
+            for i in &through {
+                let (x0, x1) = (if first { i.at.u.0 } else { i.at.u.0.max(lo) } - lo, if last { i.at.u.1 } else { i.at.u.1.min(hi) } - lo);
+                let (y0, y1) = (foot + i.across.0, foot + i.across.1);
+                let pen = if i.member { Pen::Cut } else { Pen::Beyond };
+                for (a, b) in [([x0, y0], [x1, y0]), ([x1, y0], [x1, y1]), ([x1, y1], [x0, y1]), ([x0, y1], [x0, y0])] {
+                    d.lines.push(Line2d::new(pen, a, b));
+                }
+                left = left.min(x0);
+            }
+            dim(&mut d, [left, foot + inner], [left, foot + outer], 1.0);
+        }
         drawings.push(d);
         // then every layer across it with boards or battens, from the interior out
         let mut layers: Vec<(usize, &bim_library::SystemLayer)> = t.layers.iter().enumerate().collect();
@@ -190,7 +218,6 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
             if thick < MEMBRANE {
                 continue;
             }
-            let (first, last) = (k == 0, k + 1 == units.len());
             let of_layer = |i: &&Item| {
                 let made_of = i.material == Some(l.panels.material.as_str()) || l.members.as_ref().is_some_and(|m| i.member && i.material == Some(m.material.as_str()));
                 made_of && i.across.0 >= l.offset - thick / 2.0 - tol && i.across.1 <= l.offset + thick / 2.0 + tol && (i.at.u.1 > lo + 1e-4 || first) && (i.at.u.0 < hi - 1e-4 || last)
@@ -208,7 +235,7 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
             }
             own.sort_by(|a, b| a.at.u.0.total_cmp(&b.at.u.0).then(a.at.v.0.total_cmp(&b.at.v.0)));
             let key = l.members.as_ref().filter(|_| own[0].member).map_or(l.panels.material.as_str(), |m| m.material.as_str());
-            let mut d = Drawing2d { name: format!("{} {}-{} L{} {key}", element.name, element.id.0, k + 1, n + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+            let mut d = Drawing2d { name: format!("{mark} L{} {key}", n + 1), space: Space::Model { scale: SCALE }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
             for i in &own {
                 outline(&mut d, Pen::Cut, &i.at, lo);
             }
@@ -240,7 +267,8 @@ pub fn element_drawings(model: &Model, element: &Element, named: &dyn Fn(&str) -
             dim(&mut d, [u0, v0], [u0, v1], 1.0);
             let counted: Vec<(i64, i64)> = own.iter().map(|i| (mm(i.at.section().0), mm(i.at.section().1))).collect();
             let across = mm(thick);
-            write_list(&mut d, v0 - (off * 2.5 + text), text, title(&format!("{} {across} · ", named(key))), &counted, &|width, long| if battens { format!("{width}×{across} L={long}") } else { format!("{across} × {width} × {long}") });
+            let numbers = write_list(&mut d, v0 - (off * 2.5 + text), text, title(&format!("{} {across} · ", named(key))), &counted, &|width, long| if battens { format!("{width}×{across} L={long}") } else { format!("{across} × {width} × {long}") });
+            number(&mut d, &own.iter().map(|i| i.at).collect::<Vec<_>>(), &numbers, lo, text);
             drawings.push(d);
         }
         lo = hi;
@@ -360,8 +388,9 @@ pub fn is_frame(d: &Drawing2d) -> bool {
 
 /// Writes under a drawing, from `y` down, its `title` and the list of its parts (each its size in
 /// the face and its length, millimetres): alike ones counted together, the longest first, each
-/// worded by `line`.
-fn write_list(d: &mut Drawing2d, mut y: f64, text: f64, title: String, parts: &[(i64, i64)], line: &dyn Fn(i64, i64) -> String) {
+/// worded by `line` after its number in the list. Gives the sizes back in the order of the list:
+/// a part's number is its size's place there, from 1.
+fn write_list(d: &mut Drawing2d, mut y: f64, text: f64, title: String, parts: &[(i64, i64)], line: &dyn Fn(i64, i64) -> String) -> Vec<(i64, i64)> {
     let mut list: Vec<((i64, i64), usize)> = Vec::new();
     for key in parts {
         match list.iter_mut().find(|(k, _)| k == key) {
@@ -370,13 +399,44 @@ fn write_list(d: &mut Drawing2d, mut y: f64, text: f64, title: String, parts: &[
         }
     }
     list.sort_by(|a, b| b.0 .1.cmp(&a.0 .1).then(b.0 .0.cmp(&a.0 .0)));
-    let mut write = |size: f64, line: String| {
-        d.texts.push(Text2d { pen: Pen::Text, at: [0.0, y], height: size, text: line, align: Align::Left, angle: 0.0 });
-        y -= size * 1.8;
+    let mut write = |x: f64, size: f64, line: String, down: bool| {
+        d.texts.push(Text2d { pen: Pen::Text, at: [x, y], height: size, text: line, align: Align::Left, angle: 0.0 });
+        if down {
+            y -= size * 1.8;
+        }
     };
-    write(text * 1.4, title);
-    for ((width, long), n) in &list {
-        write(text, format!("{n} × {}", line(*width, *long)));
+    write(0.0, text * 1.4, title, true);
+    for (k, ((width, long), n)) in list.iter().enumerate() {
+        write(0.0, text, (k + 1).to_string(), false);
+        write(text * 3.0, text, format!("{n} × {}", line(*width, *long)), true);
+    }
+    list.into_iter().map(|(key, _)| key).collect()
+}
+
+/// Writes at every one of `parts` (drawn from `lo` along) its number in the list `numbers` of
+/// [`write_list`]: in the middle of a board, beside a member that stands (those that follow one
+/// another a step higher each, so their numbers stay apart), inside the frame along a member
+/// that lies.
+fn number(d: &mut Drawing2d, parts: &[Member], numbers: &[(i64, i64)], lo: f64, text: f64) {
+    let top = parts.iter().map(|m| m.v.1).fold(f64::NEG_INFINITY, f64::max);
+    let foot = parts.iter().map(|m| m.v.0).fold(f64::INFINITY, f64::min);
+    let mut standing = 0usize;
+    for m in parts {
+        let key = (mm(m.section().0), mm(m.section().1));
+        let Some(n) = numbers.iter().position(|k| *k == key) else { continue };
+        let (du, dv) = (m.u.1 - m.u.0, m.v.1 - m.v.0);
+        let (mid_u, mid_v) = ((m.u.0 + m.u.1) / 2.0 - lo, (m.v.0 + m.v.1) / 2.0);
+        let at = if du.min(dv) > 4.0 * text {
+            [mid_u - text / 2.0, mid_v - text / 2.0]
+        } else if m.upright() {
+            standing += 1;
+            [m.u.1 - lo + 0.4 * text, m.v.0 + dv * (0.3 + 0.08 * (standing % 4) as f64)]
+        } else if mid_v > (top + foot) / 2.0 {
+            [mid_u, m.v.0 - 1.4 * text]
+        } else {
+            [mid_u, m.v.1 + 0.4 * text]
+        };
+        d.texts.push(Text2d { pen: Pen::Text, at, height: text, text: (n + 1).to_string(), align: Align::Left, angle: 0.0 });
     }
 }
 
@@ -385,6 +445,11 @@ mod tests {
     use super::*;
     use bim_core::{Opening, SystemDef, TileGrid};
     use bim_library::Library;
+
+    /// The lines of a frame's elevation: its members, without the cut over it.
+    fn elevation(d: &Drawing2d) -> impl Iterator<Item = &Line2d> {
+        d.lines.iter().filter(|l| l.pen == Pen::Cut && l.a[1] <= 2.7 + 1e-6 && l.b[1] <= 2.7 + 1e-6)
+    }
 
     fn frame(length: f64, openings: Vec<Opening>) -> (Model, bim_core::ElementId) {
         typed(length, openings, "system.timber-frame-140")
@@ -408,7 +473,17 @@ mod tests {
         assert_eq!(drawings.len(), 3);
         for (k, d) in drawings.iter().enumerate() {
             // two plates, two end studs and the studs at 600 between them: 7 members, 4 lines each
-            assert_eq!(d.lines.iter().filter(|l| l.pen == Pen::Cut).count(), 7 * 4, "unit {k}");
+            assert_eq!(elevation(d).count(), 7 * 4, "unit {k}");
+            // over it the unit cut level: its studs and what stands either side of them, as
+            // thick as the system is built, and that thickness dimensioned
+            let cut: Vec<&Line2d> = d.lines.iter().filter(|l| l.a[1] > 2.7 + 1e-6).collect();
+            assert!(cut.iter().filter(|l| l.pen == Pen::Cut).count() >= 5 * 4 && cut.iter().any(|l| l.pen == Pen::Beyond), "unit {k}");
+            let across = cut.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |acc, l| (acc.0.min(l.a[1]).min(l.b[1]), acc.1.max(l.a[1]).max(l.b[1])));
+            assert!(across.1 - across.0 > 0.14 && d.dimensions.iter().any(|x| (x.value - (across.1 - across.0)).abs() < 1e-6), "unit {k}: {across:?}");
+            // every member has its number in the list beside it: 1 the studs, 2 the plates
+            let numbers = |n: &str| d.texts.iter().filter(|t| t.text == n).count();
+            assert_eq!((numbers("1"), numbers("2")), (1 + 5, 1 + 2), "unit {k}");
+            assert!(d.name == format!("Frame {}-{}", id.0, k + 1) && d.texts.iter().any(|t| t.text.starts_with(&d.name)), "unit {k}");
             // drawn from its own corner, whatever its place and direction in the model
             let (lo, hi) = d.extent().unwrap();
             assert!(lo[0] < 0.0 && hi[0] > 2.4 && hi[0] < 3.0 && hi[1] > 2.7, "unit {k}: {lo:?} {hi:?}");
@@ -462,7 +537,7 @@ mod tests {
         // the lining: boards 1200 wide cut around the window, their seams dimensioned, a list
         let lining = &all[1];
         assert!(lining.texts[0].text.contains("GYPSUM-BOARD 13") || lining.texts[0].text.contains("GYPSUM-BOARD 12"), "{}", lining.texts[0].text);
-        assert!(lining.texts.iter().skip(1).all(|t| t.text.contains(" × 13 × ") || t.text.contains(" × 12 × ")), "{:?}", lining.texts.iter().map(|t| &t.text).collect::<Vec<_>>());
+        assert!(lining.texts.iter().skip(1).filter(|t| t.text.contains('×')).all(|t| t.text.contains(" × 13 × ") || t.text.contains(" × 12 × ")), "{:?}", lining.texts.iter().map(|t| &t.text).collect::<Vec<_>>());
         let values: Vec<i64> = lining.dimensions.iter().map(|x| mm(x.value)).collect();
         assert!(values.contains(&1200) && values.contains(&2700), "{values:?}");
         assert_eq!(lining.lines.iter().filter(|l| l.pen == Pen::Detail).count(), 6, "the window");
@@ -480,7 +555,7 @@ mod tests {
         let all = element_drawings(&m, m.get(id).unwrap(), &|key| key.to_string());
         let d = all.iter().find(|d| is_frame(d)).unwrap();
         // two tracks and six studs, seated in the tracks
-        assert_eq!(d.lines.iter().filter(|l| l.pen == Pen::Cut).count(), 8 * 4);
+        assert_eq!(elevation(d).count(), 8 * 4);
         assert!(d.texts.iter().any(|t| t.text == "2 × 50×150 L=3000") && d.texts.iter().any(|t| t.text == "6 × 50×150 L=2697"), "{:?}", d.texts.iter().map(|t| &t.text).collect::<Vec<_>>());
     }
     #[test]

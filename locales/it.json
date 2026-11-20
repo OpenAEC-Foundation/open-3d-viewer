@@ -1668,6 +1668,23 @@
     "Click the line to extend to · Esc: stop": "Fai clic sulla linea fino a cui estendere · Esc: interrompi",
     "Click the line that is extended · Esc: start again": "Fai clic sulla linea da estendere · Esc: ricomincia",
     "Click the first line, on the side that stays · Esc: stop": "Fai clic sulla prima linea, sul lato che resta · Esc: interrompi",
-    "Click the second line, on the side that stays · Esc: start again": "Fai clic sulla seconda linea, sul lato che resta · Esc: ricomincia"
+    "Click the second line, on the side that stays · Esc: start again": "Fai clic sulla seconda linea, sul lato che resta · Esc: ricomincia",
+    "Depth (mm)": "Profondità (mm)",
+    "Underside above floor (mm)": "Lato inferiore sopra il pavimento (mm)",
+    "IFC predefined type": "Tipo predefinito IFC",
+    "+ Property": "+ Proprietà",
+    "Remove property": "Rimuovi proprietà",
+    "value": "valore",
+    "+ Object": "+ Oggetto",
+    "Click a connection to see what it is.": "Fai clic su una connessione per vedere cos'è.",
+    "The sizes are a start to change, not a checked structural design.": "Le misure sono un punto di partenza da modificare, non un progetto strutturale verificato.",
+    "Type of the library": "Tipo della libreria",
+    "sizes of its own": "misure proprie",
+    "Plate thickness (mm)": "Spessore della piastra (mm)",
+    "Plate past the profile (mm)": "Piastra oltre il profilo (mm)",
+    "Bolt (mm)": "Bullone (mm)",
+    "Hole (mm)": "Foro (mm)",
+    "Gap to the face (mm)": "Gioco fino alla faccia (mm)",
+    "Edge distance (mm)": "Distanza dal bordo (mm)"
   }
 }

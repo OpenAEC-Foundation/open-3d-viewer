@@ -1668,6 +1668,23 @@
     "Click the line to extend to · Esc: stop": "Clique na linha até à qual se estende · Esc: parar",
     "Click the line that is extended · Esc: start again": "Clique na linha que é estendida · Esc: recomeçar",
     "Click the first line, on the side that stays · Esc: stop": "Clique na primeira linha, no lado que fica · Esc: parar",
-    "Click the second line, on the side that stays · Esc: start again": "Clique na segunda linha, no lado que fica · Esc: recomeçar"
+    "Click the second line, on the side that stays · Esc: start again": "Clique na segunda linha, no lado que fica · Esc: recomeçar",
+    "Depth (mm)": "Profundidade (mm)",
+    "Underside above floor (mm)": "Face inferior acima do piso (mm)",
+    "IFC predefined type": "Tipo predefinido IFC",
+    "+ Property": "+ Propriedade",
+    "Remove property": "Remover propriedade",
+    "value": "valor",
+    "+ Object": "+ Objeto",
+    "Click a connection to see what it is.": "Clique numa ligação para ver o que é.",
+    "The sizes are a start to change, not a checked structural design.": "As medidas são um ponto de partida para alterar, não um projeto estrutural verificado.",
+    "Type of the library": "Tipo da biblioteca",
+    "sizes of its own": "medidas próprias",
+    "Plate thickness (mm)": "Espessura da chapa (mm)",
+    "Plate past the profile (mm)": "Chapa além do perfil (mm)",
+    "Bolt (mm)": "Parafuso (mm)",
+    "Hole (mm)": "Furo (mm)",
+    "Gap to the face (mm)": "Folga até à face (mm)",
+    "Edge distance (mm)": "Distância ao bordo (mm)"
   }
 }

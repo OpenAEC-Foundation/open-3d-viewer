@@ -1668,6 +1668,23 @@
     "Click the line to extend to · Esc: stop": "Uzatılacak hedef çizgiye tıklayın · Esc: durdur",
     "Click the line that is extended · Esc: start again": "Uzatılacak çizgiye tıklayın · Esc: yeniden başla",
     "Click the first line, on the side that stays · Esc: stop": "İlk çizgiye, kalacak tarafından tıklayın · Esc: durdur",
-    "Click the second line, on the side that stays · Esc: start again": "İkinci çizgiye, kalacak tarafından tıklayın · Esc: yeniden başla"
+    "Click the second line, on the side that stays · Esc: start again": "İkinci çizgiye, kalacak tarafından tıklayın · Esc: yeniden başla",
+    "Depth (mm)": "Derinlik (mm)",
+    "Underside above floor (mm)": "Alt kenar zeminden yukarıda (mm)",
+    "IFC predefined type": "Ön tanımlı IFC türü",
+    "+ Property": "+ Özellik",
+    "Remove property": "Özelliği kaldır",
+    "value": "değer",
+    "+ Object": "+ Nesne",
+    "Click a connection to see what it is.": "Ne olduğunu görmek için bir bağlantıya tıklayın.",
+    "The sizes are a start to change, not a checked structural design.": "Ölçüler değiştirilecek bir başlangıçtır, kontrol edilmiş bir yapısal tasarım değildir.",
+    "Type of the library": "Kütüphaneden tür",
+    "sizes of its own": "kendi ölçüleri",
+    "Plate thickness (mm)": "Levha kalınlığı (mm)",
+    "Plate past the profile (mm)": "Profilin dışına taşan levha (mm)",
+    "Bolt (mm)": "Cıvata (mm)",
+    "Hole (mm)": "Delik (mm)",
+    "Gap to the face (mm)": "Yüzeye kadar boşluk (mm)",
+    "Edge distance (mm)": "Kenar mesafesi (mm)"
   }
 }

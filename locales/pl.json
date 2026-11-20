@@ -1668,6 +1668,23 @@
     "Click the line to extend to · Esc: stop": "Kliknij linię, do której się wydłuża · Esc: zakończ",
     "Click the line that is extended · Esc: start again": "Kliknij linię, która ma być wydłużona · Esc: od nowa",
     "Click the first line, on the side that stays · Esc: stop": "Kliknij pierwszą linię po stronie, która zostaje · Esc: zakończ",
-    "Click the second line, on the side that stays · Esc: start again": "Kliknij drugą linię po stronie, która zostaje · Esc: od nowa"
+    "Click the second line, on the side that stays · Esc: start again": "Kliknij drugą linię po stronie, która zostaje · Esc: od nowa",
+    "Depth (mm)": "Głębokość (mm)",
+    "Underside above floor (mm)": "Spód nad podłogą (mm)",
+    "IFC predefined type": "Predefiniowany typ IFC",
+    "+ Property": "+ Właściwość",
+    "Remove property": "Usuń właściwość",
+    "value": "wartość",
+    "+ Object": "+ Obiekt",
+    "Click a connection to see what it is.": "Kliknij połączenie, aby zobaczyć, czym jest.",
+    "The sizes are a start to change, not a checked structural design.": "Wymiary są punktem wyjścia do zmiany, a nie sprawdzonym projektem konstrukcyjnym.",
+    "Type of the library": "Typ z biblioteki",
+    "sizes of its own": "własne wymiary",
+    "Plate thickness (mm)": "Grubość blachy (mm)",
+    "Plate past the profile (mm)": "Blacha poza profil (mm)",
+    "Bolt (mm)": "Śruba (mm)",
+    "Hole (mm)": "Otwór (mm)",
+    "Gap to the face (mm)": "Odstęp od lica (mm)",
+    "Edge distance (mm)": "Odległość od krawędzi (mm)"
   }
 }

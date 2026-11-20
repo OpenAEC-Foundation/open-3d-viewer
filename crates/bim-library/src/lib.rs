@@ -23,6 +23,7 @@
 
 pub mod annotate;
 pub mod buildup;
+pub mod connection;
 pub mod drawing;
 pub mod dutch;
 pub mod grade;
@@ -100,6 +101,8 @@ pub enum LibraryError {
     BadHouseStyle(String),
     /// An object type does not hold together; the text says what it needs.
     BadObject(String),
+    /// A connection type does not hold together; the text says what it needs.
+    BadConnection(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -115,6 +118,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::BadGrid => f.write_str("A system's bays and rows must be wider than its members."),
             LibraryError::UnknownSetting(key) => write!(f, "The drawing standard has no \"{key}\"."),
             LibraryError::BadObject(what) => write!(f, "Not an object: it needs {what}."),
+            LibraryError::BadConnection(what) => write!(f, "Not a connection: it needs {what}."),
             LibraryError::BadHouseStyle(what) => write!(f, "Not a house style: {what}."),
             LibraryError::BadCode(code) => write!(f, "\"{code}\" is no NL-SfB code (21, 21.2 or 21.22)."),
         }

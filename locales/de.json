@@ -1668,6 +1668,23 @@
     "Click the line to extend to · Esc: stop": "Klicken Sie die Linie an, bis zu der verlängert wird · Esc: beenden",
     "Click the line that is extended · Esc: start again": "Klicken Sie die Linie an, die verlängert wird · Esc: neu beginnen",
     "Click the first line, on the side that stays · Esc: stop": "Klicken Sie die erste Linie an, auf der Seite, die bleibt · Esc: beenden",
-    "Click the second line, on the side that stays · Esc: start again": "Klicken Sie die zweite Linie an, auf der Seite, die bleibt · Esc: neu beginnen"
+    "Click the second line, on the side that stays · Esc: start again": "Klicken Sie die zweite Linie an, auf der Seite, die bleibt · Esc: neu beginnen",
+    "Depth (mm)": "Tiefe (mm)",
+    "Underside above floor (mm)": "Unterkante über Boden (mm)",
+    "IFC predefined type": "Vordefinierter IFC-Typ",
+    "+ Property": "+ Eigenschaft",
+    "Remove property": "Eigenschaft entfernen",
+    "value": "Wert",
+    "+ Object": "+ Objekt",
+    "Click a connection to see what it is.": "Klicken Sie auf eine Verbindung, um zu sehen, was sie ist.",
+    "The sizes are a start to change, not a checked structural design.": "Die Maße sind ein Ausgangspunkt zum Ändern, kein geprüfter Tragwerksentwurf.",
+    "Type of the library": "Typ aus der Bibliothek",
+    "sizes of its own": "eigene Maße",
+    "Plate thickness (mm)": "Plattendicke (mm)",
+    "Plate past the profile (mm)": "Platte über das Profil hinaus (mm)",
+    "Bolt (mm)": "Schraube (mm)",
+    "Hole (mm)": "Loch (mm)",
+    "Gap to the face (mm)": "Abstand zur Fläche (mm)",
+    "Edge distance (mm)": "Randabstand (mm)"
   }
 }

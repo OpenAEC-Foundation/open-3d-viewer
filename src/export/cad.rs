@@ -126,7 +126,8 @@ pub fn cad_document(d: &Drawing2d) -> Document {
         let (sin, cos) = label.angle.sin_cos();
         base.text_middle_point = mm([label.at[0] - sin*label.height/2., label.at[1] + cos*label.height/2.]);
         // on paper a dimension measures the model, not the paper
-        if d.space == Space::Paper {
+        let geometric = (dim.to[0]-dim.from[0]).hypot(dim.to[1]-dim.from[1]);
+        if d.space == Space::Paper || dim.style.figure(geometric) != dim.label().text {
             base.set_text_override(Some(dim.label().text));
         }
         let _ = doc.add_entity(EntityType::Dimension(Box::new(entity)));

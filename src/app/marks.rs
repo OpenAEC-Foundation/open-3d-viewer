@@ -326,7 +326,7 @@ impl App {
             noting: self.note_tool.then(|| self.note_to_place(l)),
             levelling: self.note_tool && self.level_tool && !is_plan,
             cutting: self.section_tool && is_plan,
-            sections: if is_plan { self.document.sections().iter().map(|s| (s.mark(), s.from, s.to)).collect() } else { Vec::new() },
+            sections: crate::drawing2d::plan_sections(&self.document, view),
             word: l.text("Doorsnede", "Section"),
             pick: self.mark_pick,
             palette: p,

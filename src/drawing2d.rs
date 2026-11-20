@@ -426,6 +426,10 @@ impl Drawing2d {
     }
 
     fn view_details(&mut self, doc: &Document, view: &str, to: &dyn Fn([f64; 2]) -> [f64; 2]) {
+        for mut polygon in view_polygons(doc, view) {
+            polygon.points.iter_mut().for_each(|q| *q = to(*q));
+            self.polygons.push(polygon);
+        }
         let start = self.lines.len();
         self.detail(doc.view_lines(view), to);
         for (range, rgb, width) in doc.detail_pens(view) {
@@ -564,6 +568,35 @@ fn add(p: [f64; 2], n: [f64; 2], d: f64) -> [f64; 2] {
     [p[0] + n[0] * d, p[1] + n[1] * d]
 }
 
+/// Clip each filled triangle to the view bounds. Triangulating first preserves holes.
+pub(crate) fn view_polygons(doc: &Document, path: &str) -> Vec<Polygon2d> {
+    let crop = doc.view_marks(path).and_then(|(_, crop)| crop);
+    let mut out = Vec::new();
+    for fill in doc.view_fills(path) {
+        for triangle in crate::caps::triangulate(&fill.loops) {
+            let mut points = triangle.to_vec();
+            if let Some((lo, hi)) = crop {
+                for (axis, edge, sign) in [(0, lo[0], 1.0), (1, lo[1], 1.0), (0, hi[0], -1.0), (1, hi[1], -1.0)] {
+                    let Some(&mut_last) = points.last() else { break };
+                    let mut prev = mut_last;
+                    let input = std::mem::take(&mut points);
+                    for p in input {
+                        let inside = (p[axis] - edge) * sign >= 0.0;
+                        if inside != ((prev[axis] - edge) * sign >= 0.0) {
+                            let t = (edge - prev[axis]) / (p[axis] - prev[axis]);
+                            points.push([prev[0] + t * (p[0] - prev[0]), prev[1] + t * (p[1] - prev[1])]);
+                        }
+                        if inside { points.push(p); }
+                        prev = p;
+                    }
+                }
+            }
+            if points.len() >= 3 { out.push(Polygon2d { points, color: fill.color }); }
+        }
+    }
+    out
+}
+
 /// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky), as a sheet crops.
 pub fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
     let d = [b[0] - a[0], b[1] - a[1]];
@@ -583,6 +616,19 @@ pub fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f6
         }
     }
     (t0 <= t1).then(|| ([a[0] + t0 * d[0], a[1] + t0 * d[1]], [a[0] + t1 * d[0], a[1] + t1 * d[1]]))
+}
+
+/// Visible section references of a plan, clipped to its view window before placement.
+pub(crate) fn plan_sections(doc: &Document, path: &str) -> Vec<(String, [f64; 2], [f64; 2])> {
+    let Some(plan) = doc.plan(path) else { return Vec::new() };
+    if plan.presentation["section_marks"].as_bool() == Some(false) { return Vec::new(); }
+    doc.sections().iter().filter_map(|s| {
+        let (a,b) = match plan.crop {
+            Some((lo, hi)) => clip(s.from, s.to, lo, hi)?,
+            None => (s.from, s.to),
+        };
+        (a != b).then(|| (s.mark(), a,b))
+    }).collect()
 }
 
 /// The dimensions and texts of a view.
@@ -649,11 +695,8 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);
         }
-        if doc.plan(&v.plan).is_some() {
-            for s in doc.sections() {
-                let letter = s.mark();
-                section_mark(&mut d, to(s.from), to(s.to), letter);
-            }
+        for (label, a, b) in plan_sections(doc, &v.plan) {
+            section_mark(&mut d, to(a), to(b), label);
         }
         let name = doc.view_name(&v.plan).unwrap_or_default().to_string();
         d.text([lo[0], lo[1] - 0.009], 0.003, name, Align::Left);
@@ -872,6 +915,19 @@ mod tests {
         // a page of 10 x 10 cm on paper: 10 x 10 m at 1:100
         let (lo, hi) = d.page();
         assert!((hi[0] - lo[0] - 10.0).abs() < 1e-9 && (hi[1] - lo[1] - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_crop_trims_crossing_section_references_and_omits_outside_references() {
+        let (mut doc, path) = plan();
+        doc.set_crop(&path, Some(([0.,0.],[8.,5.])));
+        doc.add_section("Section A", [2.,-200.], [2.,300.], 10.).unwrap();
+        doc.add_section("Section B", [-9.,-200.], [-9.,300.], 10.).unwrap();
+        let marks = plan_sections(&doc, &path);
+        assert_eq!(marks.len(), 1);
+        let (label,a,b) = &marks[0];
+        assert_eq!(label,"A");
+        assert!((a[1]).abs() < 1e-9 && (b[1]-5.).abs() < 1e-9);
     }
 
     #[test]

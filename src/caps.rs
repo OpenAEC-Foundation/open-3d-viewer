@@ -127,7 +127,7 @@ fn inside(outline: &[[f64; 2]], p: [f64; 2]) -> bool {
 
 /// The triangles of what the outlines fill by the even-odd rule: an outline inside an odd number
 /// of the others is a hole of the one just round it.
-fn triangulate(loops: &[Vec<[f64; 2]>]) -> Vec<[[f64; 2]; 3]> {
+pub(crate) fn triangulate(loops: &[Vec<[f64; 2]>]) -> Vec<[[f64; 2]; 3]> {
     let area = |l: &[[f64; 2]]| (0..l.len()).map(|k| l[k][0] * l[(k + 1) % l.len()][1] - l[(k + 1) % l.len()][0] * l[k][1]).sum::<f64>().abs() / 2.0;
     // the outlines round each one
     let round: Vec<Vec<usize>> = (0..loops.len()).map(|i| (0..loops.len()).filter(|&j| j != i && inside(&loops[j], loops[i][0])).collect()).collect();

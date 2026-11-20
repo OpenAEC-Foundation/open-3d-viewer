@@ -438,6 +438,7 @@ impl App {
                     plan: Arc::from(v.plan.as_str()),
                     cut: self.cuts.get(&v.plan).cloned(),
                     origin: self.document.view_origin(&v.plan),
+                    fills: crate::drawing2d::view_polygons(&self.document, &v.plan),
                     image: self.document.plan(&v.plan).and_then(|p| p.orthophoto.as_ref()).and_then(|p| p.image.placed(marks.and_then(|(_, c)| c), |q| q)),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
                     notes: self.document.view_notes(&v.plan).unwrap_or(&[]).iter().chain(self.document.view_tags(&v.plan)).cloned().collect(),
@@ -446,11 +447,11 @@ impl App {
                     crop: marks.and_then(|(_, c)| c),
                     datums: self.view_datums(&v.plan),
                     is_plan: self.document.plan(&v.plan).is_some(),
+                    sections: crate::drawing2d::plan_sections(&self.document, &v.plan),
                     rules: self.view_rules(&v.plan),
                 }
             })
             .collect();
-        let sections = self.document.sections().iter().map(|s| (s.mark(), s.from, s.to)).collect();
         let carrying = self.dragging_view.as_ref().and_then(|v| {
             let name = self.document.view_name(v)?.to_string();
             Some((v.clone(), name, self.cuts.get(&**v).and_then(|c| c.extent)))
@@ -464,7 +465,6 @@ impl App {
             key: Arc::from(path.as_str()),
             tool: self.dimension_tool,
             section_tool: self.section_tool,
-            sections,
             word: l.text("Doorsnede", "Section"),
             pick: self.sheet_pick,
             empty: l.text("niets gesneden", "nothing cut").to_string(),
@@ -594,6 +594,7 @@ impl App {
 /// A floor plan on the sheet as the canvas draws it.
 #[derive(Debug, Clone, Default)]
 struct Placed {
+    fills: Vec<crate::drawing2d::Polygon2d>,
     image: Option<crate::raster::PlacedImage>,
     name: String,
     /// The floor plan's path.
@@ -610,6 +611,7 @@ struct Placed {
     datums: Vec<crate::drawing2d::Datum2>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
+    sections: Vec<(String, [f64; 2], [f64; 2])>,
     /// How its kind of drawing draws it: the widths of its lines, and whether what is cut is
     /// hatched.
     rules: crate::drawing2d::Rules,
@@ -643,8 +645,6 @@ struct PaperDrawing {
     tool: bool,
     /// The section tool is on: two clicks on a floor plan draw a section.
     section_tool: bool,
-    /// The sections, drawn on the floor plans: name, line (plan).
-    sections: Vec<(String, [f64; 2], [f64; 2])>,
     /// What a new section is called before its letter.
     word: &'static str,
     /// What is picked.
@@ -1032,6 +1032,18 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             let placed = self.placed.get(i).cloned().unwrap_or_default();
             if let Some(image) = &placed.image { image.draw(&mut frame, |q| Some(fit.point(self.to_paper(i, q)))); }
+            for fill in &placed.fills {
+                let path = Path::new(|p| {
+                    let mut points = fill.points.iter().map(|&q| fit.point(self.to_paper(i, q)));
+                    if let Some(first) = points.next() {
+                        p.move_to(first);
+                        for point in points { p.line_to(point); }
+                        p.close();
+                    }
+                });
+                let [r, g, b] = fill.color;
+                frame.fill(&path, Color::from_rgb8(r, g, b));
+            }
             match placed.cut.filter(|c| crate::drawing::drawn(c).next().is_some()) {
                 Some(cut) => {
                     // what is seen below the cut, thin and grey, then the cut itself
@@ -1104,11 +1116,8 @@ impl canvas::Program<Message> for PaperDrawing {
                 }
             }
             // the sections drawn on this floor plan
-            if placed.is_plan {
-                for (name, from, to) in &self.sections {
-                    let letter = name.rsplit(' ').next().unwrap_or(name).to_string();
-                    draw_section_mark(&mut frame, &fit, self.to_paper(i, *from), self.to_paper(i, *to), letter, ink);
-                }
+            for (label, from, to) in &placed.sections {
+                draw_section_mark(&mut frame, &fit, self.to_paper(i, *from), self.to_paper(i, *to), label.clone(), ink);
             }
             let under = fit.point([lo[0], lo[1] - 0.009]);
             label(&mut frame, placed.name, under, (0.003 * fit.scale / 0.72) as f32, if hot && !self.busy() { p.accent } else { ink }, alignment::Horizontal::Left);
@@ -1475,7 +1484,7 @@ mod tests {
         // and the floor plan on the sheet shows where it is
         let _ = app.update(Message::OpenDocSheet(sheet.clone()));
         let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
-        assert_eq!(drawing.sections.len(), 1);
+        assert_eq!(drawing.placed[0].sections.len(), 1);
         // the four elevations at once
         let _ = app.update(Message::MakeElevations(["North", "East", "South", "West"]));
         let names: Vec<&str> = app.document.sections().iter().map(|s| s.name.as_str()).collect();

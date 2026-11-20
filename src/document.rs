@@ -2758,13 +2758,13 @@ mod tests {
         let model = model_with(&[("00",0.)]);
         let mut doc = Document::from_model(&model);
         let plan = doc.add_plan(&doc.levels()[0].path.clone()).unwrap();
-        assert!(doc.add_dimension_chain(&plan, &[[-44.,1.2],[-42.7308,1.2],[-41.0385,1.2]]));
+        assert!(doc.add_dimension_chain(&plan, &[[-44.,1.2],[-42.7308,1.2],[-41.03848,1.2]]));
         let d = &doc.plan(&plan).unwrap().dimensions[0];
         let office = DimensionStyle::from_ifcx(&json!({"name":"3BM ronde stip"})).unwrap();
         let values = |style: &DimensionStyle| d.intervals().map(|(_, [a,b])| style.figure(d.interval_value(a,b,style))).collect::<Vec<_>>();
         assert_eq!(values(&office), ["1269","1693"]);
         assert_eq!(values(&DimensionStyle::standard()), ["1269","1692"]);
-        assert!((d.length()-2.9615).abs()<1e-9);
+        assert!((d.length()-2.96152).abs()<1e-9);
     }
 
     #[test]

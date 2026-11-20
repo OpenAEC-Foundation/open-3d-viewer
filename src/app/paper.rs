@@ -1488,7 +1488,7 @@ mod tests {
         let path = sheet.path.clone();
         app.open_doc_sheet(&path);
         let drawing = app.drawing_to_export().unwrap();
-        for pitch in ["Ø12-200", "Ø12-150"] {
+        for pitch in ["Ã˜12-200", "Ã˜12-150"] {
             assert!(drawing.texts.iter().any(|n| n.text.contains(pitch)));
         }
         let path = PathBuf::from(std::env::var_os("STRUCTURAL_SHEET_PDF").unwrap());

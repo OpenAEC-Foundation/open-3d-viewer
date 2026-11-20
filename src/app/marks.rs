@@ -576,27 +576,26 @@ impl App {
             if at.len() <= 2 { Vec::new() } else { at }
         };
         let (below, left) = (chain(along_u, lo[0], hi[0]), chain(along_v, lo[1], hi[1]));
-        let mut made = Vec::new();
-        // below: right to left, so the line stands under what it measures
-        for pair in below.windows(2) {
-            made.push(Dimension { from: [pair[1], lo[1]], to: [pair[0], lo[1]], style: 0, anchors: [None, None], chain: None });
+        let mut rows = Vec::new();
+        if !below.is_empty() {
+            rows.push(below.iter().rev().map(|&x| [x,lo[1]]).collect::<Vec<_>>());
         }
-        let out = if below.is_empty() { 0.0 } else { 1.0 };
-        made.push(Dimension { from: [hi[0], lo[1] - out], to: [lo[0], lo[1] - out], style: 0, anchors: [None, None], chain: None });
-        // on the left: upwards, so the line stands left of what it measures
-        for pair in left.windows(2) {
-            made.push(Dimension { from: [lo[0], pair[0]], to: [lo[0], pair[1]], style: 0, anchors: [None, None], chain: None });
+        let y = lo[1] - if below.is_empty() { 0.0 } else { 1.0 };
+        rows.push(vec![[hi[0],y], [lo[0],y]]);
+        if !left.is_empty() {
+            rows.push(left.iter().map(|&y| [lo[0],y]).collect());
         }
-        let out = if left.is_empty() { 0.0 } else { 1.0 };
-        made.push(Dimension { from: [lo[0] - out, lo[1]], to: [lo[0] - out, hi[1]], style: 0, anchors: [None, None], chain: None });
-        let same = |a: &Dimension, b: &Dimension| {
-            let close = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 0.001 && (p[1] - q[1]).abs() < 0.001;
-            (close(a.from, b.from) && close(a.to, b.to)) || (close(a.from, b.to) && close(a.to, b.from))
-        };
+        let x = lo[0] - if left.is_empty() { 0.0 } else { 1.0 };
+        rows.push(vec![[x,lo[1]], [x,hi[1]]]);
         let mut added = 0;
-        for d in made {
-            let has = self.document.view_marks(view).is_some_and(|(own, _)| own.iter().any(|o| same(o, &d)));
-            if !has && self.document.add_dimension(view, d.from, d.to) {
+        for points in rows {
+            let close = |p: [f64; 2], q: [f64; 2]| (p[0]-q[0]).hypot(p[1]-q[1]) < 0.001;
+            let exists = self.document.view_marks(view).is_some_and(|(dims,_)| dims.iter().any(|d| {
+                let refs: Vec<_> = d.references().map(|(q,_)| q).collect();
+                refs.len() == points.len() && (refs.iter().zip(&points).all(|(&p,&q)| close(p,q))
+                    || refs.iter().rev().zip(&points).all(|(&p,&q)| close(p,q)))
+            }));
+            if !exists && self.document.add_dimension_chain(view, &points) {
                 self.anchor_last_dimension(view);
                 added += 1;
             }
@@ -1551,7 +1550,8 @@ mod tests {
     fn standard_dimensions_give_a_view_its_overall_size_and_its_grids() {
         let (mut app, plan) = plan_shown();
         let lengths = |app: &App, view: &str| -> Vec<f64> {
-            app.document.view_marks(view).unwrap().0.iter().map(|d| (d.length() * 1000.0).round()).collect()
+            app.document.view_marks(view).unwrap().0.iter().flat_map(|d| d.intervals())
+                .map(|(_, [a,b])| ((b[0]-a[0]).hypot(b[1]-a[1]) * 1000.).round()).collect()
         };
         let _ = app.update(Message::StandardDimensions(plan.clone()));
         assert_eq!(lengths(&app, &plan), [8000.0, 5000.0]);
@@ -1566,10 +1566,10 @@ mod tests {
         let grids = vec![grid("1", [0.0, -1.0], [0.0, 6.0]), grid("2", [3.0, -1.0], [3.0, 6.0]), grid("3", [8.0, -1.0], [8.0, 6.0]), grid("A", [-1.0, 0.0], [9.0, 0.0]), grid("B", [-1.0, 5.0], [9.0, 5.0])];
         let (mut app, plan2) = plan_shown_with(grids);
         let _ = app.update(Message::StandardDimensions(plan2.clone()));
-        assert_eq!(lengths(&app, &plan2), [3000.0, 5000.0, 8000.0, 5000.0]);
+        assert_eq!(lengths(&app, &plan2), [5000.0, 3000.0, 8000.0, 5000.0]);
         let d = &app.document.plan(&plan2).unwrap().dimensions;
-        assert_eq!(d[2].from[1], -1.0, "the overall width 1 m below the chain");
-        assert_eq!(d[3].from[0], 0.0, "on the left only the overall: the grids are its ends");
+        assert_eq!(d[1].from[1], -1.0, "the overall width 1 m below the chain");
+        assert_eq!(d[2].from[0], 0.0, "on the left only the overall: the grids are its ends");
         // a section across the room: its width, and its height between the levels
         let section = app.document.add_section("Section A", [-1.0, 2.5], [9.0, 2.5], 20.0).unwrap();
         let _ = app.update(Message::StandardDimensions(Arc::from(section.as_str())));

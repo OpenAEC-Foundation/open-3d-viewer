@@ -786,12 +786,14 @@ impl canvas::Program<Message> for SheetDrawing {
                             });
                             frame.stroke(&marks, Stroke::default().with_color(ink).with_width(0.7));
                             let paper = fit.scale;
-                            for d in dimensions.iter().filter(|d| here([(d.from[0] + d.to[0]) / 2.0, (d.from[1] + d.to[1]) / 2.0])) {
-                                let (a, b) = (on(d.from), on(d.to));
-                                let style = self.styles.get(d.style).or(self.styles.first());
-                                let Some(style) = style.filter(|_| seen(a, b)) else { continue };
-                                let look = super::marks::DimensionLook { offset: paper * super::marks::OFFSET as f32, paper, size: if style.label_family().is_some() { paper * style.paper_font_size() as f32 } else { (paper * style.size as f32).max(SMALLEST) }, style };
-                                super::marks::draw_dimension_px(&mut frame, a, b, d.length(), ink, look);
+                            for d in dimensions {
+                                let Some(style) = self.styles.get(d.style).or(self.styles.first()) else { continue };
+                                for (actual, [from,to]) in d.intervals() {
+                                    let (a,b) = (on(from), on(to));
+                                    if !here([(from[0]+to[0])/2., (from[1]+to[1])/2.]) || !seen(a,b) { continue; }
+                                    let look = super::marks::DimensionLook { offset: paper * d.paper_offset() as f32, paper, size: paper * style.paper_font_size() as f32, style };
+                                    super::marks::draw_interval_px(&mut frame, a, b, actual.map(on), (to[0]-from[0]).hypot(to[1]-from[1]), ink, look);
+                                }
                             }
                             for note in notes.iter().filter(|n| here(n.at)) {
                                 let (at, size) = (on(note.at), note.size as f32 * paper);

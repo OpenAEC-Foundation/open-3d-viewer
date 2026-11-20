@@ -6,7 +6,7 @@
 //! width.
 
 use crate::drawing2d::{Align, Drawing2d, Pen, Space};
-use opencaddocument::entities::{Dimension, DimensionAligned, Line, Text, TextHorizontalAlignment};
+use opencaddocument::entities::{Dimension, DimensionAligned, DimensionLinear, Line, Text, TextHorizontalAlignment};
 use opencaddocument::tables::{DimStyle, Layer};
 use opencaddocument::{Document, Dwg, Dxf, EntityType, Format, Ifcx, LineWeight, Vector3};
 
@@ -105,9 +105,19 @@ pub fn cad_document(d: &Drawing2d) -> Document {
     }
     for dim in &d.dimensions {
         let Some((_, on_line)) = dim.line() else { continue };
-        let mut aligned = DimensionAligned::new(mm(dim.from), mm(dim.to));
-        aligned.definition_point = mm(on_line);
-        let base = &mut aligned.base;
+        let mut entity = if dim.witnesses == [dim.from, dim.to] {
+            let mut aligned = DimensionAligned::new(mm(dim.from), mm(dim.to));
+            aligned.definition_point = mm(on_line);
+            Dimension::Aligned(aligned)
+        } else {
+            let angle = (dim.to[1]-dim.from[1]).atan2(dim.to[0]-dim.from[0]);
+            let [a,b] = dim.witnesses.map(mm);
+            let mut linear = DimensionLinear::rotated(a, b, angle);
+            linear.definition_point = mm(on_line);
+            linear.base.actual_measurement = linear.measurement();
+            Dimension::Linear(linear)
+        };
+        let base = entity.base_mut();
         let index = styles.iter().position(|s| **s == dim.style).unwrap_or(0);
         base.style_name = if index == 0 { STYLE.to_string() } else { format!("{STYLE}-{index}") };
         base.common.layer = Pen::Dimension.name().into();
@@ -118,7 +128,7 @@ pub fn cad_document(d: &Drawing2d) -> Document {
         if d.space == Space::Paper {
             base.set_text_override(Some(dim.label().text));
         }
-        let _ = doc.add_entity(EntityType::Dimension(Box::new(Dimension::Aligned(aligned))));
+        let _ = doc.add_entity(EntityType::Dimension(Box::new(entity)));
     }
     doc
 }

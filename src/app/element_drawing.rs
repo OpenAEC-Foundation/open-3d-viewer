@@ -170,9 +170,9 @@ impl App {
             at.extend(frame.across.iter().map(|a| lo.x + a));
             at.push(hi.x);
             at.sort_by(f64::total_cmp);
-            for pair in at.windows(2) {
-                self.document.add_dimension(&view, [pair[1], lo.y], [pair[0], lo.y]);
-            }
+            at.dedup_by(|a,b| (*a-*b).abs() < 0.001);
+            let points = at.into_iter().rev().map(|x| [x,lo.y]).collect::<Vec<_>>();
+            self.document.add_dimension_chain(&view, &points);
             rows = 2.0;
         }
         self.document.add_dimension(&view, [hi.x, lo.y - (rows - 1.0) * step], [lo.x, lo.y - (rows - 1.0) * step]);
@@ -182,9 +182,9 @@ impl App {
             let mut at = vec![lo.y, hi.y];
             at.extend(&frame.up);
             at.sort_by(f64::total_cmp);
-            for pair in at.windows(2) {
-                self.document.add_dimension(&view, [lo.x, pair[0]], [lo.x, pair[1]]);
-            }
+            at.dedup_by(|a,b| (*a-*b).abs() < 0.001);
+            let points = at.into_iter().map(|y| [lo.x,y]).collect::<Vec<_>>();
+            self.document.add_dimension_chain(&view, &points);
             columns = 2.0;
         }
         self.document.add_dimension(&view, [lo.x - (columns - 1.0) * step, lo.y], [lo.x - (columns - 1.0) * step, hi.y]);
@@ -282,8 +282,8 @@ mod tests {
         assert!(view.dimensions.iter().all(|d| d.from[1] <= 1e-9 || d.from[0] <= 1e-9), "{:?}", view.dimensions);
         assert_eq!((view.name.as_str(), view.kind, view.scale), ("Element drawing Wall 1", SectionKind::Elevation, 20.0));
         // three along its foot through the opening and its length; three up and its height
-        let lengths: Vec<i64> = view.dimensions.iter().map(|d| (d.length() * 1000.0).round() as i64).collect();
-        assert_eq!(lengths, [2000, 1200, 2800, 6000, 900, 1500, 600, 3000]);
+        let lengths: Vec<i64> = view.dimensions.iter().flat_map(|d| d.intervals()).map(|(_, [a,b])| ((b[0]-a[0]).hypot(b[1]-a[1]) * 1000.).round() as i64).collect();
+        assert_eq!(lengths, [2800, 1200, 2000, 6000, 900, 1500, 600, 3000]);
         let text: Vec<&str> = view.notes.iter().map(|n| n.text.as_str()).collect();
         assert_eq!(text, ["Wall 1", "6000 × 3000 × 140 mm", "Volume: 2.268 m³"]);
         assert!(view.crop.is_some());

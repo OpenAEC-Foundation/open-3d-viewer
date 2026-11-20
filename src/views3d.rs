@@ -143,13 +143,13 @@ pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
             line(*a, *b, INK);
         }
         // its dimensions: the line between the points it measures, a tick at either end
-        for d in dimensions {
-            line(d.from, d.to, INK);
-            let (dx, dy) = (d.to[0] - d.from[0], d.to[1] - d.from[1]);
+        for (_, [from,to]) in dimensions.iter().flat_map(|d| d.intervals()) {
+            line(from, to, INK);
+            let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
             let run = dx.hypot(dy);
             if run > 1e-9 {
                 let tick = [(-dy + dx) / run * 0.06, (dx + dy) / run * 0.06];
-                for end in [d.from, d.to] {
+                for end in [from, to] {
                     line([end[0] - tick[0], end[1] - tick[1]], [end[0] + tick[0], end[1] + tick[1]], INK);
                 }
             }
@@ -157,7 +157,9 @@ pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
         let inside = |p: [f64; 2]| crop.is_none_or(|(lo, hi)| p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]);
         out.labels.extend(notes.iter().filter(|n| inside(n.at) && !n.text.trim().is_empty()).map(|n| (n.text.clone(), place(n.at))));
         // the figure of a dimension, in whole millimetres, at its middle
-        out.labels.extend(dimensions.iter().map(|d| (format!("{:.0}", d.length() * 1000.0), place([(d.from[0] + d.to[0]) / 2.0, (d.from[1] + d.to[1]) / 2.0]))));
+        out.labels.extend(dimensions.iter().flat_map(|d| d.intervals()).map(|(_, [a,b])| {
+            (format!("{:.0}", (b[0]-a[0]).hypot(b[1]-a[1]) * 1000.), place([(a[0]+b[0])/2., (a[1]+b[1])/2.]))
+        }));
     };
     if let Some(plan) = doc.plans().iter().find(|p| p.path == path) {
         let Some(z) = doc.level(&plan.level).map(|l| l.elevation) else { return out };

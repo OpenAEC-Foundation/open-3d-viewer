@@ -428,7 +428,7 @@ mod tests {
         let _ = app.update(Message::NewPlanOf(level.into(), crate::document::PlanKind::Structural, "structure"));
         let plan = app.document.plans()[0].path.clone();
         let tags: Vec<&str> = app.document.view_tags(&plan).iter().map(|n| n.text.as_str()).collect();
-        assert!(tags.is_empty(), "a downward plan represents the piles with hidden outlines");
+        assert_eq!(tags, ["1", "2"]);
         // the piles gone: the schedule stays, empty
         for id in [1, 2] {
             app.select_modelled(ElementId(id));

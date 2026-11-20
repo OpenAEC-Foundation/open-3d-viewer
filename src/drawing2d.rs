@@ -154,6 +154,7 @@ pub enum Align {
 /// is that of its capitals.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Text2d {
+    pub color: Option<[u8; 3]>,
     pub pen: Pen,
     pub at: [f64; 2],
     pub height: f64,
@@ -245,7 +246,7 @@ impl Dim2d {
         let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.offset * 0.25;
         let middle = [(self.from[0] + self.to[0]) / 2.0, (self.from[1] + self.to[1]) / 2.0];
         let centre = add(middle, n, self.offset + clear);
-        Text2d { pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
+        Text2d { color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
     }
 }
 
@@ -259,9 +260,17 @@ pub struct Datum2 {
     pub level: Option<f64>,
 }
 
+/// A solid area in drawing coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Polygon2d {
+    pub points: Vec<[f64; 2]>,
+    pub color: [u8; 3],
+}
+
 /// A drawing to export.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drawing2d {
+    pub polygons: Vec<Polygon2d>,
     pub images: Vec<crate::raster::PlacedImage>,
     /// The view's or sheet's name, for the file name.
     pub name: String,
@@ -307,15 +316,15 @@ impl Drawing2d {
                         for k in 0..BUBBLE_SIDES {
                             self.line(Pen::Grids, point(k), point(k + 1));
                         }
-                        self.texts.push(Text2d { pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center, angle: 0.0 });
+                        self.texts.push(Text2d { color: None, pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center, angle: 0.0 });
                     }
                 }
                 Some(z) => {
                     let label = format!("{} {z:+.3}", d.name);
                     let gap = h * 0.6;
                     let (right, left) = (add(d.b, u, gap), add(d.a, [-u[0], -u[1]], gap));
-                    self.texts.push(Text2d { pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left, angle: 0.0 });
-                    self.texts.push(Text2d { pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right, angle: 0.0 });
+                    self.texts.push(Text2d { color: None, pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left, angle: 0.0 });
+                    self.texts.push(Text2d { color: None, pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right, angle: 0.0 });
                 }
             }
         }
@@ -338,6 +347,7 @@ impl Drawing2d {
                 hi[k] = hi[k].max(p[k]);
             }
         };
+        for polygon in &self.polygons { polygon.points.iter().copied().for_each(&mut grow); }
         for image in &self.images { image.clip.into_iter().for_each(&mut grow); }
         for l in &self.lines {
             grow(l.a);
@@ -405,7 +415,7 @@ impl Drawing2d {
     }
 
     fn turned_text(&mut self, at: [f64; 2], height: f64, text: impl Into<String>, align: Align, angle: f64) {
-        self.texts.push(Text2d { pen: Pen::Text, at, height, text: text.into(), align, angle });
+        self.texts.push(Text2d { color: None, pen: Pen::Text, at, height, text: text.into(), align, angle });
     }
 
     /// The lines a view draws itself (they are cut to its crop where they are read), through `to`.
@@ -589,7 +599,7 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut, rules: &Rules) -> Opt
     let name = doc.view_name(path)?.to_string();
     let scale = doc.sheets().iter().flat_map(|s| &s.views).find(|v| v.plan == path).map_or_else(|| doc.view_scale(path).unwrap_or(SHEET_SCALE), |v| v.scale);
     let (dimensions, notes, crop) = marks(doc, path);
-    let mut d = Drawing2d { images: Vec::new(), name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { polygons: Vec::new(), images: Vec::new(), name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     if let Some(photo) = doc.plan(path).and_then(|p| p.orthophoto.as_ref()) { d.images.extend(photo.image.placed(crop, |q| q)); }
     d.view(Some(cut), crop, (dimensions, &notes), doc, &|q| q, scale, scale, rules);
     d.view_details(doc, path, &|q| q);
@@ -607,10 +617,12 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
 pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::HouseStyle, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, datums: &dyn Fn(&str) -> Vec<Datum2>, rules: &dyn Fn(&str) -> Rules) -> Option<Drawing2d> {
     let sheet = doc.sheet(path)?;
     let [w, h] = sheet.paper;
-    let mut d = Drawing2d { images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { polygons: Vec::new(), images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.rectangle(Pen::Frame, [0.0, 0.0], [w, h]);
     d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
     let block = crate::title_block::title_block(doc, sheet, style);
+    d.images.extend(block.logo);
+    d.polygons.extend(block.polygons);
     d.lines.extend(block.lines);
     d.texts.extend(block.texts);
     for v in &sheet.views {
@@ -660,7 +672,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
     let zero = [f64::from(covers.min[0]), f64::from(covers.min[1])];
     let size = [f64::from(covers.max[0]) - zero[0], f64::from(covers.max[1]) - zero[1]];
     let on_paper = |p: [f32; 2]| [f64::from(p[0]) - zero[0], f64::from(p[1]) - zero[1]];
-    let mut d = Drawing2d { images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(size), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    let mut d = Drawing2d { polygons: Vec::new(), images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(size), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.rectangle(Pen::Frame, [0.0, 0.0], size);
     for line in &sheet.lines {
         d.line(Pen::Frame, on_paper(line[0]), on_paper(line[1]));
@@ -675,7 +687,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
         let leading = f64::from(t.size) * 1.3;
         for (k, row) in t.text.lines().enumerate() {
             let at = on_paper(t.at);
-            d.texts.push(Text2d { pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align, angle: 0.0 });
+            d.texts.push(Text2d { color: None, pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align, angle: 0.0 });
         }
     }
     for v in &sheet.viewports {

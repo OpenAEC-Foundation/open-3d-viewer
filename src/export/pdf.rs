@@ -67,6 +67,13 @@ fn content(d: &Drawing2d) -> String {
         let _ = writeln!(s, "q {} {} {} re W n {} 0 0 {} {} cm /Im{} Do Q", at(c), num((e[0]-c[0])*k), num((e[1]-c[1])*k),
             num((b[0]-a[0])*k), num((b[1]-a[1])*k), at(a), i);
     }
+    for polygon in &d.polygons {
+        let Some((first, rest)) = polygon.points.split_first() else { continue };
+        let [r, g, b] = polygon.color.map(|c| num(f64::from(c) / 255.0));
+        let _ = writeln!(s, "{r} {g} {b} rg {} m", at(*first));
+        for &point in rest { let _ = writeln!(s, "{} l", at(point)); }
+        s.push_str("h f\n");
+    }
     for pen in Pen::ALL {
         // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
         // what is seen beyond it a width of its own
@@ -81,6 +88,8 @@ fn content(d: &Drawing2d) -> String {
     }
     let labels: Vec<Text2d> = d.dimensions.iter().map(|dim| dim.label()).collect();
     for t in d.texts.iter().chain(&labels) {
+        let [r, g, b] = t.color.unwrap_or_default().map(|c| num(f64::from(c) / 255.0));
+        let _ = writeln!(s, "{r} {g} {b} rg");
         let size = t.height * k / CAPITALS;
         let width = width(&t.text, size);
         let shift = match t.align {
@@ -203,14 +212,15 @@ mod tests {
 
     fn sheet() -> Drawing2d {
         Drawing2d {
+            polygons: Vec::new(),
             images: Vec::new(),
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(A3_LANDSCAPE),
             lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
             texts: vec![
-                Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
-                Text2d { pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
+                Text2d { color: None, pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
+                Text2d { color: None, pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
             ],
             dimensions: Vec::new(),
         }
@@ -233,7 +243,7 @@ mod tests {
     fn a_turned_text_is_written_with_its_matrix() {
         let mut d = sheet();
         // the same text level and from the left, and read from the right of the sheet, centred
-        let level = Text2d { pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
+        let level = Text2d { color: None, pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
         d.texts = vec![level.clone(), Text2d { align: Align::Center, angle: std::f64::consts::FRAC_PI_2, ..level }];
         let s = text(&pdf(&d));
         let lines: Vec<&str> = s.lines().filter(|l| l.contains("(HEA 200) Tj")).collect();

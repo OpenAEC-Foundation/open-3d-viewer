@@ -51,6 +51,11 @@ pub fn svg(d: &Drawing2d) -> String {
         let mime = image.format.to_mime_type();
         let _ = write!(s, r##"<defs><clipPath id="img{i}"><rect {}/></clipPath></defs><image {} preserveAspectRatio="none" clip-path="url(#img{i})" xlink:href="data:{mime};base64,{}"/>"##, rect(image.clip), rect(image.bounds), image.encoded());
     }
+    for polygon in &d.polygons {
+        let points = polygon.points.iter().map(|&p| { let (x, y) = at(p); format!("{x},{y}") }).collect::<Vec<_>>().join(" ");
+        let [r, g, b] = polygon.color;
+        let _ = write!(s, r##"<polygon points="{points}" fill="#{r:02x}{g:02x}{b:02x}"/>"##);
+    }
     for pen in Pen::ALL {
         // the lines of a pen a width at a time: a view's kind of drawing gives what is cut and
         // what is seen beyond it a width of its own
@@ -72,10 +77,11 @@ pub fn svg(d: &Drawing2d) -> String {
             Align::Center => "middle",
             Align::Right => "end",
         };
+        let color = t.color.map_or_else(|| "#000".to_owned(), |[r,g,b]| format!("#{r:02x}{g:02x}{b:02x}"));
         let size = num(t.height * k / CAPITALS);
         // the page's y runs down: a turn counter-clockwise is a negative one there
         let turn = if t.angle == 0.0 { String::new() } else { format!(r#" transform="rotate({} {x} {y})""#, num(-t.angle.to_degrees())) };
-        let _ = write!(s, r##"<text x="{x}" y="{y}" font-family="Inter, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="#000"{turn}>{}</text>"##, escape(&t.text));
+        let _ = write!(s, r##"<text x="{x}" y="{y}" font-family="Inter, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="{color}"{turn}>{}</text>"##, escape(&t.text));
     }
     s.push_str("</svg>");
     s
@@ -124,12 +130,13 @@ mod tests {
 
     fn sheet(paper: [f64; 2]) -> Drawing2d {
         Drawing2d {
+            polygons: Vec::new(),
             images: Vec::new(),
             name: "A01 Plattegronden".into(),
             space: Space::Paper,
             paper: Some(paper),
             lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
-            texts: vec![Text2d { pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 }],
+            texts: vec![Text2d { color: None, pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 }],
             dimensions: Vec::new(),
         }
     }

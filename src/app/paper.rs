@@ -993,11 +993,30 @@ impl canvas::Program<Message> for PaperDrawing {
         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
         let (inner, inner_size) = rect([0.02, 0.01], [w - 0.01, h - 0.01]);
         frame.stroke(&Path::rectangle(inner, inner_size), Stroke::default().with_color(ink).with_width(1.4));
+        if !self.block.polygons.is_empty() {
+            let [a,b] = self.block.bounds;
+            let (at, size) = rect(a,b);
+            frame.fill_rectangle(at,size,Color::WHITE);
+        }
+        if let Some(logo) = &self.block.logo {
+            logo.draw(&mut frame, |point| Some(fit.point(point)));
+        }
+        for polygon in &self.block.polygons {
+            let path = Path::new(|builder| {
+                if let Some((first, rest)) = polygon.points.split_first() {
+                    builder.move_to(fit.point(*first));
+                    for &p in rest { builder.line_to(fit.point(p)); }
+                    builder.close();
+                }
+            });
+            let [r,g,b] = polygon.color;
+            frame.fill(&path, Color::from_rgb8(r,g,b));
+        }
         for line in &self.block.lines {
             frame.stroke(&Path::line(fit.point(line.a), fit.point(line.b)), Stroke::default().with_color(ink).with_width((line.width * fit.scale / 1000.0).max(0.4) as f32));
         }
         for t in &self.block.texts {
-            label(&mut frame, t.text.clone(), fit.point(t.at), (t.height * fit.scale / 0.72) as f32, ink, alignment::Horizontal::Left);
+            label(&mut frame, t.text.clone(), fit.point(t.at), (t.height * fit.scale / 0.72) as f32, t.color.map_or(ink, |[r,g,b]| Color::from_rgb8(r,g,b)), alignment::Horizontal::Left);
         }
 
         // the placed floor plans: their cut lines and dimensions, a frame when hovered or
@@ -1311,6 +1330,24 @@ mod tests {
         let nodes = app.document.ifcx_drawing_nodes();
         let v = nodes.iter().find(|n| n["path"] == &*plan).unwrap();
         assert_eq!(v["attributes"]["o3v::view::plan"]["presentation"]["origin"], serde_json::json!([0.0,0.0]));
+    }
+
+    #[test]
+    fn branded_stamp_exports_vector_titles_house_colours_and_the_embedded_logo() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let (mut app, _, _, _) = sheet_with_plan(false);
+        app.house.key = "3bm".into();
+        app.house.logo = Some(format!("data:image/png;base64,{}", STANDARD.encode(include_bytes!("../../assets/icons/128x128.png"))));
+        let drawing = app.drawing_to_export().unwrap();
+        let block = app.paper_drawing(app.theme.palette(), Language::English).unwrap().block;
+        assert_eq!(drawing.images.first(), block.logo.as_ref());
+        assert!(block.logo.is_some());
+        assert_eq!(drawing.polygons, block.polygons);
+        let header = drawing.texts.iter().find(|t| t.text == "Sheet").unwrap();
+        assert_eq!(header.color, Some([255,255,255]));
+        let pdf = crate::export::pdf::pdf(&drawing);
+        let pdf = String::from_utf8_lossy(&pdf);
+        assert!(pdf.contains("/Subtype /Image") && pdf.contains("(Sheet) Tj"));
     }
 
     #[test]

@@ -649,10 +649,15 @@ pub fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f6
 /// Visible section references of a plan, clipped to its view window before placement.
 pub(crate) fn plan_sections(doc: &Document, path: &str) -> Vec<(String, [f64; 2], [f64; 2])> {
     let Some(plan) = doc.plan(path) else { return Vec::new() };
-    let show = plan.presentation["section_marks"].as_bool()
+    let marks = &plan.presentation["section_marks"];
+    let sections = marks.as_array();
+    let show = marks.as_bool().or_else(|| sections.map(|_| true))
         .unwrap_or_else(|| plan.drawing.as_deref() != Some("pile-plan") && !doc.view_is_schedule(path));
     if !show { return Vec::new(); }
     doc.sections().iter().filter_map(|s| {
+        if sections.is_some_and(|paths| !paths.iter().any(|p| p.as_str() == Some(s.path.as_str()))) {
+            return None;
+        }
         let (a,b) = match plan.crop {
             Some((lo, hi)) => clip(s.from, s.to, lo, hi)?,
             None => (s.from, s.to),

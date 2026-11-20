@@ -213,6 +213,9 @@ impl SectionView {
     /// What its mark on a floor plan says: a section its letter (the last word of "Section A"),
     /// an elevation the side it looks at (the first word of "North elevation").
     pub fn mark(&self) -> String {
+        if let Some(mark) = self.presentation["mark"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            return mark.to_owned();
+        }
         let word = match self.kind {
             SectionKind::Section => self.name.rsplit(' ').next(),
             SectionKind::Elevation => self.name.split(' ').next(),

@@ -114,6 +114,9 @@ pub(super) fn adopt(plan: &mut PlanView) -> bool {
         {
             note.face.color = Some([215, 22, 20]);
         }
+        if note.face.family.is_empty() {
+            note.face.family = "Calibri".into();
+        }
         retained.push(note);
     }
     plan.notes = retained;

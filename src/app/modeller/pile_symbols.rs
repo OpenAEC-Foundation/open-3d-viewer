@@ -202,5 +202,23 @@ mod tests {
         assert_eq!(doc.view_tags(&plan)[0].at, [4.0, 5.0]);
         assert_eq!(doc.plan(&plan).unwrap().pile_offsets[&id.0], [3.0, 3.0]);
         assert_eq!(doc.view_symbols(&plan).len(), 7); // profile, cross and leader
+        let office = |doc: &mut Document| doc.set_plan_tags(|p| {
+            let (mut notes, mut lines) = (Vec::new(), Vec::new());
+            draw(&model, p, 0.0, 0, true, &mut notes, &mut lines);
+            (notes, lines)
+        });
+        office(&mut doc);
+        let tag = &doc.view_tags(&plan)[0];
+        assert!(tag.at[0] > 1.15 && tag.at[1] > 2.15);
+        assert_eq!(tag.align, Align::Left);
+        assert!((tag.size * 72.0 / 0.0254 - 7.0).abs() < 1e-10);
+        let lines = doc.view_symbols(&plan);
+        assert_eq!(lines.len(), 6); // four shaft edges and two centre lines
+        assert_eq!(doc.view_fills(&plan).count(), 1);
+        assert!(doc.move_pile_tag(&plan, 0, [4.0, 5.0]));
+        office(&mut doc);
+        assert_eq!(doc.view_symbols(&plan).len(), 6);
+        assert_eq!(doc.view_tags(&plan)[0].at, [4.0, 5.0]);
+
     }
 }

@@ -1675,6 +1675,16 @@
     "+ Property": "+ Właściwość",
     "Remove property": "Usuń właściwość",
     "value": "wartość",
-    "+ Object": "+ Obiekt"
+    "+ Object": "+ Obiekt",
+    "Click a connection to see what it is.": "Kliknij połączenie, aby zobaczyć, czym jest.",
+    "The sizes are a start to change, not a checked structural design.": "Wymiary są punktem wyjścia do zmiany, a nie sprawdzonym projektem konstrukcyjnym.",
+    "Type of the library": "Typ z biblioteki",
+    "sizes of its own": "własne wymiary",
+    "Plate thickness (mm)": "Grubość blachy (mm)",
+    "Plate past the profile (mm)": "Blacha poza profil (mm)",
+    "Bolt (mm)": "Śruba (mm)",
+    "Hole (mm)": "Otwór (mm)",
+    "Gap to the face (mm)": "Odstęp od lica (mm)",
+    "Edge distance (mm)": "Odległość od krawędzi (mm)"
   }
 }

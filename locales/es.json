@@ -1675,6 +1675,16 @@
     "+ Property": "+ Propiedad",
     "Remove property": "Quitar propiedad",
     "value": "valor",
-    "+ Object": "+ Objeto"
+    "+ Object": "+ Objeto",
+    "Click a connection to see what it is.": "Haga clic en una unión para ver qué es.",
+    "The sizes are a start to change, not a checked structural design.": "Las medidas son un punto de partida para modificar, no un diseño estructural comprobado.",
+    "Type of the library": "Tipo de la biblioteca",
+    "sizes of its own": "medidas propias",
+    "Plate thickness (mm)": "Espesor de la placa (mm)",
+    "Plate past the profile (mm)": "Placa más allá del perfil (mm)",
+    "Bolt (mm)": "Tornillo (mm)",
+    "Hole (mm)": "Agujero (mm)",
+    "Gap to the face (mm)": "Holgura hasta la cara (mm)",
+    "Edge distance (mm)": "Distancia al borde (mm)"
   }
 }

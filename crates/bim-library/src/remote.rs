@@ -29,6 +29,8 @@ pub struct Counts {
     #[serde(default)]
     pub object_types: usize,
     #[serde(default)]
+    pub connection_types: usize,
+    #[serde(default)]
     pub drawing_sets: usize,
     #[serde(default)]
     pub view_templates: usize,
@@ -37,7 +39,7 @@ pub struct Counts {
 impl Counts {
     /// Everything it holds, counted together.
     pub fn total(&self) -> usize {
-        self.materials + self.buildups + self.linear_types + self.system_types + self.object_types + self.drawing_sets + self.view_templates
+        self.materials + self.buildups + self.linear_types + self.system_types + self.object_types + self.connection_types + self.drawing_sets + self.view_templates
     }
 }
 
@@ -101,6 +103,7 @@ pub fn levels(library: &Library) -> [usize; 4] {
     library.linear_types.iter().for_each(|t| at(t.lod()));
     library.system_types.iter().for_each(|t| at(t.lod()));
     library.object_types.iter().for_each(|o| at(o.lod));
+    library.connection_types.iter().for_each(|c| at(c.lod()));
     count
 }
 
@@ -118,6 +121,7 @@ pub fn entry(library: &Library, key: &str, file: &str, names: Names, about: &str
             linear_types: library.linear_types.len(),
             system_types: library.system_types.len(),
             object_types: library.object_types.len(),
+            connection_types: library.connection_types.len(),
             drawing_sets: library.drawing_sets.len(),
             view_templates: library.view_templates.len(),
         },
@@ -140,9 +144,9 @@ mod tests {
         let starter = Library::starter();
         let made = entry(&starter, "general", "ifcx/general.ifcx", Names::new("algemeen", "general", "allgemein", "général"), "The suite's starter library.", "Open BIM Suite, LGPL-3.0-or-later");
         assert_eq!((made.counts.materials, made.counts.object_types, made.counts.view_templates), (starter.materials.len(), starter.object_types.len(), 20));
-        assert_eq!(made.counts.total(), starter.materials.len() + starter.buildups.len() + starter.linear_types.len() + starter.system_types.len() + starter.object_types.len() + starter.drawing_sets.len() + starter.view_templates.len());
+        assert_eq!(made.counts.total(), starter.materials.len() + starter.buildups.len() + starter.linear_types.len() + starter.system_types.len() + starter.object_types.len() + starter.connection_types.len() + starter.drawing_sets.len() + starter.view_templates.len());
         // every type is at one level
-        assert_eq!(made.lod.iter().sum::<usize>(), starter.buildups.len() + starter.linear_types.len() + starter.system_types.len() + starter.object_types.len());
+        assert_eq!(made.lod.iter().sum::<usize>(), starter.buildups.len() + starter.linear_types.len() + starter.system_types.len() + starter.object_types.len() + starter.connection_types.len());
         assert!(made.lod[0] >= starter.object_types.len(), "the generic objects are LOD 200: {:?}", made.lod);
         let index = Index { name: "Open BIM Library".into(), libraries: vec![made.clone()] };
         let text = serde_json::to_string_pretty(&index).unwrap();

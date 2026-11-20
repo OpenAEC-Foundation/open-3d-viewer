@@ -14,8 +14,8 @@
 //! A tile adds a generic object to the group shown; the pane copies or removes the picked one.
 //!
 //! **Levels of development** (`bim_library::lod`): a category per level, LOD 200 to LOD 400,
-//! with every type of the source at that level: its build-ups, linear types, system types and
-//! objects.
+//! with every type of the source at that level: its build-ups, linear types, system types,
+//! objects and connections.
 //!
 //! Not yet: placing an object of a type in the Modeller.
 
@@ -236,6 +236,9 @@ pub fn at_level(library: &Library, lod: Lod, lang: Lang, l: Language) -> Vec<(St
     }
     for o in library.object_types.iter().filter(|o| o.lod == lod) {
         out.push((o.name(lang).to_string(), o.group.name(lang), Category::Objects(o.group)));
+    }
+    for c in library.connection_types.iter().filter(|c| c.lod() == lod) {
+        out.push((c.name(lang), c.family.name(lang), Category::Connections(c.family)));
     }
     out
 }
@@ -546,7 +549,7 @@ mod tests {
         let l = Language::English;
         let library = &app.library;
         let counts: Vec<usize> = Lod::ALL.iter().map(|lod| at_level(library, *lod, Lang::En, l).len()).collect();
-        assert_eq!(counts.iter().sum::<usize>(), library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.object_types.len());
+        assert_eq!(counts.iter().sum::<usize>(), library.buildups.len() + library.linear_types.len() + library.system_types.len() + library.object_types.len() + library.connection_types.len());
         assert_eq!(counts, bim_library::remote::levels(library));
         // the generic objects are LOD 200; a cavity wall is LOD 300; a system with its members LOD 350
         let at = |lod: Lod| at_level(library, lod, Lang::En, l);

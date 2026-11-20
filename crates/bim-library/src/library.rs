@@ -5,6 +5,7 @@ use crate::annotate::{self, DrawingSet};
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
 use crate::nlsfb::{self, Code};
+use crate::connection::{self, ConnectionType, Family};
 use crate::object::{self, ObjectGroup, ObjectType};
 use crate::profile::{self, LinearRole, LinearType};
 use crate::system::{self, SystemGroup, SystemType};
@@ -40,6 +41,9 @@ pub struct Library {
     /// ([`crate::object`]).
     #[serde(default)]
     pub object_types: Vec<ObjectType>,
+    /// Its connection types: how elements are joined where they meet ([`crate::connection`]).
+    #[serde(default)]
+    pub connection_types: Vec<ConnectionType>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -87,7 +91,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), connection_types: connection::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -257,6 +261,30 @@ impl Library {
         self.object_types.iter().find(|o| o.id == id)
     }
 
+    /// The connection type with key `id`.
+    pub fn connection_type(&self, id: &str) -> Option<&ConnectionType> {
+        self.connection_types.iter().find(|c| c.id == id)
+    }
+
+    /// The connection types of `family`, in the order they were added.
+    pub fn connection_types_of(&self, family: Family) -> impl Iterator<Item = &ConnectionType> {
+        self.connection_types.iter().filter(move |c| c.family == family)
+    }
+
+    /// Adds a connection type. Refused when it does not hold together, its key is taken, or
+    /// its parts are of a material the library lacks.
+    pub fn add_connection_type(&mut self, connection: ConnectionType) -> Result<(), LibraryError> {
+        connection.check()?;
+        if self.connection_type(&connection.id).is_some() {
+            return Err(LibraryError::Duplicate(connection.id));
+        }
+        if let Some(material) = connection.material.as_ref().filter(|key| self.material(key).is_none()) {
+            return Err(LibraryError::UnknownMaterial(material.clone()));
+        }
+        self.connection_types.push(connection);
+        Ok(())
+    }
+
     /// The object types of `group`, in the order they were added.
     pub fn object_types_of(&self, group: ObjectGroup) -> impl Iterator<Item = &ObjectType> {
         self.object_types.iter().filter(move |o| o.group == group)
@@ -330,8 +358,8 @@ impl Library {
         self.code(code).map(|c| c.name(lang).to_string()).or_else(|| nlsfb::group_name(code, lang).map(str::to_string))
     }
 
-    /// The types that have `code`, by their ids: build-ups, linear types, system types and
-    /// object types. With
+    /// The types that have `code`, by their ids: build-ups, linear types, system types,
+    /// object types and connection types. With
     /// `deeper`, also those of a code under it ("21" has the types of "21.22").
     pub fn coded(&self, code: &str, deeper: bool) -> Vec<&str> {
         let has = |of: String| of == code || deeper && of.strip_prefix(code).is_some_and(|rest| rest.starts_with('.') || code.contains('.'));
@@ -339,7 +367,8 @@ impl Library {
         let linear = self.linear_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
         let systems = self.system_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
         let objects = self.object_types.iter().filter(|o| has(o.nlsfb())).map(|o| o.id.as_str());
-        buildups.chain(linear).chain(systems).chain(objects).collect()
+        let connections = self.connection_types.iter().filter(|c| c.nlsfb().is_some_and(&has)).map(|c| c.id.as_str());
+        buildups.chain(linear).chain(systems).chain(objects).chain(connections).collect()
     }
 
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
@@ -405,6 +434,12 @@ impl Library {
                 added += 1;
             }
         }
+        // (by their keys: a connection the library has is not taken again)
+        for c in &other.connection_types {
+            if self.add_connection_type(c.clone()).is_ok() {
+                added += 1;
+            }
+        }
         added
     }
 }
@@ -418,7 +453,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), connection_types: lib.connection_types.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }

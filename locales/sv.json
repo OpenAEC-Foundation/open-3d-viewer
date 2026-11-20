@@ -1675,6 +1675,16 @@
     "+ Property": "+ Egenskap",
     "Remove property": "Ta bort egenskap",
     "value": "värde",
-    "+ Object": "+ Objekt"
+    "+ Object": "+ Objekt",
+    "Click a connection to see what it is.": "Klicka på ett förband för att se vad det är.",
+    "The sizes are a start to change, not a checked structural design.": "Måtten är en början att ändra, inte en kontrollerad konstruktionsberäkning.",
+    "Type of the library": "Typ ur biblioteket",
+    "sizes of its own": "egna mått",
+    "Plate thickness (mm)": "Plåttjocklek (mm)",
+    "Plate past the profile (mm)": "Plåt utanför profilen (mm)",
+    "Bolt (mm)": "Skruv (mm)",
+    "Hole (mm)": "Hål (mm)",
+    "Gap to the face (mm)": "Spalt till ytan (mm)",
+    "Edge distance (mm)": "Kantavstånd (mm)"
   }
 }

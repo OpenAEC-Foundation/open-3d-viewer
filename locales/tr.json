@@ -1675,6 +1675,16 @@
     "+ Property": "+ Özellik",
     "Remove property": "Özelliği kaldır",
     "value": "değer",
-    "+ Object": "+ Nesne"
+    "+ Object": "+ Nesne",
+    "Click a connection to see what it is.": "Ne olduğunu görmek için bir bağlantıya tıklayın.",
+    "The sizes are a start to change, not a checked structural design.": "Ölçüler değiştirilecek bir başlangıçtır, kontrol edilmiş bir yapısal tasarım değildir.",
+    "Type of the library": "Kütüphaneden tür",
+    "sizes of its own": "kendi ölçüleri",
+    "Plate thickness (mm)": "Levha kalınlığı (mm)",
+    "Plate past the profile (mm)": "Profilin dışına taşan levha (mm)",
+    "Bolt (mm)": "Cıvata (mm)",
+    "Hole (mm)": "Delik (mm)",
+    "Gap to the face (mm)": "Yüzeye kadar boşluk (mm)",
+    "Edge distance (mm)": "Kenar mesafesi (mm)"
   }
 }

@@ -157,7 +157,15 @@ impl App {
                     cut: self.cuts.get(path).cloned(),
                     crop,
                     dimensions: dimensions.to_vec(),
-                    notes: self.document.view_notes(path).unwrap_or(&[]).iter().chain(self.document.view_tags(path)).cloned().collect(),
+                    notes: {
+                        let default_height = self.view_rules(path).text;
+                        self.document.view_notes(path).unwrap_or(&[]).iter().chain(self.document.view_tags(path)).cloned().map(|mut note| {
+                            if note.face.family.is_empty() {
+                                note.size = default_height;
+                            }
+                            note
+                        }).collect()
+                    },
                     lines: self.document.view_lines(path).iter().chain(self.document.view_symbols(path)).copied().collect(),
                     fills: self.document.view_fills(path).cloned().collect(),
                 },

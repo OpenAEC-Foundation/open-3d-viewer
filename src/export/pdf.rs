@@ -30,6 +30,9 @@ fn win_ansi(c: char) -> u8 {
     ];
     if c == '′' { return b'\''; }
     match c as u32 {
+        0x2212 | 0x2010 | 0x2011 => b'-',
+        0xfd3e => b'(',
+        0xfd3f => b')',
         0x20..=0x7E | 0xA0..=0xFF => c as u8,
         _ => EXTRA.iter().find(|(e, _)| *e == c).map_or(b'?', |(_, b)| *b),
     }
@@ -170,9 +173,11 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
     let (lo, hi) = d.page();
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let (w, h) = (num_to((hi[0] - lo[0]) * k, 2), num_to((hi[1] - lo[1]) * k, 2));
-    let choices: [(&str, bool, &str, &str, fn() -> Option<&'static [u8]>); 4] = [
+    let choices: [(&str, bool, &str, &str, fn() -> Option<&'static [u8]>); 6] = [
         (crate::typeface::SWISS_CONDENSED, false, "F3", crate::typeface::SWISS_POSTSCRIPT, crate::typeface::swiss_condensed),
         (crate::typeface::ARIAL_NARROW, false, "F6", "ArialNarrow", crate::typeface::arial_narrow),
+        ("Calibri", false, "F7", "Calibri", || crate::typeface::calibri(false)),
+        ("Calibri", true, "F8", "Calibri-Bold", || crate::typeface::calibri(true)),
         ("Segoe UI", false, "F4", "SegoeUI", || crate::typeface::segoe_ui(false)),
         ("Segoe UI", true, "F5", "SegoeUI-Bold", || crate::typeface::segoe_ui(true)),
     ];

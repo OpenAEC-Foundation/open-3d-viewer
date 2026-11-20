@@ -288,6 +288,16 @@ pub(crate) fn arial_narrow() -> Option<&'static [u8]> {
     REGULAR.get_or_init(|| installed_ttf("arialn.ttf", "ArialNarrow")).as_deref()
 }
 
+pub(crate) fn calibri(bold: bool) -> Option<&'static [u8]> {
+    static REGULAR: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    static BOLD: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    if bold {
+        BOLD.get_or_init(|| installed_ttf("calibrib.ttf", "Calibri-Bold")).as_deref()
+    } else {
+        REGULAR.get_or_init(|| installed_ttf("calibri.ttf", "Calibri")).as_deref()
+    }
+}
+
 pub(crate) fn segoe_ui(bold: bool) -> Option<&'static [u8]> {
     static REGULAR: OnceLock<Option<Vec<u8>>> = OnceLock::new();
     static BOLD: OnceLock<Option<Vec<u8>>> = OnceLock::new();
@@ -323,6 +333,11 @@ fn family(name: &str) -> Option<&'static str> {
         }
         if name.eq_ignore_ascii_case(ARIAL_NARROW) {
             if let Some(bytes) = arial_narrow() { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
+        }
+        if name.eq_ignore_ascii_case("Calibri") {
+            for bold in [false, true] {
+                if let Some(bytes) = calibri(bold) { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
+            }
         }
         if name.eq_ignore_ascii_case("Segoe UI") {
             for bold in [false, true] {

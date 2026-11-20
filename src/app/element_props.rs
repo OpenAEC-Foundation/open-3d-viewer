@@ -22,6 +22,7 @@ use openaec_ui::Language;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementField {
     Name,
+    PileMark,
     /// A member's strength class (S235, C30/37), as text; empty: not given.
     Grade,
     /// A wall's, curtain wall's or object's height.
@@ -263,6 +264,7 @@ impl App {
         if field == ElementField::Name {
             return e.name.clone();
         }
+        if field == ElementField::PileMark { return e.pile_mark.clone().unwrap_or_default(); }
         if field == ElementField::Grade {
             return e.grade.clone().unwrap_or_default();
         }
@@ -285,6 +287,14 @@ impl App {
                 let mut renamed = e.clone();
                 renamed.name = name.to_string();
                 self.change_element(renamed);
+            }
+        } else if field == ElementField::PileMark && e.pile_number.is_some() {
+            let mark = typed.trim();
+            let value = (!mark.is_empty()).then(|| mark.to_string());
+            if value != e.pile_mark {
+                let mut changed = e.clone();
+                changed.pile_mark = value;
+                self.change_element(changed);
             }
         } else if field == ElementField::Grade {
             let grade = Some(typed.trim().to_string()).filter(|g| !g.is_empty());
@@ -474,6 +484,10 @@ impl App {
         // a drawing of this element alone, on a sheet of its own
         if super::element_drawing::frame(&shape).is_some() {
             rows = rows.push(button(text(l.text("Elementtekening", "Element drawing")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::ElementDrawing(l)));
+        }
+        if let Some(number) = e.pile_number {
+            rows = rows.push(text(format!("{} {number:02}", l.text("Paalnummer", "Pile number"))).size(12))
+                .push(field(l.text("Paalmerk", "Pile mark"), F::PileMark));
         }
         if e.class() == "IfcColumn" && e.pile_number.is_none() {
             rows = rows.push(button(text(l.text("Opnemen in paalstaat", "Register as pile")).size(12)).on_press(Message::DesignatePiles));

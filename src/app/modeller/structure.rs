@@ -189,10 +189,9 @@ impl crate::app::App {
     /// Issue numbers before rebuilding the native scene so the saved definitions contain them.
     pub(in crate::app) fn issue_pile_numbers(&mut self) {
         let model = &mut self.modeller.model;
-        let high = &mut self.document.pile_high_water;
-        *high = (*high).max(model.iter().filter_map(|e| e.pile_number).max().unwrap_or(0));
+        let highest_member = model.iter().filter_map(|e| e.pile_number).max().unwrap_or(0);
         let levels: Vec<_> = self.document.levels().iter().map(|l| (l.path.clone(), l.elevation)).collect();
-        let mut high = self.document.pile_high_water;
+        let mut high = self.document.pile_high_water.max(highest_member);
         for (level, elevation) in levels {
             for pile in piles(model, &level, elevation) {
                 let Some(e) = model.get(pile.id) else { continue };
@@ -229,8 +228,10 @@ impl crate::app::App {
         // a row selects its pile where the modelled project is shown alone
         let alone = self.models.len() <= 1;
         let mut rows = Vec::new();
+        let mut listed = std::collections::HashSet::new();
         for level in self.document.levels() {
             for pile in piles(&self.modeller.model, &level.path, level.elevation) {
+                if !listed.insert(pile.id) { continue; }
                 let cells = [
                     level.name.clone(),
                     pile.number.to_string(),
@@ -404,7 +405,7 @@ mod tests {
         let _ = app.update(Message::NewPlanOf(level.into(), crate::document::PlanKind::Structural, "structure"));
         let plan = app.document.plans()[0].path.clone();
         let tags: Vec<&str> = app.document.view_tags(&plan).iter().map(|n| n.text.as_str()).collect();
-        assert_eq!(tags, ["1", "2"]);
+        assert!(tags.is_empty(), "a downward plan represents the piles with hidden outlines");
         // the piles gone: the schedule stays, empty
         for id in [1, 2] {
             app.select_modelled(ElementId(id));

@@ -3,6 +3,7 @@ use crate::drawing2d::{Align, Line2d, Pen, Text2d};
 
 /// Title-block geometry in paper metres, shared by the canvas and drawing exports.
 pub(crate) struct TitleBlock {
+    pub owns_frame: bool,
     pub bounds: [[f64; 2]; 2],
     pub lines: Vec<Line2d>,
     pub texts: Vec<Text2d>,
@@ -17,6 +18,7 @@ pub(crate) fn title_block(doc: &Document, sheet: &crate::document::Sheet, style:
     let top = 0.010 + block.height() / 1000.0;
     let left = right - block.width / 1000.0;
     let mut out = TitleBlock {
+        owns_frame: false,
         bounds: [[left, 0.010], [right, top]],
         lines: Vec::new(),
         texts: Vec::new(),
@@ -24,7 +26,7 @@ pub(crate) fn title_block(doc: &Document, sheet: &crate::document::Sheet, style:
         polygons: Vec::new(),
     };
     if style.key.eq_ignore_ascii_case("3bm") {
-        office_stamp(&mut out, doc, sheet, style, left, top);
+        office_stamp(&mut out, doc, sheet, style);
         return out;
     }
     let mut text = |s: &str, x: f64, y: f64, h: f64, width: f64| {
@@ -34,6 +36,7 @@ pub(crate) fn title_block(doc: &Document, sheet: &crate::document::Sheet, style:
         let height = h.min(width / (s.chars().count() as f64 * 0.95));
         out.texts.push(Text2d {
             family: None,
+            bold: false,
             color: None,
             pen: Pen::Text,
             at: [x, y],
@@ -108,88 +111,168 @@ fn fitted_logo(uri: Option<&str>, [lo, hi]: [[f64; 2]; 2]) -> Option<crate::rast
 }
 
 /// Office stamp in its house colours and dimensions. All lettering remains drawing text.
-fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::Sheet, style: &bim_library::house::HouseStyle, left: f64, top: f64) {
+fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::Sheet, style: &bim_library::house::HouseStyle) {
     use bim_library::house::Field;
-    let w = style.title_block.width / 1000.0;
-    let h = style.title_block.height() / 1000.0;
-    let at = |x: f64, y: f64| [left + x * w, top - y * h];
-    let purple = style.colour("primary").unwrap_or([50, 17, 51]);
-    let accent = style.colour("accent").unwrap_or([69, 180, 167]);
+    // Physical dimensions, in mm from the lower right paper corner. The house width is
+    // the straight 180 mm edge above the stamp, between its two 5 mm corner radii.
+    let unit = (style.title_block.width / 180_000.0)
+        .min((sheet.paper[0] - 0.02) / 280.0)
+        .min((sheet.paper[1] - 0.03) / 110.0);
+    let at = |x: f64, y: f64| [sheet.paper[0] + x * unit, y * unit];
+    let purple = style.colour("primary").unwrap_or([53, 14, 53]);
+    let accent = style.colour("accent").unwrap_or([69, 182, 168]);
+    out.bounds = [at(-275., 0.), at(0., 98.)];
+    out.owns_frame = true;
+    office_frame(out, sheet.paper, unit, purple);
     let mut shape = |points: &[[f64; 2]], color| {
         out.polygons.push(crate::drawing2d::Polygon2d {
             points: points.iter().map(|p| at(p[0], p[1])).collect(),
             color,
         });
     };
-    shape(&[[0., 0.], [0.78, 0.], [0.69, 0.18], [0., 0.18]], purple);
-    for y in [0.34, 0.46] {
-        shape(&[[0.035, y], [0.685, y], [0.685, y + 0.002], [0.035, y + 0.002]], accent);
+    let mut banner = vec![[-62.8, 80.84], [-45.64, 98.]];
+    banner.extend(quarter_arc([-195., 93.], 5., 90., 180.));
+    banner.push([-200., 80.84]);
+    shape(&banner, purple);
+    for y in [61.57, 49.62] {
+        shape(&[[-190.65, y + 0.065], [-62.8, y + 0.065], [-62.8, y - 0.065], [-190.65, y - 0.065]], accent);
     }
-    // The folded ribbon at the lower right, independent of the office logo supplied as an image.
-    shape(&[[0.76, 0.64], [0.82, 0.52], [0.82, 0.66], [0.76, 0.78]], purple);
-    shape(&[[0.82, 0.52], [0.85, 0.46], [0.91, 0.58], [0.91, 0.70]], accent);
-    shape(&[[0.91, 0.70], [0.95, 0.62], [1.0, 0.72], [1.0, 0.88]], purple);
-    shape(&[[0.82, 0.88], [0.91, 0.70], [0.91, 0.84], [0.85, 0.96]], accent);
-
-    let mut text = |s: &str, x: f64, y: f64, size: f64, width: f64, color: [u8; 3]| {
+    shape(&[[-34.98, 51.64], [-51.35, 35.26], [-51.35, 31.93], [-44.40, 24.98], [-34.98, 34.40]], purple);
+    shape(&[[-17.85, 33.30], [0., 15.45], [0., 32.50], [-7.95, 40.45], [-10.95, 40.45]], purple);
+    shape(
+        &[
+            [-17.85, 33.30],
+            [-17.85, 50.47],
+            [-25.48, 58.10],
+            [-28.51, 58.10],
+            [-34.97, 51.64],
+            [-34.97, 50.42],
+        ],
+        accent,
+    );
+    shape(&[[-17.71, 16.38], [-17.71, 33.44], [-33.99, 17.16], [-33.99, 14.54], [-27.02, 7.07]], accent);
+    shape(&[[0., 0.], [0., 15.45], [-0.57, 16.02], [-16.59, 0.]], accent);
+    let mut text = |s: &str, x, y, em: f64, width: f64, color, align| {
         if s.trim().is_empty() {
             return;
         }
-        let height = (size * h).min(width * w / (s.chars().count() as f64 * 0.95));
+        // Text2d uses capital height. The reference gives the em of its typeface.
+        let size = (em * 0.718).min(width / (0.81 * s.chars().count() as f64));
         out.texts.push(Text2d {
             family: None,
+            bold: em >= 7.0 || matches!(s,"Projectnr:" | "Fase:" | "Auteur:"),
             pen: Pen::Text,
             color: Some(color),
             at: at(x, y),
-            height,
-            text: s.to_owned(),
-            align: Align::Left,
-            angle: 0.0,
+            height: size * unit,
+            text: s.into(),
+            align,
+            angle: 0.,
         });
     };
-    text(&sheet.name, 0.035, 0.12, 0.068, 0.62, [255, 255, 255]);
-    text(doc.title_value(sheet, Field::Project), 0.035, 0.285, 0.05, 0.65, purple);
-    text("Opdrachtgever", 0.035, 0.415, 0.03, 0.13, purple);
-    text(doc.title_value(sheet, Field::Client), 0.175, 0.415, 0.033, 0.51, purple);
+    let l = Align::Left;
+    text(&sheet.name, -190.75, 87.63, 7.23, 125., [255; 3], l);
+    text(doc.title_value(sheet, Field::Project), -190.75, 72.68, 4.94, 127., purple, l);
+    text(&doc.project_address, -190.75, 66.07, 4.94, 127., purple, l);
+    text("Opdrachtgever:", -190.75, 54.35, 3.53, 25., purple, l);
+    text(doc.title_value(sheet, Field::Client), -164.29, 54.35, 3.53, 99., purple, l);
     let office = &style.company;
     let address = format!("{} {}", office.postcode, office.city);
-    for (i, line) in [&office.name, &office.address, &address, &office.phone, &office.email, &office.website]
-        .iter()
-        .enumerate()
-    {
-        text(line, 0.805, 0.06 + i as f64 * 0.043, 0.026, 0.193, purple);
+    let phone = if office.phone.is_empty() {
+        String::new()
+    } else {
+        format!("Tel: {}", office.phone)
+    };
+    for (value, y) in [
+        (&office.name, 90.31),
+        (&office.address, 86.40),
+        (&address, 82.50),
+        (&phone, 74.70),
+        (&office.email, 70.79),
+        (&office.website, 66.89),
+    ] {
+        text(value, -40.08, y, 2.82, 39., purple, l);
     }
     let format = paper_format(sheet, style);
     let scale = scale_label(sheet);
-    for (column, fields) in [
+    for (column, value_x, fields) in [
         (
-            0.035,
+            -190.75,
+            -170.75,
             [
-                ("Projectnr", doc.title_value(sheet, Field::ProjectNumber)),
-                ("Fase", doc.title_value(sheet, Field::Phase)),
-                ("Auteur", doc.title_value(sheet, Field::DrawnBy)),
-                ("Controle", doc.title_value(sheet, Field::CheckedBy)),
-                ("Revisie", doc.title_value(sheet, Field::Revision)),
+                ("Projectnr:", doc.title_value(sheet, Field::ProjectNumber), 41.77),
+                ("Fase:", doc.title_value(sheet, Field::Phase), 37.74),
+                ("Auteur:", doc.title_value(sheet, Field::DrawnBy), 33.45),
+                ("Controle:", doc.title_value(sheet, Field::CheckedBy), 29.27),
+                ("Revisie:", doc.title_value(sheet, Field::Revision), 25.06),
             ],
         ),
         (
-            0.415,
+            -116.60,
+            -91.49,
             [
-                ("Formaat", format.as_str()),
-                ("Schaal", scale.as_str()),
-                ("Datum", doc.title_value(sheet, Field::Date)),
-                ("Status", doc.title_value(sheet, Field::Status)),
-                ("Tekeningnr", sheet.number.as_str()),
+                ("Formaat:", format.as_str(), 42.),
+                ("Schaal:", scale.as_str(), 37.76),
+                ("1e datum:", doc.title_value(sheet, Field::Date), 33.53),
+                ("Status:", doc.title_value(sheet, Field::Status), 29.27),
+                ("Tekeningnr:", sheet.number.as_str(), 25.06),
             ],
         ),
     ] {
-        for (i, (caption, value)) in fields.iter().enumerate() {
-            let y = 0.54 + i as f64 * 0.055;
-            text(caption, column, y, 0.029, 0.112, purple);
-            text(value, column + 0.12, y, 0.032, if column < 0.1 { 0.24 } else { 0.19 }, purple);
+        for (label, value, y) in fields {
+            if matches!(label, "Controle:" | "Revisie:") && value.is_empty() {
+                continue;
+            }
+            text(label, column, y, 3.53, value_x - column - 1., purple, l);
+            text(value, value_x, y, 3.53, if column < -150. { 52. } else { 38. }, purple, l);
         }
     }
-    out.logo = fitted_logo(style.logo.as_deref(), [at(0.035, 0.975), at(0.24, 0.80)]);
+    for (i, revision) in sheet.revisions.iter().enumerate() {
+        let y = 92.24 - i as f64 * 15.;
+        text(&format!("{}.", (b'A' + i as u8) as char), -206.22, y, 3.53, 5., purple, l);
+        text(&revision.date, -208.5, y, 3.53, 64., purple, Align::Right);
+        text(&revision.description, -208.5, y - 4.70, 3.53, 64., purple, Align::Right);
+    }
+    out.logo = fitted_logo(style.logo.as_deref(), [at(-191.8, 8.6), at(-153.1, 24.55)]);
+}
+
+/// Six chords per quadrant match the plotted 5 mm corners and remain vector lines at every zoom.
+fn quarter_arc([cx, cy]: [f64; 2], radius: f64, start: f64, end: f64) -> Vec<[f64; 2]> {
+    (0..=6)
+        .map(|i| {
+            let a = (start + (end - start) * f64::from(i) / 6.).to_radians();
+            [cx + radius * a.cos(), cy + radius * a.sin()]
+        })
+        .collect()
+}
+
+fn office_frame(out: &mut TitleBlock, [w, h]: [f64; 2], unit: f64, color: [u8; 3]) {
+    let [w, h] = [w / unit, h / unit];
+    let corners = [
+        ([15., 15.], 180., 270.),
+        ([w - 205., 15.], 270., 360.),
+        ([w - 195., 93.], 180., 90.),
+        ([w - 15., 103.], 270., 360.),
+        ([w - 15., h - 15.], 0., 90.),
+        ([15., h - 15.], 90., 180.),
+    ];
+    let arcs = corners.map(|(c, a, b)| quarter_arc(c, 5., a, b));
+    let mut segment = |a: [f64; 2], b: [f64; 2], width| {
+        out.lines.push(Line2d {
+            pen: Pen::Frame,
+            a: a.map(|v| v * unit),
+            b: b.map(|v| v * unit),
+            width,
+            color: Some(color),
+        });
+    };
+    for (i, arc) in arcs.iter().enumerate() {
+        let previous = &arcs[(i + arcs.len() - 1) % arcs.len()];
+        segment(previous[6], arc[0], if i == 2 || i == 3 { 0.25 } else { 0.13 });
+        for side in arc.windows(2) {
+            segment(side[0], side[1], 0.25);
+        }
+    }
 }
 
 fn paper_format(sheet: &crate::document::Sheet, style: &bim_library::house::HouseStyle) -> String {

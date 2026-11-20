@@ -769,6 +769,8 @@ pub enum Message {
     /// Give a sheet another paper (width, height in metres).
     SetPaper(Arc<str>, [f64; 2]),
     SheetField(Arc<str>, bim_library::house::Field, String),
+    ProjectAddress(String),
+    SheetRevision(Arc<str>, usize, bool, String),
     /// The cut height being typed, and its use.
     CutText(String),
     ApplyCut,
@@ -2856,6 +2858,8 @@ impl App {
             Message::SetScale(sheet, i, scale) => {
                 self.scale_placed_view(&sheet, i, scale);
             }
+            Message::ProjectAddress(value) => self.document.project_address = value,
+            Message::SheetRevision(sheet, row, date, value) => self.document.set_revision(&sheet, row, date, value),
             Message::SheetField(sheet, field, value) => self.document.set_title_value(&sheet, field, value),
             Message::SetPaper(sheet, paper) => {
                 self.document.set_paper(&sheet, paper);

@@ -604,12 +604,21 @@ pub struct Sheet {
     pub path: String,
     pub number: String,
     fields: TitleFields,
+    pub revisions: [SheetRevision; 6],
     pub name: String,
     /// Number and name, as a tab shows them.
     pub title: String,
     /// Width and height (metres).
     pub paper: [f64; 2],
     pub views: Vec<PlacedView>,
+}
+
+/// One dated change in the sheet revision column.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SheetRevision {
+    pub date: String,
+    pub description: String,
 }
 
 /// A view on a sheet.
@@ -649,6 +658,7 @@ pub struct Document {
     /// Sheets, in the order they were made.
     sheets: Vec<Sheet>,
     project_fields: TitleFields,
+    pub project_address: String,
     /// How dimensions look; a dimension names one by its place here.
     dimension_styles: DimensionStyles,
     /// Levels and views made so far, for the paths of new ones.
@@ -793,10 +803,10 @@ impl Document {
         for (i, s) in self.sheets.iter().enumerate() {
             children.insert(format!("sheet {}", i + 1), s.path.clone().into());
             let views: Vec<Value> = s.views.iter().map(|v| json!({"view": v.plan, "at": v.at, "scale": v.scale})).collect();
-            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "fields": s.fields, "paper": s.paper, "views": views}}}));
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "fields": s.fields, "revisions": s.revisions, "paper": s.paper, "views": views}}}));
         }
-        if !nodes.is_empty() || self.pile_high_water > 0 || !self.project_fields.is_empty() {
-            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "pile_high_water": self.pile_high_water, "project_fields": self.project_fields, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
+        if !nodes.is_empty() || self.pile_high_water > 0 || !self.project_fields.is_empty() || !self.project_address.is_empty() {
+            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "pile_high_water": self.pile_high_water, "project_fields": self.project_fields, "project_address": self.project_address, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
         }
         nodes
     }
@@ -813,6 +823,11 @@ impl Document {
         let hidden = |v: &Value| Arc::new(hidden(v));
         for high in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("pile_high_water")?.as_u64()) {
             self.pile_high_water = self.pile_high_water.max(high);
+        }
+        if self.project_address.is_empty() {
+            if let Some(address) = nodes.iter().find_map(|(_, a)| a.get("o3v::drawings")?.get("project_address")?.as_str()) {
+                self.project_address = address.to_owned();
+            }
         }
         for fields in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("project_fields")) {
             if let Ok(values) = serde_json::from_value::<TitleFields>(fields.clone()) {
@@ -965,7 +980,7 @@ impl Document {
             let views: Vec<PlacedView> = views.collect();
             let (number, name) = (text(s, "number"), text(s, "name"));
             let paper = s.get("paper").and_then(pair).unwrap_or(A3_LANDSCAPE);
-            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, fields: s.get("fields").and_then(|f| serde_json::from_value(f.clone()).ok()).unwrap_or_default(), paper, views });
+            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, revisions: s.get("revisions").and_then(Value::as_array).map(|rows| std::array::from_fn(|i| rows.get(i).and_then(|r| serde_json::from_value(r.clone()).ok()).unwrap_or_default())).unwrap_or_default(), fields: s.get("fields").and_then(|f| serde_json::from_value(f.clone()).ok()).unwrap_or_default(), paper, views });
         }
     }
 
@@ -1668,6 +1683,12 @@ impl Document {
         Some([origin.get(0)?.as_f64()?, origin.get(1)?.as_f64()?])
     }
 
+    pub fn set_revision(&mut self, sheet: &str, index: usize, date: bool, value: String) {
+        if let Some(entry) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.revisions.get_mut(index)) {
+            if date { entry.date = value; } else { entry.description = value; }
+        }
+    }
+
     pub fn title_value<'a>(&'a self, sheet: &'a Sheet, field: Field) -> &'a str {
         match field {
             Field::Number => &sheet.number,
@@ -1706,7 +1727,7 @@ impl Document {
         let path = uuid(&format!("sheet/{}/{n}", self.added));
         let number = format!("A{n:02}");
         let title = format!("{number} {name}");
-        self.sheets.push(Sheet { path: path.clone(), number, fields: TitleFields::new(), name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
+        self.sheets.push(Sheet { path: path.clone(), number, revisions: Default::default(), fields: TitleFields::new(), name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
         path
     }
 

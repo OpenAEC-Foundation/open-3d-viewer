@@ -93,8 +93,8 @@ fn content(d: &Drawing2d, swiss: Option<&super::pdf_font::Font>) -> String {
         let size = t.height * k / if t.family.is_some() { 1.0 } else { CAPITALS };
         let face = swiss.filter(|_| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED));
         let (font, width) = match face {
-            Some(f) => ("F2", t.text.chars().map(|c| f64::from(f.widths[usize::from(win_ansi(c))])).sum::<f64>() * size / 1000.0),
-            None => ("F1", width(&t.text, size)),
+            Some(f) => ("F3", t.text.chars().map(|c| f64::from(f.widths[usize::from(win_ansi(c))])).sum::<f64>() * size / 1000.0),
+            None => (if t.bold { "F2" } else { "F1" }, width(&t.text, size)),
         };
         let shift = match t.align {
             Align::Left => 0.0,
@@ -169,15 +169,16 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
         (face.is_outline_embedding_allowed() && matches!(face.permissions(), Some(Editable | Installable | PreviewAndPrint))).then(|| super::pdf_font::font(bytes))
     });
     let stream = content(d, swiss.as_ref());
-    let fonts = swiss.as_ref().map_or(String::new(), |_| format!("/F2 {} 0 R", 7 + d.images.len()));
-    let references = (0..d.images.len()).map(|i| format!("/Im{i} {} 0 R", i+7)).collect::<Vec<_>>().join(" ");
+    let fonts = swiss.as_ref().map_or(String::new(), |_| format!("/F3 {} 0 R", 8 + d.images.len()));
+    let references = (0..d.images.len()).map(|i| format!("/Im{i} {} 0 R", i+8)).collect::<Vec<_>>().join(" ");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R {fonts} >> /XObject << {references} >> >> >>"),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R {fonts} >> /XObject << {references} >> >> >>"),
         format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
         format!("<< /Title {} /Producer (Open BIM Suite) >>", utf16(&d.name)),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>".to_string(),
     ];
     let mut objects = objects.into_iter().map(String::into_bytes).collect::<Vec<_>>();
     for image in &d.images {
@@ -231,8 +232,8 @@ mod tests {
             paper: Some(A3_LANDSCAPE),
             lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
             texts: vec![
-                Text2d { family: None, color: None, pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
-                Text2d { family: None, color: None, pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
+                Text2d { family: None, bold: false, color: None, pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
+                Text2d { family: None, bold: false, color: None, pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
             ],
             dimensions: Vec::new(),
         }
@@ -252,7 +253,7 @@ mod tests {
         page.texts[0].height = 7.0 * 0.0254 / 72.0;
         let result = text(&pdf(&page));
         assert!(result.contains("/BaseFont /Swiss721BT-RomanCondensed"));
-        assert!(result.contains("BT /F2 7 Tf"));
+        assert!(result.contains("BT /F3 7 Tf"));
         assert!(result.contains(&format!("/Length1 {}", bytes.len())));
     }
 
@@ -269,7 +270,7 @@ mod tests {
     fn a_turned_text_is_written_with_its_matrix() {
         let mut d = sheet();
         // the same text level and from the left, and read from the right of the sheet, centred
-        let level = Text2d { family: None, color: None, pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
+        let level = Text2d { family: None, bold: false, color: None, pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
         d.texts = vec![level.clone(), Text2d { align: Align::Center, angle: std::f64::consts::FRAC_PI_2, ..level }];
         let s = text(&pdf(&d));
         let lines: Vec<&str> = s.lines().filter(|l| l.contains("(HEA 200) Tj")).collect();

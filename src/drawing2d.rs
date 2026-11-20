@@ -156,6 +156,7 @@ pub enum Align {
 pub struct Text2d {
     /// A specified font family uses nominal em height, in drawing units.
     pub family: Option<Arc<str>>,
+    pub bold: bool,
     pub color: Option<[u8; 3]>,
     pub pen: Pen,
     pub at: [f64; 2],
@@ -248,7 +249,7 @@ impl Dim2d {
         let clear = n[0].abs() * w / 2.0 + n[1].abs() * h / 2.0 + self.offset * 0.25;
         let middle = [(self.from[0] + self.to[0]) / 2.0, (self.from[1] + self.to[1]) / 2.0];
         let centre = add(middle, n, self.offset + clear);
-        Text2d { family: None, color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
+        Text2d { family: None, bold: false, color: None, pen: Pen::Dimension, at: [centre[0], centre[1] - h / 2.0], height: h, text, align: Align::Center, angle: 0.0 }
     }
 }
 
@@ -318,15 +319,15 @@ impl Drawing2d {
                         for k in 0..BUBBLE_SIDES {
                             self.line(Pen::Grids, point(k), point(k + 1));
                         }
-                        self.texts.push(Text2d { family: None, color: None, pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center, angle: 0.0 });
+                        self.texts.push(Text2d { family: None, bold: false, color: None, pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center, angle: 0.0 });
                     }
                 }
                 Some(z) => {
                     let label = format!("{} {z:+.3}", d.name);
                     let gap = h * 0.6;
                     let (right, left) = (add(d.b, u, gap), add(d.a, [-u[0], -u[1]], gap));
-                    self.texts.push(Text2d { family: None, color: None, pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left, angle: 0.0 });
-                    self.texts.push(Text2d { family: None, color: None, pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right, angle: 0.0 });
+                    self.texts.push(Text2d { family: None, bold: false, color: None, pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left, angle: 0.0 });
+                    self.texts.push(Text2d { family: None, bold: false, color: None, pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right, angle: 0.0 });
                 }
             }
         }
@@ -417,7 +418,7 @@ impl Drawing2d {
     }
 
     fn turned_text(&mut self, at: [f64; 2], height: f64, text: impl Into<String>, align: Align, angle: f64) {
-        self.texts.push(Text2d { family: None, color: None, pen: Pen::Text, at, height, text: text.into(), align, angle });
+        self.texts.push(Text2d { family: None, bold: false, color: None, pen: Pen::Text, at, height, text: text.into(), align, angle });
     }
 
     fn view_details(&mut self, doc: &Document, view: &str, to: &dyn Fn([f64; 2]) -> [f64; 2]) {
@@ -559,7 +560,7 @@ impl Drawing2d {
             }
             let family = (!n.face.family.is_empty()).then(|| n.face.family.clone());
             let height = if family.is_some() { n.size } else { rules.text };
-            self.texts.push(Text2d { family, color: n.face.color, pen: Pen::Text, at, height: height * unit, text: n.text.clone(), align, angle: n.angle });
+            self.texts.push(Text2d { family, bold: n.face.bold, color: n.face.color, pen: Pen::Text, at, height: height * unit, text: n.text.clone(), align, angle: n.angle });
         }
     }
 }
@@ -670,8 +671,10 @@ pub fn sheet_drawing_with_style(doc: &Document, style: &bim_library::house::Hous
     let [w, h] = sheet.paper;
     let mut d = Drawing2d { polygons: Vec::new(), images: Vec::new(), name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.rectangle(Pen::Frame, [0.0, 0.0], [w, h]);
-    d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
     let block = crate::title_block::title_block(doc, sheet, style);
+    if !block.owns_frame {
+        d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
+    }
     d.images.extend(block.logo);
     d.polygons.extend(block.polygons);
     d.lines.extend(block.lines);
@@ -735,7 +738,7 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
         let leading = f64::from(t.size) * 1.3;
         for (k, row) in t.text.lines().enumerate() {
             let at = on_paper(t.at);
-            d.texts.push(Text2d { family: None, color: None, pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align, angle: 0.0 });
+            d.texts.push(Text2d { family: None, bold: false, color: None, pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align, angle: 0.0 });
         }
     }
     for v in &sheet.viewports {

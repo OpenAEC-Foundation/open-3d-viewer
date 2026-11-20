@@ -580,6 +580,17 @@ impl App {
                     rows = rows.push(row![container(label(l.text(nl, en))).width(92), input].align_y(Center).spacing(4));
                 }
             }
+            if self.house.key.eq_ignore_ascii_case("3bm") {
+                rows = rows.push(row![container(label(l.text("Projectadres", "Project address"))).width(92),
+                    iced::widget::text_input("", &self.document.project_address).on_input(Message::ProjectAddress).size(12).padding([3,6])].align_y(Center).spacing(4));
+                rows = rows.push(label(l.text("Revisies", "Revisions")));
+                for (i, revision) in sheet.revisions.iter().enumerate() {
+                    let (a,b) = (key.clone(),key.clone());
+                    rows = rows.push(row![text(format!("{}.", (b'A'+i as u8) as char)).size(12),
+                        iced::widget::text_input(l.text("Datum", "Date"), &revision.date).on_input(move |v| Message::SheetRevision(a.clone(),i,true,v)).width(76).size(12),
+                        iced::widget::text_input(l.text("Wijziging", "Change"), &revision.description).on_input(move |v| Message::SheetRevision(b.clone(),i,false,v)).size(12)].align_y(Center).spacing(4));
+                }
+            }
             rows = rows.push(label(l.text("Papier", "Paper")));
             rows = rows.push(choices(PAPERS.iter().map(|&(name, size)| small(name.to_string(), sheet.paper == size, Message::SetPaper(key.clone(), size))).collect()));
             if !sheet.views.is_empty() {
@@ -1008,7 +1019,9 @@ impl canvas::Program<Message> for PaperDrawing {
         }
         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
         let (inner, inner_size) = rect([0.02, 0.01], [w - 0.01, h - 0.01]);
-        frame.stroke(&Path::rectangle(inner, inner_size), Stroke::default().with_color(ink).with_width(1.4));
+        if !self.block.owns_frame {
+            frame.stroke(&Path::rectangle(inner, inner_size), Stroke::default().with_color(ink).with_width(1.4));
+        }
         if !self.block.polygons.is_empty() {
             let [a,b] = self.block.bounds;
             let (at, size) = rect(a,b);
@@ -1029,10 +1042,21 @@ impl canvas::Program<Message> for PaperDrawing {
             frame.fill(&path, Color::from_rgb8(r,g,b));
         }
         for line in &self.block.lines {
-            frame.stroke(&Path::line(fit.point(line.a), fit.point(line.b)), Stroke::default().with_color(ink).with_width((line.width * fit.scale / 1000.0).max(0.4) as f32));
+            let color = line.color.map_or(ink, |[r,g,b]| Color::from_rgb8(r,g,b));
+            frame.stroke(&Path::line(fit.point(line.a), fit.point(line.b)), Stroke::default().with_color(color).with_width((line.width * fit.scale / 1000.0).max(0.25) as f32));
         }
         for t in &self.block.texts {
-            label(&mut frame, t.text.clone(), fit.point(t.at), (t.height * fit.scale / 0.72) as f32, t.color.map_or(ink, |[r,g,b]| Color::from_rgb8(r,g,b)), alignment::Horizontal::Left);
+            let align = match t.align {
+                crate::drawing2d::Align::Left => alignment::Horizontal::Left,
+                crate::drawing2d::Align::Right => alignment::Horizontal::Right,
+                crate::drawing2d::Align::Center => alignment::Horizontal::Center,
+            };
+            frame.fill_text(canvas::Text {
+                content: t.text.clone(), position: fit.point(t.at), size: iced::Pixels((t.height * fit.scale / 0.72) as f32),
+                font: if t.bold { FONT_BOLD } else { openaec_ui::fonts::MEDIUM }, align_x: align.into(),
+                align_y: alignment::Vertical::Bottom, color: t.color.map_or(ink, |[r,g,b]| Color::from_rgb8(r,g,b)),
+                ..canvas::Text::default()
+            });
         }
 
         // the placed floor plans: their cut lines and dimensions, a frame when hovered or

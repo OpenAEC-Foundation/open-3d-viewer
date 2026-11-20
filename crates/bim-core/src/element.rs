@@ -397,6 +397,9 @@ pub enum ConnectionKind {
     /// A tee: a run of a building service that ends on the side of another, which runs through; a
     /// fitting takes its end (see [`crate::join::Tee`]).
     Tee(crate::join::Tee),
+    /// Two runs of a building service in one line with different profiles: a fitting goes from
+    /// the one into the other (see [`crate::join::Transition`]).
+    Transition(crate::join::Transition),
     /// The two are not joined where they meet: two building systems that would meet at a corner
     /// or a T junction are each made as they are alone, and two linear members get no join.
     Apart,
@@ -519,6 +522,7 @@ impl Element {
             // a fitting of a building service: the bend or the tee itself
             Shape::Connection(ConnectionDef { kind: ConnectionKind::Bend(b), .. }) => b.role.fitting_class(),
             Shape::Connection(ConnectionDef { kind: ConnectionKind::Tee(t), .. }) => t.role.fitting_class(),
+            Shape::Connection(ConnectionDef { kind: ConnectionKind::Transition(t), .. }) => t.role.fitting_class(),
             Shape::Connection(_) => "IfcRelConnectsElements",
         }
     }

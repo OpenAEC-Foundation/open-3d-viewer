@@ -404,7 +404,7 @@ impl Model {
             return Err(Refusal::SameMember);
         }
         match c.kind {
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) | ConnectionKind::Transition(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
             ConnectionKind::Cut => {
                 let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
                 let parts = self.body(target)?;
@@ -476,6 +476,7 @@ impl Model {
             ConnectionKind::FinPlate(plate) => JoinKind::FinPlate(plate),
             ConnectionKind::Bend(b) => JoinKind::Bend(b),
             ConnectionKind::Tee(t) => JoinKind::Tee(t),
+            ConnectionKind::Transition(t) => JoinKind::Transition(t),
             // two members kept apart: no join
             ConnectionKind::Apart => {
                 self.member(c.primary)?;
@@ -493,7 +494,9 @@ impl Model {
 fn auto_kind(me: &LinearDef, other: &LinearDef, other_end: Option<MemberEnd>) -> Option<ConnectionKind> {
     let (a, b) = ((me.end - me.start).normalize_or_zero(), (other.end - other.start).normalize_or_zero());
     if a.cross(b).length() < 1e-6 {
-        return None;
+        // two runs of one building service in one line: a transition where their profiles differ
+        let differ = me.role.is_service() && me.role == other.role && other_end.is_some() && me.profile != other.profile;
+        return differ.then(|| ConnectionKind::Transition(join::Transition::of(me.role)));
     }
     // two runs of one building service get its fittings: a bend end to end, a tee end to side
     if me.role.is_service() && me.role == other.role {
@@ -994,5 +997,49 @@ mod tests {
         add(&mut m, beam(DVec3::new(4.0, 0.0, 2.6), DVec3::new(4.0, 3.0, 2.6)));
         let (added, _) = m.update_joins("Joint", None);
         assert!(added.iter().all(|id| matches!(&m.get(*id).unwrap().shape, Shape::Connection(c) if !matches!(c.kind, ConnectionKind::Bend(_) | ConnectionKind::Tee(_)))));
+    }
+
+    #[test]
+    fn two_ducts_in_one_line_of_different_sizes_get_a_transition_and_a_riser_gets_bends() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, duct(DVec3::new(0.0, 0.0, 2.6), DVec3::new(4.0, 0.0, 2.6)));
+        let round = Shape::Linear(LinearDef {
+            start: DVec3::new(4.0, 0.0, 2.6),
+            end: DVec3::new(8.0, 0.0, 2.6),
+            profile: ProfileDef::Catalogue { designation: "ø250".into(), shape: bim_library::ProfileShape::Chs { d: 0.25, t: 0.001 } },
+            roll: 0.0,
+            role: crate::element::LinearRole::Duct,
+        });
+        let b = add(&mut m, round);
+        // a second duct of the same size in line with the first: nothing between them
+        add(&mut m, duct(DVec3::new(-3.0, 0.0, 2.6), DVec3::new(0.0, 0.0, 2.6)));
+        let (added, _) = m.update_joins("Fitting", None);
+        assert_eq!(added.len(), 1);
+        let Shape::Connection(c) = &m.get(added[0]).unwrap().shape else { panic!() };
+        assert!(matches!(c.kind, ConnectionKind::Transition(_)));
+        // both stop 0.15 short; the fitting is one closed hollow solid between them, as wide as
+        // the rectangle at the one end and as the circle at the other
+        let (_, hi) = m.evaluate(a).unwrap()[0].solid.bounds();
+        let (lo, _) = m.evaluate(b).unwrap()[0].solid.bounds();
+        assert!((hi.x - 3.85).abs() < 1e-9 && (lo.x - 4.15).abs() < 1e-9, "{hi} {lo}");
+        let parts = m.evaluate(added[0]).unwrap();
+        let (lo, hi) = parts[0].solid.bounds();
+        assert_eq!((parts.len(), parts[0].class), (1, "IfcDuctFitting"));
+        assert!((lo.x - 3.85).abs() < 1e-9 && (hi.x - 4.15).abs() < 1e-9 && (hi.y - 0.2).abs() < 1e-6 && (hi.z - 2.725).abs() < 1e-6, "{lo} {hi}");
+        let solid = 0.3 * (0.4 * 0.2 + 0.25 * 0.25 * 0.785) / 2.0;
+        assert!(parts[0].solid.volume() < solid * 0.1, "hollow: {}", parts[0].solid.volume());
+
+        // a duct going up from the end of a level one: a bend into the riser
+        let mut m = Model::new(TileGrid::default());
+        add(&mut m, duct(DVec3::new(0.0, 0.0, 2.6), DVec3::new(4.0, 0.0, 2.6)));
+        // rolled a quarter turn, so its width lies across the level run as that one's does
+        let Shape::Linear(up) = duct(DVec3::new(4.0, 0.0, 2.6), DVec3::new(4.0, 0.0, 5.6)) else { panic!() };
+        let riser = add(&mut m, Shape::Linear(LinearDef { roll: std::f64::consts::FRAC_PI_2, ..up }));
+        let (added, _) = m.update_joins("Fitting", None);
+        let parts = m.evaluate(added[0]).unwrap();
+        assert_eq!((added.len(), parts.len()), (1, 6));
+        // the bend turns in the duct's height (0.2): the riser starts 0.2 above the level run
+        let (lo, _) = m.evaluate(riser).unwrap()[0].solid.bounds();
+        assert!((lo.z - 2.8).abs() < 1e-9, "{lo}");
     }
 }

@@ -12,7 +12,7 @@ use crate::boolean::{boolean, BooleanOp};
 use crate::element::{linear_axes, LinearDef, PartSolid};
 use crate::model::JOIN_TOLERANCE;
 use crate::profile::Profile;
-use crate::solid::{Axes, Plane, Solid};
+use crate::solid::{Axes, Face, Plane, Solid};
 use crate::Refusal;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -90,7 +90,28 @@ pub enum JoinKind {
     /// The second member stops short of the face of the first, which runs through; a fitting on
     /// that face takes its end.
     Tee(Tee),
+    /// Two members in one line with different profiles both stop short of where they meet; a
+    /// fitting goes from the one profile over into the other.
+    Transition(Transition),
 }
+
+/// A transition between two runs of a building service in one line (metres).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Transition {
+    /// The fitting's length, half of it taken from each run.
+    pub length: f64,
+    pub role: crate::element::LinearRole,
+}
+
+impl Transition {
+    /// A transition 300 mm long.
+    pub fn of(role: crate::element::LinearRole) -> Self {
+        Self { length: 0.3, role }
+    }
+}
+
+/// How many sides a transition has around.
+const TRANSITION_SIDES: usize = 32;
 
 /// A bend between two runs of a building service (metres). The fitting is made of straight
 /// pieces of the runs' profile, each turning at most [`BEND_STEP`].
@@ -222,6 +243,7 @@ pub fn cuts(kind: JoinKind, members: &[Member]) -> Result<JoinResult, Refusal> {
         JoinKind::FinPlate(plate) => fin_plate(first, second, &plate, &mut result)?,
         JoinKind::Bend(b) => bend(first, second, &b, &mut result)?,
         JoinKind::Tee(t) => tee(first, second, &t, &mut result)?,
+        JoinKind::Transition(t) => transition(first, second, &t, &mut result)?,
     }
     Ok(result)
 }
@@ -412,6 +434,97 @@ fn tee(first: &Member, second: &Member, t: &Tee, result: &mut JoinResult) -> Res
     }?;
     result.parts.push(PartSolid { class: t.role.fitting_class(), solid, material: None });
     Ok(())
+}
+
+/// A transition between `first` and `second`, which lie in one line and whose nearest ends meet:
+/// each stops half the fitting's length short, and the fitting goes from the outline of the first
+/// to that of the second. It is hollow when both profiles are (one hole each); else solid.
+fn transition(first: &Member, second: &Member, t: &Transition, result: &mut JoinResult) -> Result<(), Refusal> {
+    if !(t.length.is_finite() && t.length > crate::LINEAR_TOLERANCE) {
+        return Err(Refusal::NotPositive);
+    }
+    let ends = [MemberEnd::Start, MemberEnd::End];
+    let (e0, e1) = ends
+        .iter()
+        .flat_map(|&p| ends.iter().map(move |&s| (p, s)))
+        .min_by(|&(p1, s1), &(p2, s2)| {
+            let d = |p, s| (first.end_of(p).0 - second.end_of(s).0).length();
+            d(p1, s1).total_cmp(&d(p2, s2))
+        })
+        .ok_or(Refusal::TwoMembers)?;
+    let ((q0, into0), (q1, into1)) = (first.end_of(e0), second.end_of(e1));
+    if q0.distance(q1) > JOIN_TOLERANCE {
+        return Err(Refusal::NotTouching);
+    }
+    // in one line, running away from each other
+    if into0.cross(into1).length() > 1e-6 || into0.dot(into1) > 0.0 {
+        return Err(Refusal::NotInLine);
+    }
+    let half = t.length / 2.0;
+    if half >= first.length - crate::LINEAR_TOLERANCE || half >= second.length - crate::LINEAR_TOLERANCE {
+        return Err(Refusal::TooShortForFitting);
+    }
+    let along = -into0;
+    let (t0, t1) = (q0 + into0 * half, q1 + into1 * half);
+    result.trims.push((0, e0, Plane { point: t0, normal: along }));
+    result.trims.push((1, e1, Plane { point: t1, normal: -along }));
+    // the fitting's frame: along the line from the first to the second
+    let frame = Axes::new(t0, first.axes.x, along)?;
+    // a ring of a member's profile at `at`, where the frame's directions meet it
+    let ring = |m: &Member, at: DVec3, outline: &[DVec2]| -> Result<Vec<DVec3>, Refusal> {
+        (0..TRANSITION_SIDES)
+            .map(|k| {
+                let d = DVec2::from_angle(std::f64::consts::TAU * k as f64 / TRANSITION_SIDES as f64);
+                let dir = frame.x * d.x + frame.y * d.y;
+                let own = DVec2::new(dir.dot(m.axes.x), dir.dot(m.axes.y));
+                Ok(at + dir * reach(outline, own).ok_or(Refusal::Degenerate)?)
+            })
+            .collect()
+    };
+    let mut positions = ring(first, t0, first.profile.outer())?;
+    positions.extend(ring(second, t1, second.profile.outer())?);
+    let n = TRANSITION_SIDES as u32;
+    let mut rings: Vec<Vec<u32>> = vec![(0..n).collect()];
+    if let ([h0], [h1]) = (first.profile.holes(), second.profile.holes()) {
+        positions.extend(ring(first, t0, h0)?);
+        positions.extend(ring(second, t1, h1)?);
+        rings.push((0..n).rev().map(|i| 2 * n + i).collect());
+    }
+    // ring i lies at the first's end, i + n at the second's
+    let mut faces = vec![
+        Face { rings: rings.iter().map(|r| r.iter().rev().copied().collect()).collect() },
+        Face { rings: rings.iter().map(|r| r.iter().map(|i| i + n).collect()).collect() },
+    ];
+    for r in &rings {
+        for k in 0..r.len() {
+            let (a, b) = (r[k], r[(k + 1) % r.len()]);
+            faces.push(Face { rings: vec![vec![a, b, b + n]] });
+            faces.push(Face { rings: vec![vec![a, b + n, a + n]] });
+        }
+    }
+    let solid = Solid { positions, faces };
+    solid.check()?;
+    result.parts.push(PartSolid { class: t.role.fitting_class(), solid, material: None });
+    Ok(())
+}
+
+/// How far `outline` reaches from the origin in direction `dir` (a unit vector): the farthest
+/// point of it on that ray.
+fn reach(outline: &[DVec2], dir: DVec2) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for k in 0..outline.len() {
+        let (a, b) = (outline[k], outline[(k + 1) % outline.len()]);
+        let edge = b - a;
+        let den = dir.perp_dot(edge);
+        if den.abs() < 1e-12 {
+            continue;
+        }
+        let (along, on) = (a.perp_dot(edge) / den, a.perp_dot(dir) / den);
+        if along > 0.0 && (-1e-9..=1.0 + 1e-9).contains(&on) {
+            best = Some(best.map_or(along, |b| b.max(along)));
+        }
+    }
+    best
 }
 
 /// A member's body as its joins leave it: its profile swept between its trims (its own square

@@ -631,6 +631,10 @@ impl App {
             self.move_wall_end(last, start);
         }
         let name = self.placed_name(tool, name);
+        // a run of a service starting where one ends at another height: a riser between them
+        if let Some(riser) = self.riser_to(tool, &shape) {
+            let _ = self.add_element_reaching(name, level.clone(), None, riser);
+        }
         // with no height typed, what stands reaches the level above, when there is one
         let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
         let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
@@ -652,6 +656,41 @@ impl App {
             Ok(_) => self.modeller.placement.last_wall = None,
             Err(refusal) => self.modeller.refusal = Some(refusal),
         }
+    }
+
+    /// The riser a run of a building service needs before it: when `shape`, a run `tool` is
+    /// about to place, starts straight above or below the end of a run of the same service (and
+    /// none ends where it starts), a vertical run of that one's profile from that end to the
+    /// start. A rectangular riser keeps its width across the run it comes from.
+    fn riser_to(&self, tool: ModelTool, shape: &Shape) -> Option<Shape> {
+        let role = tool.service()?;
+        let Shape::Linear(run) = shape else { return None };
+        let grid = self.modeller.model.grid;
+        let mut found: Option<(DVec3, DVec3, ProfileDef)> = None;
+        for e in self.modeller.model.iter() {
+            let Shape::Linear(l) = e.shape_in_project(&grid) else { continue };
+            if l.role != role {
+                continue;
+            }
+            for (end, other) in [(l.start, l.end), (l.end, l.start)] {
+                let apart = end - run.start;
+                if apart.truncate().length() > 1e-3 {
+                    continue;
+                }
+                if apart.z.abs() < 1e-6 {
+                    return None;
+                }
+                if found.as_ref().is_none_or(|(at, ..)| apart.z.abs() < (*at - run.start).z.abs()) {
+                    found = Some((end, end - other, l.profile.clone()));
+                }
+            }
+        }
+        let (from, along, profile) = found?;
+        let flat = along.truncate().try_normalize().or_else(|| (run.end - run.start).truncate().try_normalize())?;
+        // across the run it comes from: the riser's own x, by its roll (see `linear_axes`)
+        let across = DVec2::new(-flat.y, flat.x);
+        let roll = if run.start.z > from.z { across.y.atan2(across.x) } else { (-across.y).atan2(across.x) };
+        Some(Shape::Linear(LinearDef { start: from, end: run.start, profile, roll, role }))
     }
 
     /// Adds an element defined in scene coordinates, named `name` and a number, and shows it.
@@ -726,7 +765,7 @@ impl App {
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
             ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
-            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::FinPlate(_) | ConnectionKind::Bend(_) | ConnectionKind::Tee(_) | ConnectionKind::Transition(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -1044,6 +1083,9 @@ fn class_colour(class: &str) -> [f32; 3] {
         "IfcCurtainWall" => [0.62, 0.80, 0.92],
         "IfcDoor" => [0.72, 0.55, 0.38],
         "IfcWindow" => [0.95, 0.95, 0.93],
+        "IfcDuctSegment" | "IfcDuctFitting" => [0.45, 0.68, 0.86],
+        "IfcPipeSegment" | "IfcPipeFitting" => [0.36, 0.66, 0.42],
+        "IfcCableCarrierSegment" | "IfcCableCarrierFitting" => [0.88, 0.72, 0.28],
         _ => [0.90, 0.60, 0.30],
     }
 }
@@ -1199,6 +1241,7 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::FinPlate(_) => "Fin plate",
                 ConnectionKind::Bend(_) => "Bend",
                 ConnectionKind::Tee(_) => "Tee",
+                ConnectionKind::Transition(_) => "Transition",
                 ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
@@ -1289,6 +1332,33 @@ mod tests {
         app.set_model_tool(None);
         let all = classes(&app);
         assert!(all.contains(&"IfcPipeSegment") && all.contains(&"IfcCableCarrierSegment"), "{all:?}");
+    }
+
+    #[test]
+    fn a_duct_drawn_on_at_another_height_gets_a_riser_and_at_another_size_a_transition() {
+        use super::super::placement::{PlaceField, PlaceMessage};
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Duct, "Duct")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 10.0, 0.0);
+        // the chain goes on 0.9 higher: a riser at the end of the first, a bend at its foot and top
+        app.place_message(PlaceMessage::Field(PlaceField::Height, "3.5".into()));
+        click(&mut app, 20.0, 0.0);
+        let grid = app.modeller.model.grid;
+        let runs: Vec<LinearDef> = app.modeller.model.iter().filter_map(|e| match e.shape_in_project(&grid) { Shape::Linear(l) => Some(l), _ => None }).collect();
+        assert_eq!(runs.len(), 3);
+        let riser = &runs[1];
+        assert!((riser.start - DVec3::new(10.0, 0.0, 2.6)).length() < 1e-9 && (riser.end - DVec3::new(10.0, 0.0, 3.5)).length() < 1e-9, "{riser:?}");
+        let fittings: Vec<_> = app.modeller.model.iter().filter(|e| e.class() == "IfcDuctFitting").map(|e| e.id).collect();
+        assert_eq!(fittings.len(), 2);
+        for id in fittings {
+            assert_eq!(app.modeller.model.evaluate(id).unwrap().len(), 6);
+        }
+        // and on, at the same height but smaller: a transition
+        app.place_message(PlaceMessage::Field(PlaceField::Width, "0.2".into()));
+        click(&mut app, 30.0, 0.0);
+        let kinds: Vec<_> = app.modeller.model.iter().filter_map(|e| match &e.shape { Shape::Connection(c) => Some(c.kind), _ => None }).collect();
+        assert!(matches!(kinds.last(), Some(bim_core::ConnectionKind::Transition(_))), "{kinds:?}");
     }
 
     #[test]

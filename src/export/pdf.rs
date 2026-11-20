@@ -1,5 +1,5 @@
 //! A 2D drawing as a vector PDF: one page (a sheet's paper, or what a view draws at its scale),
-//! its lines with the pens' line weights and its texts in Helvetica. A small writer of its own:
+//! its lines with the pens' line weights, with installed Swiss condensed type embedded where specified.
 //! PDF 1.4, no compression, WinAnsi text (a character outside it becomes `?`).
 
 use crate::drawing2d::{Align, Drawing2d, Pen, Text2d};
@@ -56,7 +56,7 @@ pub(crate) fn literal(text: &str) -> String {
 }
 
 /// The page's drawing operators.
-fn content(d: &Drawing2d) -> String {
+fn content(d: &Drawing2d, swiss: Option<&super::pdf_font::Font>) -> String {
     let (lo, _) = d.page();
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let at = |q: [f64; 2]| format!("{} {}", num((q[0] - lo[0]) * k), num((q[1] - lo[1]) * k));
@@ -90,8 +90,12 @@ fn content(d: &Drawing2d) -> String {
     for t in d.texts.iter().chain(&labels) {
         let [r, g, b] = t.color.unwrap_or_default().map(|c| num(f64::from(c) / 255.0));
         let _ = writeln!(s, "{r} {g} {b} rg");
-        let size = t.height * k / CAPITALS;
-        let width = width(&t.text, size);
+        let size = t.height * k / if t.family.is_some() { 1.0 } else { CAPITALS };
+        let face = swiss.filter(|_| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED));
+        let (font, width) = match face {
+            Some(f) => ("F2", t.text.chars().map(|c| f64::from(f.widths[usize::from(win_ansi(c))])).sum::<f64>() * size / 1000.0),
+            None => ("F1", width(&t.text, size)),
+        };
         let shift = match t.align {
             Align::Left => 0.0,
             Align::Center => width / 2.0,
@@ -102,9 +106,9 @@ fn content(d: &Drawing2d) -> String {
         let x = (t.at[0] - lo[0]) * k - shift * cos;
         let y = (t.at[1] - lo[1]) * k - shift * sin;
         if t.angle == 0.0 {
-            let _ = writeln!(s, "BT /F1 {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
+            let _ = writeln!(s, "BT /{font} {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
         } else {
-            let _ = writeln!(s, "BT /F1 {} Tf {} {} {} {} {} {} Tm {} Tj ET", num(size), num(cos), num(sin), num(-sin), num(cos), num(x), num(y), literal(&t.text));
+            let _ = writeln!(s, "BT /{font} {} Tf {} {} {} {} {} {} Tm {} Tj ET", num(size), num(cos), num(sin), num(-sin), num(cos), num(x), num(y), literal(&t.text));
         }
     }
     s
@@ -158,12 +162,19 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
     let (lo, hi) = d.page();
     let k = d.paper_per_unit() * 1000.0 * POINTS;
     let (w, h) = (num_to((hi[0] - lo[0]) * k, 2), num_to((hi[1] - lo[1]) * k, 2));
-    let stream = content(d);
+    let swiss = d.texts.iter().any(|t| t.family.as_deref() == Some(crate::typeface::SWISS_CONDENSED)).then(crate::typeface::swiss_condensed).flatten().and_then(|bytes| {
+        use ttf_parser::Permissions::{Editable, Installable, PreviewAndPrint};
+        let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+        // OS/2 versions 0–2 permit the least restrictive of multiple usage bits.
+        (face.is_outline_embedding_allowed() && matches!(face.permissions(), Some(Editable | Installable | PreviewAndPrint))).then(|| super::pdf_font::font(bytes))
+    });
+    let stream = content(d, swiss.as_ref());
+    let fonts = swiss.as_ref().map_or(String::new(), |_| format!("/F2 {} 0 R", 7 + d.images.len()));
     let references = (0..d.images.len()).map(|i| format!("/Im{i} {} 0 R", i+7)).collect::<Vec<_>>().join(" ");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << {references} >> >> >>"),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R {fonts} >> /XObject << {references} >> >> >>"),
         format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
         format!("<< /Title {} /Producer (Open BIM Suite) >>", utf16(&d.name)),
@@ -188,6 +199,7 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
         object.extend_from_slice(b"\nendstream");
         objects.push(object);
     }
+    if let Some(f) = &swiss { super::pdf_font::push_font(&mut objects, f, crate::typeface::SWISS_POSTSCRIPT, 80); }
     use std::io::Write as _;
     let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
@@ -219,8 +231,8 @@ mod tests {
             paper: Some(A3_LANDSCAPE),
             lines: vec![Line2d::new(Pen::Cut, [0.05, 0.05], [0.30, 0.05]), Line2d::new(Pen::Beyond, [0.05, 0.10], [0.30, 0.10])],
             texts: vec![
-                Text2d { color: None, pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
-                Text2d { color: None, pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
+                Text2d { family: None, color: None, pen: Pen::Text, at: [0.05, 0.2], height: 0.005, text: "A & <B> ë".into(), align: Align::Left, angle: 0.0 },
+                Text2d { family: None, color: None, pen: Pen::Text, at: [0.40, 0.28], height: 0.004, text: "(1) \\ 2 €".into(), align: Align::Right, angle: 0.0 },
             ],
             dimensions: Vec::new(),
         }
@@ -228,6 +240,20 @@ mod tests {
 
     fn text(bytes: &[u8]) -> String {
         bytes.iter().map(|&b| b as char).collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_swiss_condensed_is_embedded_at_seven_points() {
+        let Some(bytes) = crate::typeface::swiss_condensed() else { return };
+        assert!(crate::typeface::Face::of(crate::typeface::SWISS_CONDENSED).installed());
+        let mut page = sheet();
+        page.texts[0].family = Some(crate::typeface::SWISS_CONDENSED.into());
+        page.texts[0].height = 7.0 * 0.0254 / 72.0;
+        let result = text(&pdf(&page));
+        assert!(result.contains("/BaseFont /Swiss721BT-RomanCondensed"));
+        assert!(result.contains("BT /F2 7 Tf"));
+        assert!(result.contains(&format!("/Length1 {}", bytes.len())));
     }
 
     #[test]
@@ -243,7 +269,7 @@ mod tests {
     fn a_turned_text_is_written_with_its_matrix() {
         let mut d = sheet();
         // the same text level and from the left, and read from the right of the sheet, centred
-        let level = Text2d { color: None, pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
+        let level = Text2d { family: None, color: None, pen: Pen::Text, at: [0.1, 0.1], height: 0.005, text: "HEA 200".into(), align: Align::Left, angle: 0.0 };
         d.texts = vec![level.clone(), Text2d { align: Align::Center, angle: std::f64::consts::FRAC_PI_2, ..level }];
         let s = text(&pdf(&d));
         let lines: Vec<&str> = s.lines().filter(|l| l.contains("(HEA 200) Tj")).collect();

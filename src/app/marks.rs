@@ -753,6 +753,11 @@ impl ViewMarks {
         (self.paper(screen, q) * height as f32).max(SMALLEST)
     }
 
+    fn note_font_size(&self, screen: &Screen, note: &Note) -> f32 {
+        if note.face.family.is_empty() { self.note_size(screen, note.at, note.size) }
+        else { self.paper(screen, note.at) * note.size as f32 }
+    }
+
     /// The sizes of a dimension from `q` as drawn.
     fn look(&self, screen: &Screen, q: [f64; 2], style: usize) -> DimensionLook<'_> {
         let paper = self.paper(screen, q);
@@ -777,7 +782,7 @@ impl ViewMarks {
     fn note_box(&self, screen: &Screen, k: usize) -> Option<Rectangle> {
         let note = self.notes.get(k)?;
         let at = self.px(screen, note.at)?;
-        let size = self.note_size(screen, note.at, note.size);
+        let size = self.note_font_size(screen, note);
         let lines = note.text.lines().count().max(1) as f32;
         let width = note.text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32 * size * 0.56;
         let left = match note.align {
@@ -1173,7 +1178,7 @@ impl canvas::Program<Message> for ViewMarks {
         for (k, note) in self.notes.iter().enumerate() {
             let Some(at) = self.px(&screen, note.at) else { continue };
             let picked = self.pick == Some(MarkPick::Note(k));
-            let size = self.note_size(&screen, note.at, note.size);
+            let size = self.note_font_size(&screen, note);
             let at = if note.level { draw_level_mark(&mut frame, at, size, if picked { p.accent } else { ink }) } else { at };
             draw_note_in(&mut frame, at, &note.text, size, if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
             if picked {

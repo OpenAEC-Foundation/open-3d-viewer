@@ -810,7 +810,7 @@ impl PaperDrawing {
 
     /// The text's paper capitals in canvas font pixels.
     fn note_size(fit: &Fit, note: &crate::document::Note) -> f32 {
-        (note.size * fit.scale / 0.72) as f32
+        (note.size * fit.scale / if note.face.family.is_empty() { 0.72 } else { 1.0 }) as f32
     }
 
     /// Where text `k` of placed view `i` is on the canvas.

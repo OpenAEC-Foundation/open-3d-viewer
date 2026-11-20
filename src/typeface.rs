@@ -271,6 +271,23 @@ impl Face {
     }
 }
 
+/// The family and PostScript names supplied by the installed Swiss condensed face.
+pub const SWISS_CONDENSED: &str = "Swis721 Cn BT";
+pub const SWISS_POSTSCRIPT: &str = "Swiss721BT-RomanCondensed";
+
+/// File supplied by the desktop installation. Verify its identity before using it.
+pub(crate) fn swiss_condensed() -> Option<&'static [u8]> {
+    static FILE: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let path = std::path::PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts").join("swissc.ttf");
+        let bytes = std::fs::read(path).ok()?;
+        let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+        let matched = face.names().into_iter().any(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME &&
+            n.to_string().as_deref() == Some(SWISS_POSTSCRIPT));
+        matched.then_some(bytes)
+    }).as_deref()
+}
+
 /// The name the fonts know a family by, when one of them is of it.
 fn family(name: &str) -> Option<&'static str> {
     if name.is_empty() {
@@ -283,6 +300,9 @@ fn family(name: &str) -> Option<&'static str> {
     }
     let found = {
         let mut fonts = iced::advanced::graphics::text::font_system().write().ok()?;
+        if name.eq_ignore_ascii_case(SWISS_CONDENSED) {
+            if let Some(bytes) = swiss_condensed() { fonts.load_font(std::borrow::Cow::Borrowed(bytes)); }
+        }
         let spelled = fonts.raw().db().faces().flat_map(|f| f.families.iter()).find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(n, _)| n.clone());
         // a name lives as long as the app: the fonts of a file are few
         spelled.map(|n| &*Box::leak(n.into_boxed_str()))

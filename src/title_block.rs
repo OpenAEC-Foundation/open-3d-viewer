@@ -33,6 +33,7 @@ pub(crate) fn title_block(doc: &Document, sheet: &crate::document::Sheet, style:
         }
         let height = h.min(width / (s.chars().count() as f64 * 0.95));
         out.texts.push(Text2d {
+            family: None,
             color: None,
             pen: Pen::Text,
             at: [x, y],
@@ -136,6 +137,7 @@ fn office_stamp(out: &mut TitleBlock, doc: &Document, sheet: &crate::document::S
         }
         let height = (size * h).min(width * w / (s.chars().count() as f64 * 0.95));
         out.texts.push(Text2d {
+            family: None,
             pen: Pen::Text,
             color: Some(color),
             at: at(x, y),

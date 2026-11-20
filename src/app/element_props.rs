@@ -475,6 +475,12 @@ impl App {
         if super::element_drawing::frame(&shape).is_some() {
             rows = rows.push(button(text(l.text("Elementtekening", "Element drawing")).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::ElementDrawing(l)));
         }
+        if e.class() == "IfcColumn" && e.pile_number.is_none() {
+            rows = rows.push(button(text(l.text("Opnemen in paalstaat", "Register as pile")).size(12)).on_press(Message::DesignatePiles));
+        }
+        if matches!(shape, Shape::Linear(_)) && e.pile_number.is_none() && !e.reinforcing_bar {
+            rows = rows.push(button(text(l.text("Markeren als wapeningsstaaf", "Mark as reinforcing bar")).size(12)).on_press(Message::DesignateReinforcement));
+        }
         let has = |f: F| value(&shape, f).is_some();
         let fields: [(F, &str); 11] = [
             (F::Height, l.text("Hoogte (m)", "Height (m)")),

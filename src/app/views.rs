@@ -631,6 +631,10 @@ impl App {
                     .style(move |_, s| p.row_button(s))
                     .on_press(make),
             );
+            if kind == PlanKind::StructuralUp {
+                let name = l.text("Paalstaat", "Pile schedule");
+                body = body.push(button(text(name).size(12)).on_press(Message::NewPileSchedule(Arc::from(level.path.as_str()), name)));
+            }
         }
         body
     }

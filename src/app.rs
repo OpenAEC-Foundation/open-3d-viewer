@@ -759,6 +759,9 @@ pub enum Message {
     Exported(Option<Result<(PathBuf, f32), String>>),
     /// Delete was pressed (not in a text field): remove what is picked, on a sheet or a view.
     DeletePicked,
+    DesignatePiles,
+    DesignateReinforcement,
+    NewPileSchedule(Arc<str>, &'static str),
     /// Remove what is picked on the sheet shown.
     RemovePicked,
     /// Set the scale of a placed view: sheet, index, 1 : scale.
@@ -2240,6 +2243,9 @@ impl App {
             Message::SpaceNameDone => self.modeller.space_typing = None,
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
+            Message::NewPileSchedule(level, name) => self.new_pile_schedule_view(&level, name),
+            Message::DesignatePiles => self.designate_members(false),
+            Message::DesignateReinforcement => self.designate_members(true),
             Message::ElementDrawing(l) => self.element_drawing(l),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::ResetOpeningFraming(index) => self.reset_opening_framing(index),

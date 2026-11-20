@@ -737,6 +737,7 @@ impl App {
     /// the one shown before, and the scene is put together again without moving the camera.
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
+        self.issue_pile_numbers();
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
         let (mut layers, parts) = viewer_layers(&self.modeller.model, &levels, &self.library);
         // the spaces its walls close in stand beside its elements, on a layer of their own

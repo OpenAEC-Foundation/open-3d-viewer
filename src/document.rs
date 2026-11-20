@@ -617,6 +617,8 @@ pub enum LevelError {
 /// The project document.
 #[derive(Debug, Clone, Default)]
 pub struct Document {
+    /// Highest issued pile number, including piles since removed.
+    pub(crate) pile_high_water: u64,
     /// Low to high; equal elevations by name.
     levels: Vec<Level>,
     /// Floor plans, in the order they were made.
@@ -767,8 +769,8 @@ impl Document {
             let views: Vec<Value> = s.views.iter().map(|v| json!({"view": v.plan, "at": v.at, "scale": v.scale})).collect();
             nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "paper": s.paper, "views": views}}}));
         }
-        if !nodes.is_empty() {
-            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
+        if !nodes.is_empty() || self.pile_high_water > 0 {
+            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "pile_high_water": self.pile_high_water, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
         }
         nodes
     }
@@ -783,6 +785,9 @@ impl Document {
     /// [`Self::adopt_ifcx`], with `hidden` giving the elements a view hides from its attribute.
     pub fn adopt_ifcx_with(&mut self, nodes: &[(String, Value)], hidden: &dyn Fn(&Value) -> UnitKeySet) {
         let hidden = |v: &Value| Arc::new(hidden(v));
+        for high in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("pile_high_water")?.as_u64()) {
+            self.pile_high_water = self.pile_high_water.max(high);
+        }
         // the styles first: the dimensions name them
         for style in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("dimension_styles")?.as_array()).flatten().filter_map(DimensionStyle::from_ifcx) {
             self.set_dimension_style(style);

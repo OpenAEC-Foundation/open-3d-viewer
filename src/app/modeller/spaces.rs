@@ -404,6 +404,9 @@ impl App {
         let top_word = if self.modeller.top_word.is_empty() { "top" } else { self.modeller.top_word };
         let model = &self.modeller.model;
         self.document.set_plan_tags(|plan| {
+            if plan.drawing.as_deref() == Some("pile-schedule") {
+                return super::structure::schedule_table(model, plan);
+            }
             if plan.kind.structural() {
                 let elevation = levels.iter().find(|(path, _)| *path == plan.level).map_or(0.0, |(_, e)| *e);
                 return (super::structure::tags(model, &plan.level, elevation, plan.scale, top_word), Vec::new());

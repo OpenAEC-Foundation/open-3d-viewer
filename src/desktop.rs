@@ -640,8 +640,13 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         }
         if let Some(number) = args.sheet.as_ref().filter(|n| n.as_str() != "all") {
             let model = app.model.clone().ok_or("no model")?;
-            let i = model.project.sheets.iter().position(|s| &s.number == number).ok_or(format!("no sheet {number} in the file"))?;
-            let _ = app.update(Message::OpenSheet(i));
+            let native = app.document_now().sheets().iter().find(|s| &s.number == number).map(|s| s.path.clone());
+            if let Some(path) = native {
+                let _ = app.update(Message::OpenDocSheet(path.into()));
+            } else {
+                let i = model.project.sheets.iter().position(|s| &s.number == number).ok_or(format!("no sheet {number} in the file"))?;
+                let _ = app.update(Message::OpenSheet(i));
+            }
         }
         if let Some(name) = &args.saved_view {
             let model = app.model.clone().ok_or("no model")?;
@@ -702,6 +707,12 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let mut every = false;
     if args.sheet.as_deref() == Some("all") {
         every = true;
+        let native: Vec<_> = studio.app.document_now().sheets().iter().map(|s| (s.number.clone(), s.path.clone())).collect();
+        for (i, (number, path)) in native.iter().enumerate() {
+            eprintln!("native sheet {i}: {number}");
+            let _ = studio.app.update(Message::OpenDocSheet(path.as_str().into()));
+            studio.snapshot(iced::Size::new(w, h), &out.with_file_name(format!("{stem}-native-sheet-{i:02}.png")))?;
+        }
         let sheets = studio.app.model.as_ref().map_or(0, |m| m.project.sheets.len());
         for i in 0..sheets {
             eprintln!("sheet {i}: {}", studio.app.model.as_ref().map(|m| format!("{} {}", m.project.sheets[i].number, m.project.sheets[i].name)).unwrap_or_default());

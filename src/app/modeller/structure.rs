@@ -4,9 +4,8 @@
 //! - **A beam**: its profile, its strength class and the top of the beam to the plan's level in
 //!   millimetres (`HEA 200 S355 b.k. +2800`), along the beam, over its line.
 //! - **A column**: its profile and its strength class, beside it.
-//! - **A pile**: a column that stands wholly under its level. The piles of a level are numbered
-//!   row by row, from the top of the drawing down and from left to right; each has its number
-//!   to its lower right. [`piles`] gives them in that order, for the plan and for the pile schedule.
+//! - **A pile**: a registered member with an issued project-wide number. Legacy columns below
+//!   their level receive numbers in row order the first time they are read.
 //!
 //! The pile schedule is a schedule of the project beside those a file brings: per pile its level,
 //! number, place, profile, strength class, cut-off level, tip and length. It follows the model.
@@ -23,7 +22,7 @@ const ROW: f64 = 0.05;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pile {
     pub id: ElementId,
-    pub number: usize,
+    pub number: u64,
     pub at: DVec2,
     pub head: f64,
     pub tip: f64,
@@ -49,8 +48,8 @@ fn members<'a>(model: &'a Model, level: &'a str) -> impl Iterator<Item = (&'a bi
 /// numbered row by row from the top of the drawing down, each row from left to right.
 pub fn piles(model: &Model, level: &str, elevation: f64) -> Vec<Pile> {
     let mut piles: Vec<Pile> = members(model, level)
-        .filter(|(e, l)| e.class() == "IfcColumn" && l.start.z.max(l.end.z) <= elevation + 1e-6)
-        .map(|(e, l)| Pile { id: e.id, number: 0, at: l.start.truncate(), head: l.start.z.max(l.end.z), tip: l.start.z.min(l.end.z), profile: l.profile.name(), grade: e.grade.clone() })
+        .filter(|(e, l)| e.pile_number.is_some() || (e.class() == "IfcColumn" && l.start.z.max(l.end.z) <= elevation + 1e-6))
+        .map(|(e, l)| Pile { id: e.id, number: e.pile_number.unwrap_or(0), at: l.start.truncate(), head: l.start.z.max(l.end.z), tip: l.start.z.min(l.end.z), profile: l.profile.name(), grade: e.grade.clone() })
         .collect();
     // rows by y, within a row by x
     piles.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
@@ -69,8 +68,9 @@ pub fn piles(model: &Model, level: &str, elevation: f64) -> Vec<Pile> {
         numbered.extend(row);
     }
     for (k, pile) in numbered.iter_mut().enumerate() {
-        pile.number = k + 1;
+        if pile.number == 0 { pile.number = k as u64 + 1; }
     }
+    numbered.sort_by_key(|pile| pile.number);
     numbered
 }
 
@@ -109,7 +109,7 @@ pub fn tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &s
                 let top = l.start.z.max(l.end.z) + up - elevation;
                 notes.push(note(middle + along.perp() * (side + gap), format!("{what} {top_word} {}", to_level(top)), Align::Center, along.y.atan2(along.x)));
             }
-            "IfcColumn" => {
+            "IfcColumn" | "IfcPile" => {
                 let at = l.start.truncate() + DVec2::splat(side + gap);
                 match piles.iter().find(|p| p.id == e.id) {
                     // to its lower right, clear of the label of a beam that lies over it
@@ -123,10 +123,98 @@ pub fn tags(model: &Model, level: &str, elevation: f64, scale: f64, top_word: &s
     notes
 }
 
+/// An on-sheet schedule reads the same issued identity and live coordinates as the schedule pane.
+pub fn schedule_table(model: &Model, plan: &crate::document::PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>) {
+    let (lo, hi) = plan.crop.unwrap_or(([0.0, 0.0], [22.0, 40.0]));
+    let mut entries: Vec<_> = model.iter().filter_map(|e| {
+        let n = e.pile_number?;
+        let Shape::Linear(l) = e.shape_in_project(&model.grid) else { return None };
+        Some((n, e.pile_mark.as_deref().unwrap_or(&e.name), l.start))
+    }).collect();
+    entries.sort_by_key(|(n, _, _)| *n);
+    let height = (plan.scale * NOTE_HEIGHT).max(0.001);
+    let row = height * 3.2;
+    let rows = (((hi[1] - lo[1]) / row).floor() as usize).saturating_sub(2).max(1);
+    let groups = entries.len().div_ceil(rows).max(1);
+    let group_width = (hi[0] - lo[0]) / groups as f64;
+    let mut notes = Vec::new();
+    let mut lines = Vec::new();
+    for group in 0..groups {
+        let length = entries.len().saturating_sub(group * rows).min(rows);
+        let left = lo[0] + group as f64 * group_width;
+        let top = hi[1] - 0.3 * row;
+        let bottom = top - (1 + length) as f64 * row;
+        for col in [0.0, 0.1, 0.525, 0.765, 0.99] {
+            let x = left + col * group_width;
+            lines.push([[x, top], [x, bottom]]);
+        }
+        for i in 0..=length + 1 {
+            let y = top - i as f64 * row;
+            lines.push([[left, y], [left + group_width * 0.99, y]]);
+        }
+        let mut write = |r: usize, cols: [String; 4]| {
+            for (i, text) in cols.into_iter().enumerate() {
+                let x = lo[0] + (group as f64 + [0.015, 0.115, 0.54, 0.78][i]) * group_width;
+                notes.push(Note { at: [x, hi[1] - (r + 1) as f64 * row], text, size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, level: false, face: Default::default() });
+            }
+        };
+        write(0, ["Nr.".into(), "ID".into(), "X (m)".into(), "Y (m)".into()]);
+        for (r, (n, mark, at)) in entries.iter().skip(group * rows).take(rows).enumerate() {
+            write(r + 1, [format!("{n:02}"), mark.to_string(), format!("{:.4}", at.x), format!("{:.4}", at.y)]);
+        }
+    }
+    (notes, lines)
+}
+
 /// What the pile schedule and its columns are called when the interface has not said.
 pub const PILE_WORDS: [&str; 10] = ["Pile schedule", "Level", "No.", "X (mm)", "Y (mm)", "Pile", "Grade", "Cut-off level", "Pile tip", "Length (mm)"];
 
 impl crate::app::App {
+    pub(in crate::app) fn new_pile_schedule_view(&mut self, level: &str, name: &str) {
+        let Some(path) = self.document.add_plan_of(level, crate::document::PlanKind::Structural, name) else { return };
+        self.document.set_view_drawing(&path, Some("pile-schedule".into()));
+        let layers = self.model.iter().flat_map(|model| model.layers.iter().map(|l| (l.name.clone(), false))).collect();
+        self.document.set_view_layers(&path, layers);
+        let count = self.modeller.model.iter().filter(|e| e.pile_number.is_some()).count();
+        self.document.set_crop(&path, Some(([0.0, 0.0], [22.0, 1.0 + 0.8 * (count + 1) as f64])));
+        self.tag_plans();
+        self.open_plan(&path);
+    }
+
+    /// Issue numbers before rebuilding the native scene so the saved definitions contain them.
+    pub(in crate::app) fn issue_pile_numbers(&mut self) {
+        let model = &mut self.modeller.model;
+        let high = &mut self.document.pile_high_water;
+        *high = (*high).max(model.iter().filter_map(|e| e.pile_number).max().unwrap_or(0));
+        let levels: Vec<_> = self.document.levels().iter().map(|l| (l.path.clone(), l.elevation)).collect();
+        let mut high = self.document.pile_high_water;
+        for (level, elevation) in levels {
+            for pile in piles(model, &level, elevation) {
+                let Some(e) = model.get(pile.id) else { continue };
+                if e.pile_number.unwrap_or(0) > 0 { continue; }
+                let Some(next) = high.checked_add(1) else { continue };
+                let mut e = e.clone();
+                e.pile_number = Some(next);
+                model.insert(e);
+                high = next;
+            }
+        }
+        self.document.pile_high_water = high;
+    }
+
+    pub(in crate::app) fn designate_members(&mut self, reinforcement: bool) {
+        let ids = self.selected_modelled();
+        let model = &mut self.modeller.model;
+        for id in ids {
+            if let Some(e) = model.get(id).filter(|e| matches!(e.shape, Shape::Linear(_)) && e.pile_number.is_none() && (reinforcement || e.class() == "IfcColumn")) {
+                let mut e = e.clone();
+                if reinforcement { e.reinforcing_bar = true; } else { e.pile_number = Some(0); }
+                model.insert(e);
+            }
+        }
+        self.show_modelled();
+    }
+
     /// The pile schedule, made again from the model: a row per pile of every level, a click on
     /// which selects the pile. It comes when the first pile is drawn and stays, empty, when the
     /// last one goes, so the schedules keep their places.
@@ -194,7 +282,7 @@ mod tests {
     #[test]
     fn piles_are_the_columns_under_their_level_numbered_row_by_row() {
         let piles = piles(&model(), "ground", 0.0);
-        let found: Vec<(usize, f64, f64)> = piles.iter().map(|p| (p.number, p.at.x, p.at.y)).collect();
+        let found: Vec<(u64, f64, f64)> = piles.iter().map(|p| (p.number, p.at.x, p.at.y)).collect();
         assert_eq!(found, [(1, 0.0, 5.0), (2, 6.0, 5.02), (3, 0.0, 0.0), (4, 6.0, 0.0)]);
         assert_eq!((piles[0].head, piles[0].tip, piles[0].profile.as_str(), piles[0].grade.as_deref()), (-0.93, -18.93, "Ø300", Some("C35/45")));
         // of another level: none
@@ -224,6 +312,67 @@ mod tests {
         assert_eq!((to_level(0.0), to_level(-0.0004), to_level(2.8)), ("+0".to_string(), "+0".to_string(), "+2800".to_string()));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "requires a local issued IFCX fixture and an empty output folder"]
+    fn issued_piles_survive_project_revision() {
+        use crate::app::App;
+        use crate::loaders::{load_with, Progress, Source};
+        use std::{path::PathBuf, sync::Arc};
+        let source = PathBuf::from(std::env::var_os("PILE_TEST_IFCX").unwrap());
+        let out = PathBuf::from(std::env::var_os("PILE_TEST_OUTPUT").unwrap());
+        std::fs::create_dir(&out).expect("fresh output folder");
+        let open = |path| {
+            let mut app = App::default();
+            app.set_model(Arc::new(load_with(&Source::File(path), &Progress::default()).unwrap()));
+            app
+        };
+        let save = |app: &App, name: &str| {
+            let bytes = crate::export::to_bytes(app.model.as_ref().unwrap(), &app.document_now(), name).unwrap();
+            let path = out.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let mut app = open(source);
+        let issued = |app: &App| -> std::collections::BTreeMap<u64, ElementId> {
+            app.modeller.model.iter().filter_map(|e| Some((e.pile_number?, e.id))).collect()
+        };
+        let before = issued(&app);
+        let (&highest, _) = before.last_key_value().unwrap();
+        let (&first_number, &first_id) = before.first_key_value().unwrap();
+        let model = &mut app.modeller.model;
+        let mut moved = model.get(first_id).unwrap().clone();
+        moved.translate(&model.grid, DVec3::new(0.125, -0.25, 0.0));
+        model.replace(moved.clone()).unwrap();
+        let added = model.add(moved.clone()).unwrap();
+        app.show_modelled();
+        assert_eq!(issued(&app)[&first_number], first_id);
+        assert_eq!(issued(&app)[&(highest + 1)], added);
+        app.modeller.model.remove(added);
+        app.show_modelled();
+        let mut back = open(save(&app, "reopened.ifcx"));
+        assert_eq!(issued(&back), before);
+        assert_eq!(back.modeller.model.get(first_id).unwrap(), &moved);
+        let inserted = back.modeller.model.add(moved).unwrap();
+        back.show_modelled();
+        assert_eq!(issued(&back)[&(highest + 2)], inserted);
+        let count = before.len() + 1;
+        let schedule = back.schedules.iter().find(|s| s.name == back.modeller.pile_schedule).unwrap();
+        assert_eq!(schedule.rows.len(), count);
+        let sheet_table = back.document.plans().iter().find(|p| p.drawing.as_deref() == Some("pile-schedule")).unwrap();
+        assert!(sheet_table.tags.iter().any(|n| n.text == format!("{:02}", highest + 2)));
+        let baseline = open(save(&open(std::env::var_os("PILE_TEST_IFCX").unwrap().into()), "issued.ifcx"));
+        assert_eq!(issued(&baseline), before);
+        let mut baseline = baseline;
+        let sheets: Vec<_> = baseline.document.sheets().iter().map(|s| (s.path.clone(), s.number.clone())).collect();
+        for (index, (path, number)) in sheets.iter().enumerate() {
+            baseline.open_doc_sheet(path);
+            baseline.export_shown_to(&out.join(format!("sheet-{}.pdf", index + 1))).unwrap();
+            eprintln!("exported {}: {}", index + 1, number);
+        }
+        eprintln!("{} issued piles; retained {}, deleted {}, next {}", before.len(), first_number, highest + 1, highest + 2);
+    }
+
     #[test]
     fn the_pile_schedule_follows_the_model() {
         use crate::app::modeller::ModelTool;
@@ -244,13 +393,13 @@ mod tests {
         let [schedule] = &app.schedules[..] else { panic!("{:?}", app.schedules) };
         assert_eq!((schedule.name.as_str(), schedule.columns.len(), schedule.rows.len()), ("Pile schedule", 9, 2));
         let cells = |row: usize| schedule.rows[row].cells.iter().map(|c| c.clone().unwrap()).collect::<Vec<_>>();
-        assert_eq!(cells(0), ["Level 0", "1", "0", "0", "Concrete round 300", "C35/45", "-930", "-18930", "18000"]);
-        assert_eq!(cells(1)[1..4], ["2", "2000", "0"]);
+        assert_eq!(cells(0), ["Level 0", "1", "2000", "0", "Concrete round 300", "C35/45", "-930", "-18930", "18000"]);
+        assert_eq!(cells(1)[1..4], ["2", "0", "0"]);
         // a structural plan says their numbers
         let _ = app.update(Message::NewPlanOf(level.into(), crate::document::PlanKind::Structural, "structure"));
         let plan = app.document.plans()[0].path.clone();
         let tags: Vec<&str> = app.document.view_tags(&plan).iter().map(|n| n.text.as_str()).collect();
-        assert_eq!(tags, ["2", "1"]);
+        assert_eq!(tags, ["1", "2"]);
         // the piles gone: the schedule stays, empty
         for id in [1, 2] {
             app.select_modelled(ElementId(id));

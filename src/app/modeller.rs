@@ -649,6 +649,12 @@ impl App {
             }
         }
         match added {
+            Ok(_) if tool.service().is_some() => {
+                self.modeller.placement.risen(tool, a.truncate().distance(b.truncate()) < 1e-6);
+                if self.modeller.placement.chain {
+                    self.modeller.points = vec![b];
+                }
+            }
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];
                 self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
@@ -998,7 +1004,8 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
         ModelTool::Duct | ModelTool::RoundDuct | ModelTool::Pipe | ModelTool::CableTray => {
             let up = DVec3::Z * (z + s.height.unwrap_or(SERVICE_HEIGHT) - a.z);
             let role = tool.service().unwrap_or_default();
-            Shape::Linear(LinearDef { start: a + up, end: b + up, profile: service_profile(tool, s.width, s.depth), roll: 0.0, role })
+            // its rise takes its end up (a slope; a riser when both clicks are one point)
+            Shape::Linear(LinearDef { start: a + up, end: b + up + DVec3::Z * s.offset, profile: service_profile(tool, s.width, s.depth), roll: 0.0, role })
         }
         ModelTool::Wall => {
             let base = z + s.offset;
@@ -1359,6 +1366,18 @@ mod tests {
         click(&mut app, 30.0, 0.0);
         let kinds: Vec<_> = app.modeller.model.iter().filter_map(|e| match &e.shape { Shape::Connection(c) => Some(c.kind), _ => None }).collect();
         assert!(matches!(kinds.last(), Some(bim_core::ConnectionKind::Transition(_))), "{kinds:?}");
+        // a pipe with a rise typed and both clicks on one point is a riser; the next starts at its top
+        app.set_model_tool(Some((ModelTool::Pipe, "Pipe")));
+        app.place_message(PlaceMessage::Field(PlaceField::Height, "0.3".into()));
+        app.place_message(PlaceMessage::Field(PlaceField::Offset, "2.5".into()));
+        click(&mut app, 0.0, 20.0);
+        click(&mut app, 0.0, 20.0);
+        click(&mut app, 6.0, 20.0);
+        let pipes: Vec<LinearDef> = app.modeller.model.iter().filter(|e| e.class() == "IfcPipeSegment").filter_map(|e| match e.shape_in_project(&grid) { Shape::Linear(l) => Some(l), _ => None }).collect();
+        assert_eq!(pipes.len(), 2);
+        assert!((pipes[0].start - DVec3::new(0.0, 20.0, 0.3)).length() < 1e-9 && (pipes[0].end - DVec3::new(0.0, 20.0, 2.8)).length() < 1e-9, "{:?}", pipes[0]);
+        assert!((pipes[1].start.z - 2.8).abs() < 1e-9 && (pipes[1].end.z - 2.8).abs() < 1e-9, "{:?}", pipes[1]);
+        assert_eq!(app.modeller.model.iter().filter(|e| e.class() == "IfcPipeFitting").count(), 1);
     }
 
     #[test]

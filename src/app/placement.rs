@@ -177,6 +177,21 @@ impl Placement {
     fn set(&mut self, tool: ModelTool, settings: Settings) {
         self.settings.insert(tool, settings);
     }
+
+    /// A run of a service was placed with a rise: the next one starts at the height it ended
+    /// at. One that went straight up or down (`vertical`) was a riser, so the next runs level.
+    pub(super) fn risen(&mut self, tool: ModelTool, vertical: bool) {
+        let mut s = self.of(tool);
+        if tool.service().is_none() || s.offset == 0.0 {
+            return;
+        }
+        s.height = Some(s.height.unwrap_or(super::modeller::SERVICE_HEIGHT) + s.offset);
+        if vertical {
+            s.offset = 0.0;
+        }
+        self.typing = None;
+        self.set(tool, s);
+    }
 }
 
 impl App {
@@ -284,8 +299,8 @@ fn fields(tool: ModelTool, l: Language) -> Vec<(PlaceField, &'static str)> {
         ModelTool::Beam => vec![width, (F::Depth, l.text("Profielhoogte", "Profile height")), (F::Height, l.text("Bovenkant", "Top height"))],
         ModelTool::System => vec![height, base],
         ModelTool::Point => vec![width, depth, height, base],
-        ModelTool::Duct | ModelTool::CableTray => vec![width, (F::Depth, l.text("Hoogte", "Height")), (F::Height, l.text("Hart boven niveau", "Centre above level"))],
-        ModelTool::RoundDuct | ModelTool::Pipe => vec![(F::Width, l.text("Diameter", "Diameter")), (F::Height, l.text("Hart boven niveau", "Centre above level"))],
+        ModelTool::Duct | ModelTool::CableTray => vec![width, (F::Depth, l.text("Hoogte", "Height")), (F::Height, l.text("Hart boven niveau", "Centre above level")), (F::Offset, l.text("Stijging", "Rise"))],
+        ModelTool::RoundDuct | ModelTool::Pipe => vec![(F::Width, l.text("Diameter", "Diameter")), (F::Height, l.text("Hart boven niveau", "Centre above level")), (F::Offset, l.text("Stijging", "Rise"))],
         ModelTool::Door => vec![width, height],
         ModelTool::Window => vec![width, height, (F::Sill, l.text("Borstwering", "Sill"))],
     }

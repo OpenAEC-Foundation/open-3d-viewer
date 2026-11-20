@@ -44,7 +44,7 @@ impl PlacedImage {
         if format == ImageFormat::Jpeg && decoded.color() != image::ColorType::Rgb8 {
             return Err("A drawing JPEG must contain RGB colour".into());
         }
-        let handle = Handle::from_bytes(bytes.clone());
+        let handle = Handle::from_rgba(w, h, decoded.into_rgba8().into_raw());
         Ok(Self {
             bounds,
             clip: bounds,
@@ -82,9 +82,8 @@ impl PlacedImage {
         };
         if let (Some(bounds), Some(clip)) = (rect(self.bounds), rect(self.clip)) {
             frame.with_clip(clip, |f| {
-                let at = Point::new(bounds.x - clip.x, bounds.y - clip.y);
                 f.draw_image(
-                    Rectangle::new(at, bounds.size()),
+                    bounds,
                     canvas::Image::new(self.handle.clone()),
                 );
             });

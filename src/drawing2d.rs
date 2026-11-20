@@ -418,13 +418,6 @@ impl Drawing2d {
         self.texts.push(Text2d { color: None, pen: Pen::Text, at, height, text: text.into(), align, angle });
     }
 
-    /// The lines a view draws itself (they are cut to its crop where they are read), through `to`.
-    fn detail(&mut self, lines: &[[[f64; 2]; 2]], to: &dyn Fn([f64; 2]) -> [f64; 2]) {
-        for [a, b] in lines {
-            self.line(Pen::Detail, to(*a), to(*b));
-        }
-    }
-
     fn view_details(&mut self, doc: &Document, view: &str, to: &dyn Fn([f64; 2]) -> [f64; 2]) {
         for mut polygon in view_polygons(doc, view) {
             polygon.points.iter_mut().for_each(|q| *q = to(*q));

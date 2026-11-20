@@ -62,6 +62,7 @@ pub mod standards;
 pub mod systems;
 pub mod type_follow;
 mod marks;
+mod navigation;
 mod gis;
 mod geo;
 mod map;
@@ -320,6 +321,8 @@ pub struct App {
     pub views_in_3d: bool,
     /// The 3D view draws ambient shadows (in its shaded styles).
     pub ambient: bool,
+    /// What a drag with each mouse button does in the viewport (kept between sessions).
+    pub mouse_buttons: crate::viewport::MouseButtons,
     /// The size a point of a cloud is drawn at (pixels).
     pub point_size: f32,
     /// Shade the points of a cloud by depth (eye-dome lighting).
@@ -492,6 +495,9 @@ pub struct App {
     hover_scene: Option<HoverScene>,
     /// Boxes around blocks of triangles of the model, for the ray of a click or hover.
     pick_index: Option<PickIndex>,
+    /// The navigation under way: the point a drag orbits about, the depth it pans at, the
+    /// point the wheel moves towards.
+    nav: navigation::Navigation,
     /// The selection and hover of structural nodes and members.
     pub(crate) structural: structural::StructuralView,
     /// The modelled elements and the tool placing them.
@@ -501,7 +507,7 @@ pub struct App {
 /// Width of the right-click menu (logical pixels), and about its height, to keep it inside the
 /// viewport.
 const MENU_WIDTH: f32 = 230.0;
-const MENU_HEIGHT: f32 = 200.0;
+const MENU_HEIGHT: f32 = 260.0;
 
 type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>, Arc<UnitKeySet>);
 
@@ -513,6 +519,9 @@ pub enum MenuItem {
     ShowAll,
     SelectLayer,
     ClearSelection,
+    /// The point under the menu is the one to orbit about (shown) until let go.
+    PivotHere,
+    ClearPivot,
     Undo,
 }
 
@@ -736,6 +745,8 @@ pub enum Message {
     ToggleViewsIn3d,
     /// Ambient shadows in the 3D view on or off.
     ToggleAmbient,
+    /// What a drag with each mouse button does in the viewport.
+    MouseButtons(crate::viewport::MouseButtons),
     /// Colour the points of the clouds another way.
     CloudColor(crate::cloud_color::CloudColor),
     /// Colour the mesh of a simulation file by another field, or show another time step.
@@ -1110,6 +1121,7 @@ impl Default for App {
             kept_faces: Default::default(),
             views_in_3d: false,
             ambient: false,
+            mouse_buttons: Default::default(),
             point_size: 2.5,
             cloud_depth: true,
             analysis: crate::structural::diagrams::Shown { scale: 1.0, ..Default::default() },
@@ -1197,6 +1209,7 @@ impl Default for App {
             hover_last: None,
             hover_scene: None,
             pick_index: None,
+            nav: Default::default(),
             structural: Default::default(),
             modeller: Default::default(),
         }
@@ -1788,6 +1801,7 @@ impl App {
         self.viewport_origin = from.viewport_origin;
         self.fingers = from.fingers;
         self.remote.enabled = from.remote.enabled;
+        self.mouse_buttons = from.mouse_buttons;
     }
 
     /// Whether this project has a model or is loading one: a new file then opens in a tab of its
@@ -1808,6 +1822,8 @@ impl App {
     }
 
     pub fn set_model(&mut self, model: Arc<Model>) {
+        // a point marked to orbit about belonged to the model before
+        self.nav.marked = None;
         self.picked_model = None;
         self.folded.clear();
         self.projected.clear();
@@ -2479,28 +2495,38 @@ impl App {
                     self.context_menu = None;
                 }
                 match n {
-                // a drawing view is not turned: dragging moves it (a 3D view turns)
-                Navigate::Orbit { dx, dy } if self.active_plan.as_deref().is_some_and(|p| self.document.view_3d(p).is_none()) => {
-                    self.anim = None;
+                // the point to orbit about or the depth to pan at, looked up once (`navigation`)
+                Navigate::Grab { x, y, width, height, orbit } => self.grab(x, y, width, height, orbit),
+                Navigate::Release => self.release(),
+                Navigate::Hold { x, y } => self.hold(x, y),
+                Navigate::Pivot { x, y, width, height } if self.clicks_go_to_a_tool() => self.pick(x, y, width, height, false),
+                Navigate::Pivot { x, y, width, height } => self.mark_pivot(x, y, width, height),
+                // a drawing view is not turned either
+                Navigate::Look { dx, dy } if self.drawing_view_shown() => {
                     self.measure.hover = None;
-                    self.camera.pan(dx, dy, self.viewport_size.1)
+                    self.pan_drag(dx, dy, self.viewport_size.1)
+                }
+                Navigate::Look { dx, dy } => {
+                    self.measure.hover = None;
+                    self.look_drag(dx, dy)
+                }
+                // a drawing view is not turned: dragging moves it (a 3D view turns)
+                Navigate::Orbit { dx, dy } if self.drawing_view_shown() => {
+                    self.measure.hover = None;
+                    self.pan_drag(dx, dy, self.viewport_size.1)
                 }
                 Navigate::Orbit { dx, dy } => {
-                    self.anim = None;
                     self.measure.hover = None;
-                    self.camera.orbit(dx, dy)
+                    self.orbit_drag(dx, dy)
                 }
                 Navigate::Pan { dx, dy, height } => {
-                    self.anim = None;
                     self.measure.hover = None;
-                    self.camera.pan(dx, dy, height)
+                    self.pan_drag(dx, dy, height)
                 }
                 Navigate::Zoom { steps, x, y, width, height } => {
-                    self.anim = None;
                     // the viewport looks again on the next frame
                     self.measure.hover = None;
-                    let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
-                    self.camera.zoom_at(steps, ndc, width / height.max(1.0));
+                    self.wheel_zoom(steps, x, y, width, height);
                 }
                 Navigate::Resized { x, y, width, height } => {
                     self.viewport_origin = (x, y);
@@ -2538,14 +2564,23 @@ impl App {
                     self.anim = None;
                     self.measure.hover = None;
                     self.camera.pan(dx, dy, height);
-                    let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
-                    self.camera.zoom_at(steps, ndc, width / height.max(1.0));
+                    self.wheel_zoom(steps, x, y, width, height);
                 }
                 }
             }
             Message::ContextMenu(item) => {
-                self.context_menu = None;
+                let at = self.context_menu.take();
                 let message = match item {
+                    MenuItem::PivotHere => {
+                        if let Some(at) = at {
+                            self.place_pivot(at.x, at.y);
+                        }
+                        return Task::none();
+                    }
+                    MenuItem::ClearPivot => {
+                        self.clear_pivot();
+                        return Task::none();
+                    }
                     MenuItem::Hide => Message::HideSelection,
                     MenuItem::Isolate => Message::IsolateSelection,
                     MenuItem::ShowAll => Message::ShowAllElements,
@@ -2750,6 +2785,7 @@ impl App {
                 }
             }
             Message::ToggleAmbient => self.ambient = !self.ambient,
+            Message::MouseButtons(buttons) => self.mouse_buttons = buttons,
             Message::CloudColor(color) => self.cloud_color = color,
             Message::Field(change) => self.change_field(change),
             Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
@@ -4565,6 +4601,7 @@ impl App {
             looks: &self.unit_looks,
             drag_selects: self.drag_selects(),
             cursor3d: self.has_cursor3d(),
+            buttons: self.mouse_buttons,
             hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
@@ -4793,6 +4830,8 @@ impl App {
         // the spaces the walls close in: their names and areas
         let space_labels = self.space_labels(p.text_secondary).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let cursor3d = self.cursor3d_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let pivot = self.pivot_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let crosshair = self.crosshair_overlay().map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(view_labels)
@@ -4806,6 +4845,8 @@ impl App {
             // are picked, gripped and moved there as in the 3D view
             .push(space_labels)
             .push(cursor3d)
+            .push(pivot)
+            .push(crosshair)
             .push(placing)
             .push(joins)
             .push(temp_marks)
@@ -4845,6 +4886,9 @@ impl App {
             rule::horizontal(1),
             item(l.text("Laag selecteren", "Select layer"), "", MenuItem::SelectLayer, !self.sel.is_empty()),
             item(l.text("Selectie opheffen", "Clear selection"), "Esc", MenuItem::ClearSelection, selected),
+            rule::horizontal(1),
+            item(l.text("Draaipunt hier plaatsen", "Set pivot here"), l.text("dubbelklik", "double click"), MenuItem::PivotHere, self.model.is_some()),
+            item(l.text("Draaipunt opheffen", "Clear pivot"), "", MenuItem::ClearPivot, self.has_marked_pivot()),
             rule::horizontal(1),
             item(l.text("Ongedaan maken", "Undo"), Shortcut::ctrl('z').label(), MenuItem::Undo, self.can_undo()),
         ]
@@ -5600,8 +5644,11 @@ mod tests {
         let start = iced::Point::new(700.0, 300.0);
         ui.point_at(start);
         ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
-        ui.point_at(iced::Point::new(740.0, 310.0));
-        ui.simulate([iced::Event::Mouse(mouse::Event::CursorMoved { position: iced::Point::new(740.0, 310.0) })]);
+        // the drag grabs where it began, then orbits
+        for at in [iced::Point::new(740.0, 310.0), iced::Point::new(780.0, 320.0)] {
+            ui.point_at(at);
+            ui.simulate([iced::Event::Mouse(mouse::Event::CursorMoved { position: at })]);
+        }
         ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
         ui.simulate([iced::Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 } })]);
         let nav: Vec<Navigate> = ui
@@ -5611,7 +5658,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 40.0 && *dy == 10.0)), "{nav:?}");
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Grab { orbit: true, .. })), "{nav:?}");
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 80.0 && *dy == 20.0)), "{nav:?}");
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Release)), "{nav:?}");
         assert!(nav.iter().any(|n| matches!(n, Navigate::Zoom { steps, .. } if *steps == 1.0)), "{nav:?}");
     }
 
@@ -5634,8 +5683,8 @@ mod tests {
         let (one, two) = (Finger(1), Finger(2));
         let p = |x, y| iced::Point::new(x, y);
 
-        // one finger drags: orbit, and no pick
-        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(760.0, 320.0) }, T::FingerLifted { id: one, position: p(760.0, 320.0) }], false);
+        // one finger drags: grabs where it went down, orbits from there, and no pick
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(730.0, 310.0) }, T::FingerMoved { id: one, position: p(760.0, 320.0) }, T::FingerLifted { id: one, position: p(760.0, 320.0) }], false);
         assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 60.0 && *dy == 20.0)), "{nav:?}");
         assert!(!nav.iter().any(|n| matches!(n, Navigate::Pick { .. })), "{nav:?}");
 
@@ -5644,7 +5693,7 @@ mod tests {
         assert!(nav.iter().any(|n| matches!(n, Navigate::Pick { .. })), "{nav:?}");
 
         // a long press, then a drag: pan (as a right drag)
-        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(740.0, 300.0) }, T::FingerLifted { id: one, position: p(740.0, 300.0) }], true);
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(720.0, 300.0) }, T::FingerMoved { id: one, position: p(740.0, 300.0) }, T::FingerLifted { id: one, position: p(740.0, 300.0) }], true);
         assert!(nav.iter().any(|n| matches!(n, Navigate::Pan { dx, .. } if *dx == 40.0)), "{nav:?}");
         assert!(!nav.iter().any(|n| matches!(n, Navigate::Orbit { .. } | Navigate::Pick { .. })), "{nav:?}");
 

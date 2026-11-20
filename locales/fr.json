@@ -1668,6 +1668,14 @@
     "Click the line to extend to · Esc: stop": "Cliquez la ligne jusqu'à laquelle prolonger · Échap : arrêter",
     "Click the line that is extended · Esc: start again": "Cliquez la ligne à prolonger · Échap : recommencer",
     "Click the first line, on the side that stays · Esc: stop": "Cliquez la première ligne, du côté qui reste · Échap : arrêter",
-    "Click the second line, on the side that stays · Esc: start again": "Cliquez la seconde ligne, du côté qui reste · Échap : recommencer"
+    "Click the second line, on the side that stays · Esc: start again": "Cliquez la seconde ligne, du côté qui reste · Échap : recommencer",
+    "Mouse buttons": "Boutons de la souris",
+    "Left button drag": "Glisser avec le bouton gauche",
+    "Wheel pressed drag": "Glisser avec la molette enfoncée",
+    "Right button drag": "Glisser avec le bouton droit",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "La rotation se fait autour du point sous le curseur. Un double-clic ou le menu contextuel fixe un point de rotation ; il reste jusqu'à ce qu'un double-clic dans le vide ou le menu le supprime. En regardant autour, le curseur reste en place, comme dans un jeu. Maj + gauche déplace la vue, Maj + molette fait pivoter.",
+    "Set pivot here": "Placer le point de rotation ici",
+    "double click": "double-clic",
+    "Clear pivot": "Supprimer le point de rotation"
   }
 }

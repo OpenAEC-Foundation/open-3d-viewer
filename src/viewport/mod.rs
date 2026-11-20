@@ -1,8 +1,11 @@
 //! The 3D viewport: an iced `shader` widget program plus mouse navigation.
 //!
-//! As Revit: middle drag pans, Shift + middle drag orbits, the wheel zooms towards the cursor.
-//! Also left drag orbits, Shift + left or right drag pans, a left click (press and release on
-//! the same spot) picks, and a right click opens the menu of what is selected. While measuring, the cursor position is reported once per frame as it
+//! As BIM Vision (and issue #324), unless the settings give the buttons other work
+//! ([`MouseButtons`]): left drag orbits about the point under the cursor, right drag looks around
+//! from where the eye stands, middle drag pans, the wheel moves towards the cursor. Shift + left
+//! drag pans and Shift + middle drag orbits whatever the buttons do. A left click (press and
+//! release on the same spot) picks, a double click marks the point to orbit about, and a right
+//! click opens the menu of what is selected. While measuring, the cursor position is reported once per frame as it
 //! moves, so the app can highlight what a click would pick.
 //!
 //! On a touch screen (phones and tablets, through the web app): one finger orbits, two fingers
@@ -13,6 +16,7 @@
 
 pub mod box_select;
 pub mod camera;
+mod cursor_lock;
 pub mod chunks;
 pub mod render;
 pub mod splats;
@@ -38,11 +42,57 @@ const TAP_SLOP: f32 = 10.0;
 /// every later touch into a pinch.
 const STALE: Duration = Duration::from_secs(2);
 
+/// How long, and how far apart (logical pixels), two clicks make a double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+const DOUBLE_CLICK_SLOP: f32 = 6.0;
+
+/// What a drag with a mouse button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseAction {
+    /// Turn about the point under the cursor.
+    Orbit,
+    /// Turn the view about the eye: look around from where it stands.
+    Look,
+    /// Move the view with the cursor, as grabbing the model.
+    Pan,
+}
+
+/// What a drag with each mouse button does (a setting kept between sessions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MouseButtons {
+    pub left: MouseAction,
+    pub middle: MouseAction,
+    pub right: MouseAction,
+}
+
+impl Default for MouseButtons {
+    /// As BIM Vision: left orbits, right looks around, the wheel pressed pans.
+    fn default() -> Self {
+        Self { left: MouseAction::Orbit, middle: MouseAction::Pan, right: MouseAction::Look }
+    }
+}
+
 /// Navigation requests from the viewport.
 #[derive(Debug, Clone, Copy)]
 pub enum Navigate {
+    /// A drag starts to orbit (`orbit`) or pan from where the button went down, (x, y) in a
+    /// viewport of width × height: the app looks once what lies there, the point to orbit about
+    /// or the depth to pan at (issue #324). Comes before the drag's first `Orbit` or `Pan`.
+    Grab { x: f32, y: f32, width: f32, height: f32, orbit: bool },
+    /// The drag that a `Grab` started ended.
+    Release,
     Orbit { dx: f32, dy: f32 },
+    /// Look around from the eye by a drag of (dx, dy) logical pixels.
+    Look { dx: f32, dy: f32 },
+    /// Looking around holds the cursor, hidden, at (x, y) in the viewport: a crosshair shows
+    /// there until the drag ends (`Release`).
+    Hold { x: f32, y: f32 },
     Pan { dx: f32, dy: f32, height: f32 },
+    /// A double click at (x, y) in a viewport of width × height: the point there is the one to
+    /// orbit about until a double click in empty space (shown, the view stays as it is).
+    Pivot { x: f32, y: f32, width: f32, height: f32 },
     /// Wheel steps at (x, y) in a viewport of width × height (logical pixels).
     Zoom { steps: f32, x: f32, y: f32, width: f32, height: f32 },
     /// The viewport moved or changed size (logical pixels, origin in the window), for
@@ -89,6 +139,8 @@ pub struct Viewport3D<'a> {
     pub drag_selects: bool,
     /// Shift and the right button place the 3D cursor ([`Navigate::Cursor3d`]): in the Modeller.
     pub cursor3d: bool,
+    /// What a drag with each button does.
+    pub buttons: MouseButtons,
     /// Show the crosshair cursor (measuring) instead of the hand.
     pub crosshair: bool,
     /// Structural instances drawn again on top: the selection and the hover.
@@ -116,6 +168,15 @@ pub struct State {
     shift: bool,
     /// Ctrl (Cmd on macOS) is held: a click adds to the selection.
     command: bool,
+    /// The drag under way was announced with [`Navigate::Grab`] (and ends with a release).
+    grabbed: bool,
+    /// Where and when the last left click picked: a second one soon after on the same spot is a
+    /// double click.
+    last_click: Option<(Point, Instant)>,
+    /// Where a look-around drag holds the cursor, and whether it does yet (the cursor is then
+    /// hidden).
+    look_anchor: Option<cursor_lock::Anchor>,
+    looking: bool,
     bounds: Rectangle,
     /// Where the cursor moved to since the last frame, reported on the next frame.
     hover: Option<Point>,
@@ -145,6 +206,7 @@ enum Gesture {
 #[derive(Clone, Copy, PartialEq)]
 enum Drag {
     Orbit,
+    Look,
     Pan,
     /// Ctrl + left: a selection box from the point the button went down.
     Box,
@@ -207,17 +269,27 @@ where
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let position = cursor.position_in(bounds)?;
+                let as_set = |action: MouseAction| match action {
+                    MouseAction::Orbit => Drag::Orbit,
+                    MouseAction::Look => Drag::Look,
+                    MouseAction::Pan => Drag::Pan,
+                };
+                let shift_pans = *button == mouse::Button::Left && state.shift && !(state.command || self.drag_selects);
                 let drag = match button {
                     mouse::Button::Left if state.command || self.drag_selects => Drag::Box,
                     mouse::Button::Left if state.shift => Drag::Pan,
-                    mouse::Button::Left => Drag::Orbit,
+                    mouse::Button::Left => as_set(self.buttons.left),
                     mouse::Button::Middle if state.shift => Drag::Orbit,
+                    mouse::Button::Middle => as_set(self.buttons.middle),
                     mouse::Button::Right if state.shift && self.cursor3d => Drag::Cursor3d,
-                    mouse::Button::Right | mouse::Button::Middle => Drag::Pan,
+                    mouse::Button::Right => as_set(self.buttons.right),
                     _ => return None,
                 };
                 state.drag = Some((drag, position));
-                state.press = (*button == mouse::Button::Left && matches!(drag, Drag::Orbit | Drag::Box)).then_some(position);
+                state.look_anchor = (drag == Drag::Look).then(cursor_lock::hold).flatten();
+                state.looking = false;
+                // a left click picks, unless Shift pans with it
+                state.press = (*button == mouse::Button::Left && !shift_pans).then_some(position);
                 state.right_press = (*button == mouse::Button::Right && drag != Drag::Cursor3d).then_some(position);
                 // a click keeps the highlight it takes; a drag does not
                 state.hover = None;
@@ -228,14 +300,31 @@ where
             }
             Event::Mouse(mouse::Event::ButtonReleased(_)) => {
                 let drag = state.drag.take();
+                state.look_anchor = None;
+                state.looking = false;
                 let press = state.press.take();
+                if std::mem::take(&mut state.grabbed) {
+                    if self.hover {
+                        // after orbiting or panning, what is under the cursor changed
+                        state.hover = cursor.position_in(bounds);
+                    }
+                    return Some(shader::Action::publish(Message::from(Navigate::Release)).and_capture());
+                }
                 if let (Some(start), Some(at)) = (state.right_press.take(), cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
                         return publish(Navigate::Context { x: at.x, y: at.y, width: bounds.width, height: bounds.height });
                     }
                 }
-                if let (Some((Drag::Orbit | Drag::Box, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
+                if let (Some(_), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
+                        let now = Instant::now();
+                        // a second click soon after on the same spot marks the point to orbit about
+                        if let Some((first, when)) = state.last_click.take() {
+                            if first.distance(at) < DOUBLE_CLICK_SLOP && now.saturating_duration_since(when) < DOUBLE_CLICK && !self.drag_selects {
+                                return publish(Navigate::Pivot { x: at.x, y: at.y, width: bounds.width, height: bounds.height });
+                            }
+                        }
+                        state.last_click = Some((at, now));
                         // in the Select tool of the Modeller Shift adds too
                         let add = state.command || (self.drag_selects && state.shift);
                         return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add });
@@ -280,15 +369,43 @@ where
                         return Some(shader::Action::capture());
                     }
                     state.press = None;
+                    // a drag between two clicks makes them no double click
+                    state.last_click = None;
                 }
                 if drag == Drag::Box {
                     // the box keeps where it started
                     return publish(Navigate::Box { x0: last.x, y0: last.y, x1: position.x, y1: position.y, width: bounds.width, height: bounds.height, done: false, add: state.shift || state.command });
                 }
+                if matches!(drag, Drag::Orbit | Drag::Pan) && !state.grabbed {
+                    // the drag keeps where it started: its first move counts from there
+                    state.grabbed = true;
+                    return publish(Navigate::Grab { x: last.x, y: last.y, width: bounds.width, height: bounds.height, orbit: drag == Drag::Orbit });
+                }
                 let (dx, dy) = (position.x - last.x, position.y - last.y);
+                if drag == Drag::Look {
+                    // a right click that has not moved yet may still open the menu
+                    if state.right_press.is_some() {
+                        return Some(shader::Action::capture());
+                    }
+                    // as in a game: the cursor, hidden, goes back to where it was pressed, so the
+                    // view turns on without end
+                    if let Some((dx, dy)) = state.look_anchor.and_then(cursor_lock::take) {
+                        if !state.looking {
+                            // the crosshair takes the cursor's place, and the release ends it
+                            state.looking = true;
+                            state.grabbed = true;
+                            return publish(Navigate::Hold { x: last.x, y: last.y });
+                        }
+                        if dx == 0.0 && dy == 0.0 {
+                            return Some(shader::Action::capture());
+                        }
+                        return publish(Navigate::Look { dx, dy });
+                    }
+                }
                 state.drag = Some((drag, position));
                 match drag {
                     Drag::Orbit => publish(Navigate::Orbit { dx, dy }),
+                    Drag::Look => publish(Navigate::Look { dx, dy }),
                     Drag::Pan | Drag::Box => publish(Navigate::Pan { dx, dy, height: bounds.height }),
                     Drag::Cursor3d => publish(Navigate::Cursor3d { x: position.x, y: position.y, width: bounds.width, height: bounds.height }),
                 }
@@ -338,7 +455,8 @@ where
 
     fn mouse_interaction(&self, state: &State, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
         match state.drag {
-            Some((Drag::Orbit, _)) => mouse::Interaction::Grabbing,
+            Some((Drag::Look, _)) if state.looking => mouse::Interaction::Hidden,
+            Some((Drag::Orbit | Drag::Look, _)) => mouse::Interaction::Grabbing,
             Some((Drag::Pan, _)) => mouse::Interaction::Move,
             Some((Drag::Box | Drag::Cursor3d, _)) => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) && self.crosshair => mouse::Interaction::Crosshair,
@@ -405,7 +523,8 @@ fn touch<Message: From<Navigate>>(state: &mut State, event: touch::Event, bounds
                     }
                     let drag = if held(since) >= LONG_PRESS { Gesture::Pan } else { Gesture::Orbit };
                     state.gesture = Some(drag);
-                    drag
+                    state.grabbed = true;
+                    return publish(Navigate::Grab { x: start.x, y: start.y, width: bounds.width, height: bounds.height, orbit: drag == Gesture::Orbit });
                 }
                 other => other,
             };
@@ -434,6 +553,7 @@ fn touch<Message: From<Navigate>>(state: &mut State, event: touch::Event, bounds
                         publish(Navigate::Context { x: at.x, y: at.y, width: bounds.width, height: bounds.height })
                     }
                 }
+                _ if std::mem::take(&mut state.grabbed) => publish(Navigate::Release),
                 _ => Some(shader::Action::capture()),
             }
         }
@@ -499,6 +619,7 @@ mod tests {
             hover: false,
             drag_selects,
             cursor3d: true,
+            buttons: MouseButtons::default(),
             crosshair: false,
             structural_selected: &marks,
             structural_hovered: &marks,
@@ -512,22 +633,43 @@ mod tests {
     }
 
     #[test]
-    fn a_right_click_opens_the_menu_and_a_right_drag_pans() {
+    fn a_right_click_opens_the_menu_and_a_right_drag_looks_around() {
         let mut state = State::default();
         let (down, up) = (mouse::Event::ButtonPressed(mouse::Button::Right), mouse::Event::ButtonReleased(mouse::Button::Right));
         assert!(mouse_event(&mut state, down, Point::new(200.0, 150.0)).is_none());
         // it opens where the button comes up
         let menu = mouse_event(&mut state, up, Point::new(201.0, 150.0));
         assert!(matches!(menu, Some(Navigate::Context { x, y, .. }) if x == 101.0 && y == 100.0), "{menu:?}");
-        // a drag pans and opens nothing
+        // a drag looks around and opens nothing
         mouse_event(&mut state, down, Point::new(200.0, 150.0));
-        let moved = mouse::Event::CursorMoved { position: Point::new(230.0, 150.0) };
-        assert!(matches!(mouse_event(&mut state, moved, Point::new(230.0, 150.0)), Some(Navigate::Pan { dx, .. }) if dx == 30.0));
+        let moved = |x: f32| mouse::Event::CursorMoved { position: Point::new(x, 150.0) };
+        assert!(matches!(mouse_event(&mut state, moved(230.0), Point::new(230.0, 150.0)), Some(Navigate::Look { dx, .. }) if dx == 30.0));
         assert!(!matches!(mouse_event(&mut state, up, Point::new(230.0, 150.0)), Some(Navigate::Context { .. })));
+        // the wheel pressed grabs where it went down, then pans from there
+        let (middle, middle_up) = (mouse::Event::ButtonPressed(mouse::Button::Middle), mouse::Event::ButtonReleased(mouse::Button::Middle));
+        mouse_event(&mut state, middle, Point::new(200.0, 150.0));
+        let grab = mouse_event(&mut state, moved(230.0), Point::new(230.0, 150.0));
+        assert!(matches!(grab, Some(Navigate::Grab { x, y, orbit: false, .. }) if x == 100.0 && y == 100.0), "{grab:?}");
+        assert!(matches!(mouse_event(&mut state, moved(260.0), Point::new(260.0, 150.0)), Some(Navigate::Pan { dx, .. }) if dx == 60.0));
+        assert!(matches!(mouse_event(&mut state, middle_up, Point::new(260.0, 150.0)), Some(Navigate::Release)));
         // a left click still picks
         mouse_event(&mut state, mouse::Event::ButtonPressed(mouse::Button::Left), Point::new(200.0, 150.0));
         let pick = mouse_event(&mut state, mouse::Event::ButtonReleased(mouse::Button::Left), Point::new(200.0, 150.0));
         assert!(matches!(pick, Some(Navigate::Pick { .. })), "{pick:?}");
+    }
+
+    #[test]
+    fn a_double_click_marks_the_pivot() {
+        let mut state = State::default();
+        let (down, up) = (mouse::Event::ButtonPressed(mouse::Button::Left), mouse::Event::ButtonReleased(mouse::Button::Left));
+        mouse_event(&mut state, down, Point::new(200.0, 150.0));
+        assert!(matches!(mouse_event(&mut state, up, Point::new(200.0, 150.0)), Some(Navigate::Pick { .. })));
+        mouse_event(&mut state, down, Point::new(201.0, 150.0));
+        let second = mouse_event(&mut state, up, Point::new(201.0, 150.0));
+        assert!(matches!(second, Some(Navigate::Pivot { x, .. }) if x == 101.0), "{second:?}");
+        // a third click picks again
+        mouse_event(&mut state, down, Point::new(201.0, 150.0));
+        assert!(matches!(mouse_event(&mut state, up, Point::new(201.0, 150.0)), Some(Navigate::Pick { .. })));
     }
 
     #[test]
@@ -569,8 +711,10 @@ mod tests {
         assert!(send(&mut state, press(1, 200.0, 150.0), t).is_none());
         assert!(matches!(send(&mut state, lifted(1, 201.0, 150.0), t), Some(Navigate::Pick { x, y, .. }) if x == 100.0 && y == 100.0));
         send(&mut state, press(2, 200.0, 150.0), t);
-        assert!(matches!(send(&mut state, moved(2, 230.0, 150.0), t), Some(Navigate::Orbit { dx, .. }) if dx == 30.0));
-        send(&mut state, lifted(2, 230.0, 150.0), t);
+        // the drag grabs where the finger went down, then orbits from there
+        assert!(matches!(send(&mut state, moved(2, 230.0, 150.0), t), Some(Navigate::Grab { x, orbit: true, .. }) if x == 100.0));
+        assert!(matches!(send(&mut state, moved(2, 260.0, 150.0), t), Some(Navigate::Orbit { dx, .. }) if dx == 60.0));
+        assert!(matches!(send(&mut state, lifted(2, 260.0, 150.0), t), Some(Navigate::Release)));
         assert!(state.fingers.is_empty() && state.gesture.is_none());
     }
 
@@ -588,7 +732,7 @@ mod tests {
         let later = t + STALE + Duration::from_millis(300);
         send(&mut state, press(3, 200.0, 150.0), later);
         assert_eq!(state.fingers.len(), 1);
-        assert!(matches!(send(&mut state, moved(3, 230.0, 150.0), later), Some(Navigate::Orbit { .. })));
+        assert!(matches!(send(&mut state, moved(3, 230.0, 150.0), later), Some(Navigate::Grab { orbit: true, .. })));
         send(&mut state, lifted(3, 230.0, 150.0), later);
         send(&mut state, press(4, 200.0, 150.0), later);
         assert!(matches!(send(&mut state, lifted(4, 200.0, 150.0), later), Some(Navigate::Pick { .. })));

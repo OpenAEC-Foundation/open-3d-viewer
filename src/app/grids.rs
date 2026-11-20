@@ -88,7 +88,7 @@ impl App {
             out.extend(self.level_outlines());
             return out;
         };
-        if !self.grids_shown() {
+        if !self.grids_shown() || self.document.view_presentation(view)["grids"] == false {
             return Vec::new();
         }
         if let Some(plan) = self.document.plan(view) {

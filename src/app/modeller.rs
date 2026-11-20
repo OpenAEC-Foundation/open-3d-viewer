@@ -172,6 +172,7 @@ const ROUND: f64 = 0.01;
 pub struct Modeller {
     /// The modelled elements.
     pub model: bim_core::Model,
+    pub rebar_edit: Option<super::reinforcement::Editor>,
     /// The tool placing elements, and the name its elements get (in the interface language).
     pub tool: Option<(ModelTool, &'static str)>,
     /// The branches of the model explorer that are open, by their keys (see `explorer`).
@@ -346,6 +347,7 @@ impl App {
     /// Switches a tool on (its elements named `name`), or off.
     pub(super) fn set_model_tool(&mut self, tool: Option<(ModelTool, &'static str)>) {
         let same = tool.map(|t| t.0) == self.modeller.tool.map(|t| t.0);
+        self.modeller.rebar_edit = None;
         self.modeller.tool = if same { None } else { tool };
         self.modeller.length_typed.clear();
         self.modeller.grid_tool = false;
@@ -1018,6 +1020,7 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
     let mut of_parts: Vec<(usize, u32, u32, u32)> = Vec::new();
+    let has_rebar_areas = model.iter().any(|e| !e.reinforcement_areas.is_empty());
     for element in model.iter() {
         let Ok(parts) = model.evaluate(element.id) else { continue };
         if parts.is_empty() {
@@ -1027,7 +1030,7 @@ fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: 
         let k = match layers.iter().position(|l| l.name == class) {
             Some(k) => k,
             None => {
-                layers.push(Layer { name: class.into(), hidden: class == "IfcReinforcingBar", color: class_colour(class), ..Layer::default() });
+                layers.push(Layer { name: class.into(), hidden: class == "IfcReinforcingBar" && !has_rebar_areas, color: class_colour(class), ..Layer::default() });
                 layers.len() - 1
             }
         };
@@ -1116,7 +1119,8 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             if let Some(grade) = &e.grade {
                 put("Grade", grade.clone());
             }
-            put("Length", m((l.end - l.start).length()));
+            let span = l.end.distance(l.start);
+            put("Length", m(e.hairpin_leg.map_or(span, |leg| 2.0 * leg + std::f64::consts::PI * span / 2.0)));
         }
         Shape::Planar(p) => {
             put("Thickness", m(p.total_thickness()));

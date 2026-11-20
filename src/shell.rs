@@ -822,6 +822,7 @@ impl Studio {
         }
         if product != Product::Modeller {
             for app in std::iter::once(&mut self.app).chain(self.parked.iter_mut().map(|(_, a)| a)) {
+                app.modeller.rebar_edit = None;
                 if app.modeller.tool.is_some() {
                     let _ = app.update(Message::ModelTool(None));
                 }

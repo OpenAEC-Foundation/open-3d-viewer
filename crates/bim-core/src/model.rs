@@ -365,6 +365,9 @@ impl Model {
             // a framed system meeting another at a corner ends there as the corner says
             Shape::System(s) => Ok(crate::system::joined_parts(self, element, s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
             Shape::Linear(l) => {
+                if let Some(leg) = element.hairpin_leg {
+                    return Ok(vec![part(crate::reinforcement::hairpin_solid(l, leg)?)]);
+                }
                 let joined = self.joined(element.id, element.tile);
                 let body = join::finish(&Member::of(l)?, joined.start, joined.end, &joined.additions, &joined.removals);
                 // additions or removals that cannot be made leave the member with its trims only

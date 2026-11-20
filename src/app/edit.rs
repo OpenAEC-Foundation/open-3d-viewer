@@ -168,11 +168,13 @@ impl App {
 
     /// Whether Tab means edit mode now: in it, or with one modelled element selected.
     pub(crate) fn wants_tab(&self) -> bool {
-        self.annotates && (self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.editable().is_some())
+        self.annotates && (self.modeller.rebar_edit.is_some() || self.selected_rebar_key().is_some() || self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.editable().is_some())
     }
 
     /// Tab: into edit mode on the selected element, or out of it.
     pub(super) fn toggle_edit(&mut self) {
+        if self.modeller.rebar_edit.is_some() { return self.rebar_action(super::reinforcement::Action::Finish); }
+        if let Some((wall,name)) = self.selected_rebar_key() { return self.rebar_action(super::reinforcement::Action::Edit(wall,name)); }
         // the sketch of a floor: Tab finishes it, and Tab on a floor opens it
         if self.modeller.sketch.is_some() {
             return self.finish_sketch();
@@ -219,6 +221,7 @@ impl App {
     /// Something the edit overlay reports.
     pub(super) fn edit_event(&mut self, event: EditEvent) {
         // the sketch of a floor; a floor with grips, or one of them dragged
+        if self.rebar_event(event) { return; }
         if self.sketch_event(event) || (self.modeller.edit.is_none() && self.slab_event(event)) {
             return;
         }
@@ -437,6 +440,7 @@ impl App {
 
     /// The edit overlay: the edited element's points and the lines between them.
     pub(super) fn edit_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
+        if let Some(overlay) = self.rebar_overlay(ink,fill) { return Some(overlay); }
         if let Some(overlay) = self.sketch_overlay(ink, fill) {
             return Some(overlay);
         }

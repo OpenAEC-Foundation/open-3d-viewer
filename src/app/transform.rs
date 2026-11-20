@@ -423,6 +423,8 @@ impl App {
                 let base = e.name.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()).map_or(e.name.as_str(), |(base, _)| base);
                 let number = self.modeller.model.iter().filter(|o| o.class() == changed.class()).count() + 1;
                 changed.name = format!("{base} {number}");
+                // Region members belong to the source wall. A wall copied alone owns none.
+                changed.reinforcement_areas.clear();
                 self.modeller.model.add(changed)
             } else {
                 changed.id = e.id;

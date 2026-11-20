@@ -221,6 +221,7 @@ impl App {
         }
         self.show_files_without(step.taken.clone());
         self.modeller.base = step;
+        self.modeller.rebar_edit = None;
         self.modeller.edit = None;
         self.modeller.points.clear();
         self.modeller.aim = None;

@@ -77,6 +77,7 @@ pub mod modeller;
 mod paper;
 mod placement;
 mod placing;
+pub mod reinforcement;
 mod schedules;
 mod take_over;
 pub mod transform;
@@ -927,6 +928,7 @@ pub enum Message {
     TempDim(modeller::temp_dims::TempDimMessage),
     /// Cancel in a floor's sketch: it leaves with the floor unchanged.
     SketchCancel,
+    Reinforcement(reinforcement::Action),
     /// Shift+C in the Modeller: the 3D cursor goes home.
     Cursor3dHome,
     /// Typed in a field of the selected modelled element's Definition section.
@@ -2244,6 +2246,7 @@ impl App {
             Message::RemoteShot(shot) => self.remote_shot(shot),
             Message::ClearMeasurements => self.measurements.clear(),
             Message::NewModel(level) => self.new_model(level),
+            Message::Reinforcement(action) => self.rebar_action(action),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::GridTool => self.toggle_grid_tool(),
             Message::SelectTool => self.select_tool(),
@@ -2555,6 +2558,7 @@ impl App {
                         self.select_box(rect, width, height, add);
                     }
                 }
+                Navigate::Hover { x, y, width, height } if self.rebar_hover(x,y,width,height) => {}
                 Navigate::Hover { x, y, width, height } if self.grab_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.sketch_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
@@ -3122,6 +3126,7 @@ impl App {
             }
             // Enter while a distance is typed in a move puts the move down
             Message::MeasureFinish if self.tool_enter() => {}
+            Message::MeasureFinish if self.modeller.rebar_edit.is_some() => self.rebar_action(reinforcement::Action::Finish),
             Message::MeasureFinish if self.modeller.sketch.is_some() => self.finish_sketch(),
             Message::MeasureFinish if self.modeller.tool.is_some() => self.set_model_tool(None),
             // in Docs Enter opens the picked file
@@ -3203,6 +3208,7 @@ impl App {
             Message::Escape if self.modeller.edit.is_some() => {
                 self.edit_escape();
             }
+            Message::Escape if self.modeller.rebar_edit.is_some() => self.rebar_action(reinforcement::Action::Cancel),
             Message::Escape if self.modeller.transform.is_some() => {
                 self.escape_transform();
             }
@@ -3365,6 +3371,7 @@ impl App {
         if self.put_grab_down() {
             return;
         }
+        if self.rebar_point_click(x,y,width,height) { return; }
         if self.sketch_click(x, y, width, height) {
             return;
         }
@@ -3452,6 +3459,7 @@ impl App {
             (None, true) => return,
             (hit, false) => self.sel.set(hit),
         }
+        if !add { self.expand_rebar_pick(); }
         self.selection_changed();
     }
 
@@ -4287,6 +4295,7 @@ impl App {
             content = content.push(section(name)).push(rows).push(rule::horizontal(1));
         }
         // the sketch of a floor: its tools
+        if let Some(rows) = self.rebar_bar(l) { content = content.push(rows); }
         if let Some(rows) = self.sketch_bar(p, l) {
             content = content.push(section(l.text("Schets", "Sketch"))).push(rows).push(rule::horizontal(1));
         }
@@ -4633,7 +4642,7 @@ impl App {
             looks: &self.unit_looks,
             drag_selects: self.drag_selects(),
             cursor3d: self.has_cursor3d(),
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool || self.copying()) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool || self.copying() || self.modeller.rebar_edit.is_some()) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -4708,7 +4717,9 @@ impl App {
             canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let editing = self.modeller.edit.as_ref().and_then(|e| Some((e, self.modeller.model.get(e.element)?)));
-        let banner = if let Some(hint) = self.grab_hint(l) {
+        let banner = if self.modeller.rebar_edit.is_some() {
+            Some(l.text("Wapeningsgebied · sluit op het beginpunt · Tab: klaar · Esc: annuleren","Reinforcement area · close at first point · Tab: finish · Esc: cancel").to_string())
+        } else if let Some(hint) = self.grab_hint(l) {
             Some(hint)
         } else if let Some(hint) = self.sketch_hint(l) {
             Some(hint)

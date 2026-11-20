@@ -24,6 +24,7 @@ pub mod mesh;
 pub mod model;
 pub mod predicates;
 pub mod profile;
+pub mod reinforcement;
 pub mod solid;
 pub mod system;
 pub mod tile;

@@ -93,7 +93,7 @@ impl Scene {
         let bays = (2.4 / t.grid.bay).ceil().clamp(2.0, 8.0);
         let rows = (2.4 / t.grid.row).ceil().clamp(1.0, 8.0);
         let (length, height) = (bays * t.grid.bay, rows * t.grid.row);
-        let face = SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::ONE, member: DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let face = SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::ONE, member: DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let lying = t.lying.is_some();
         let typed = if lying { face.laid(t) } else { face.typed(t) };
         let window = Opening { along: (length - 1.2) / 2.0, sill: 0.9, width: 1.2, height: 1.2, framing: None };

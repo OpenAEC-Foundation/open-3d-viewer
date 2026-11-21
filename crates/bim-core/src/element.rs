@@ -322,7 +322,13 @@ pub struct SystemDef {
     /// measured from its line's start. Empty: the rectangle its line and its `height` make.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outline: Vec<DVec2>,
+    /// How its bays are divided along its line, where this system does not follow its type:
+    /// equal ones, or whole ones with what is left at the end, at the start or at both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub division: Option<Division>,
 }
+
+pub use bim_library::system::Division;
 
 /// How a connection joins its members.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1129,7 +1135,7 @@ mod tests {
 
     #[test]
     fn a_system_fills_its_domain_with_members_and_panels() {
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let parts = system_parts(&s).unwrap();
         let members = parts.iter().filter(|p| p.class == "IfcMember").count();
         let panels = parts.iter().filter(|p| p.class == "IfcPlate").count();

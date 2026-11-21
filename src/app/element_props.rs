@@ -322,6 +322,16 @@ impl App {
 
     /// Adds an opening to the selected floor (a lying system), in its middle: a rectangular one
     /// 600 square, or a round one of 200.
+    /// Divides the bays of the selected system as `division` says.
+    pub(super) fn set_division(&mut self, division: bim_core::Division) {
+        let Some(e) = self.defined().cloned() else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Shape::System(s) = &mut shape else { return };
+        s.division = Some(division);
+        self.modeller.refusal = None;
+        self.change_shape(&e, shape);
+    }
+
     pub(super) fn add_recess(&mut self, round: bool) {
         let Some(e) = self.defined().cloned() else { return };
         let mut shape = e.shape_in_project(&self.modeller.model.grid);
@@ -607,6 +617,22 @@ impl App {
                     .push(field(l.text("Bouten per rij", "Bolts per row"), F::BoltRows));
             }
         }
+        // a system with a grid of its own: how its bays are divided along its line
+        if let Shape::System(s) = &shape {
+            let t = s.system_type.as_ref();
+            if t.is_none_or(|t| t.framing.is_none() && t.pattern == bim_library::Pattern::Stack) {
+                let now = s.divided();
+                let name = |d: bim_core::Division| match d {
+                    bim_core::Division::Equal => l.text("Gelijk verdeeld", "Equal bays"),
+                    bim_core::Division::FromStart => l.text("Heel vanaf begin", "Whole from the start"),
+                    bim_core::Division::FromEnd => l.text("Heel vanaf eind", "Whole from the end"),
+                    bim_core::Division::Centred => l.text("Gecentreerd", "Centred"),
+                };
+                rows = rows.push(text(format!("{}: {}", l.text("Verdeling", "Division"), name(now))).size(12));
+                let pick = |d: bim_core::Division| a11y::named(button(text(name(d)).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::SetDivision(d)), a11y::Role::Button, name(d));
+                rows = rows.push(row![pick(bim_core::Division::Equal), pick(bim_core::Division::FromStart)].spacing(6)).push(row![pick(bim_core::Division::FromEnd), pick(bim_core::Division::Centred)].spacing(6));
+            }
+        }
         // a floor made as a system: its openings, across it where a wall's are up it
         let lying = matches!(&shape, Shape::System(s) if s.lies());
         if let (true, Some((openings, _))) = (lying, openings_of(&shape)) {
@@ -834,7 +860,7 @@ mod tests {
         use bim_core::SystemDef;
         let mut app = App::default();
         app.new_model("Level 0");
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         let system = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
@@ -878,7 +904,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let frame = |app: &App, start: DVec2, end: DVec2, id: &str| {
-            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
             Shape::System(s.typed_from(&app.library, id).unwrap())
         };
         let outer = frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0), "system.timber-frame-140");
@@ -927,7 +953,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let frame = |app: &App, start: DVec2, end: DVec2| {
-            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
             Shape::System(s.typed_from(&app.library, "system.timber-frame-140").unwrap())
         };
         let (long, short) = (frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0)), frame(&app, DVec2::new(4.8, 0.0), DVec2::new(4.8, 3.0)));
@@ -1011,7 +1037,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2, framing: None };
-        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(7.2, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: vec![window], breaks: Vec::new(), outline: Vec::new() };
+        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(7.2, 0.0), base: 0.0, height: 2.7, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: vec![window], breaks: Vec::new(), outline: Vec::new(), division: None };
         let frame = generic.typed_from(&bim_library::Library::starter(), "system.timber-frame-140").unwrap();
         app.add_element("Frame", None, Shape::System(frame)).unwrap();
         app.select_modelled(ElementId(1));
@@ -1072,7 +1098,7 @@ mod tests {
         use crate::app::transform::{transformed, Map};
         let mut app = App::default();
         app.new_model("Level 0");
-        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(4.8, 0.0), base: 3.0, height: 6.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new() };
+        let generic = bim_core::SystemDef { start: DVec2::ZERO, end: DVec2::new(4.8, 0.0), base: 3.0, height: 6.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new(), breaks: Vec::new(), outline: Vec::new(), division: None };
         let floor = generic.laid(app.library.system_type("system.hollow-core-200").unwrap()).unwrap();
         let id = app.add_element("Floor", None, Shape::System(floor)).unwrap();
         app.select_modelled(id);
@@ -1090,6 +1116,8 @@ mod tests {
         assert!(app.modeller.sketch.is_none() && app.modeller.refusal.is_none());
         assert_eq!(system(&app).outline.len(), 4);
         // an opening and a round one, in its middle
+        let _ = app.update(Message::SetDivision(bim_core::Division::Centred));
+        assert!(matches!(&app.modeller.model.get(id).unwrap().shape, Shape::System(s) if s.division == Some(bim_core::Division::Centred)));
         let _ = app.update(Message::AddRecess(false));
         let _ = app.update(Message::AddRecess(true));
         let s = system(&app);

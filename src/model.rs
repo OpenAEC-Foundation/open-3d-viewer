@@ -293,6 +293,10 @@ pub struct ProjectData {
     /// triangles, and its material in `part_materials`; sorted by layer and first index. A cut
     /// through such an element is a face per part, each hatched as its material.
     pub parts: Vec<(usize, u32, u32, u32)>,
+    /// The assemblies elements are made of (the prefab units of a modelled timber frame): where
+    /// each is drawn within its element; sorted by layer and first index. An export writes each
+    /// as an assembly of its own under its element.
+    pub assemblies: Vec<Assembly>,
     /// What the parts are made of: each material with how a cut through it is hatched.
     pub part_materials: Vec<crate::hatching::PartMaterial>,
     /// The earth under the terrain a section cuts (Revit, the settings of the site): the height
@@ -377,7 +381,31 @@ impl ProjectData {
     }
 }
 
+/// An assembly of an element: a prefab unit of a framed system, as the model draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Assembly {
+    /// The layer of the model, the first index and the index count of its triangles.
+    pub layer: usize,
+    pub first: u32,
+    pub count: u32,
+    /// The element it is of, which of that element's assemblies it is (from 1) and how many
+    /// that element has.
+    pub element: u64,
+    pub number: u32,
+    pub of: u32,
+    /// Its mark, as its element drawings carry it.
+    pub mark: String,
+    /// How long it is (metres) and how many parts it is made of.
+    pub length: f64,
+    pub parts: u32,
+}
+
 impl ProjectData {
+    /// The assemblies of element `id` drawn in `layer`, in order.
+    pub fn assemblies_of(&self, layer: usize, id: u64) -> impl Iterator<Item = &Assembly> {
+        self.assemblies.iter().filter(move |a| a.layer == layer && a.element == id)
+    }
+
     /// The material (in `part_materials`) of the part that triangle `tri` of `layer` draws,
     /// when the triangle is of a part.
     pub fn part_at(&self, layer: usize, tri: usize) -> Option<u32> {

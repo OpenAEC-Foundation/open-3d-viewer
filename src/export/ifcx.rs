@@ -74,6 +74,30 @@ pub fn element_path(file_name: &str, layer: usize, id: u64) -> String {
     uuid(&format!("{file_name}/element/{layer}/{id}"))
 }
 
+/// The mesh of the triangles `indices` of `layer`: their own vertices numbered from 0, the faces
+/// over them, and the mean colour of the vertices where the layer colours them.
+#[allow(clippy::type_complexity)]
+fn mesh_of(layer: &crate::model::Layer, indices: &[u32]) -> (Vec<[f32; 3]>, Vec<u32>, Option<[f64; 4]>) {
+    let mut number: HashMap<u32, u32> = HashMap::new();
+    let mut points: Vec<[f32; 3]> = Vec::new();
+    let mut faces: Vec<u32> = Vec::with_capacity(indices.len());
+    let mut colour = [0u64; 4];
+    for &k in indices {
+        let n = *number.entry(k).or_insert_with(|| {
+            let p = &layer.positions[k as usize * 3..k as usize * 3 + 3];
+            points.push([p[0], p[1], p[2]]);
+            if let Some(c) = layer.colors.as_ref().and_then(|c| c.get(k as usize)) {
+                (0..4).for_each(|i| colour[i] += c[i] as u64);
+            }
+            points.len() as u32 - 1
+        });
+        faces.push(n);
+    }
+    let n = number.len().max(1) as f64;
+    let colour = layer.colors.is_some().then(|| colour.map(|c| c as f64 / n / 255.0));
+    (points, faces, colour)
+}
+
 /// Writes the model and its document as an IFCX file named `file_name`.
 pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl Write) -> io::Result<()> {
     let stem = Path::new(file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -117,21 +141,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             let class = prop("IfcType").or(prop("Class")).or(prop("class")).filter(|c| c.starts_with("Ifc")).unwrap_or("IfcBuildingElementProxy").to_string();
             let name = prop("Name").or(prop("name")).map(str::to_string).unwrap_or_else(|| layer.name.clone());
             // its own vertices, numbered from 0, and its lowest point
-            let mut number: HashMap<u32, u32> = HashMap::new();
-            let mut points: Vec<[f32; 3]> = Vec::new();
-            let mut faces: Vec<u32> = Vec::with_capacity(indices.len());
-            let mut colour = [0u64; 4];
-            for &k in indices {
-                let n = *number.entry(k).or_insert_with(|| {
-                    let p = &layer.positions[k as usize * 3..k as usize * 3 + 3];
-                    points.push([p[0], p[1], p[2]]);
-                    if let Some(c) = layer.colors.as_ref().and_then(|c| c.get(k as usize)) {
-                        (0..4).for_each(|i| colour[i] += c[i] as u64);
-                    }
-                    points.len() as u32 - 1
-                });
-                faces.push(n);
-            }
+            let (points, faces, colour) = mesh_of(layer, indices);
             if points.is_empty() {
                 continue;
             }
@@ -141,13 +151,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
                 .and_then(|l| levels.iter().position(|level| level.name == l))
                 .or_else(|| levels.iter().rposition(|level| level.elevation <= base + 0.01));
             let lift = storey.map_or(0.0, |s| levels[s].elevation) as f32;
-            let points: Vec<[f32; 3]> = points.into_iter().map(|p| [p[0], p[1], p[2] - lift]).collect();
-            let rgba = if layer.colors.is_some() {
-                let n = number.len().max(1) as f64;
-                colour.map(|c| c as f64 / n / 255.0)
-            } else {
-                [layer.color[0] as f64, layer.color[1] as f64, layer.color[2] as f64, 1.0]
-            };
+            let lifted = |points: Vec<[f32; 3]>| -> Vec<[f32; 3]> { points.into_iter().map(|p| [p[0], p[1], p[2] - lift]).collect() };
+            let rgba = colour.unwrap_or([layer.color[0] as f64, layer.color[1] as f64, layer.color[2] as f64, 1.0]);
             let mut attributes = Map::new();
             attributes.insert("bsi::ifc::class".into(), json!({"code": class}));
             attributes.insert("bsi::ifc::prop::Name".into(), name.clone().into());
@@ -168,9 +173,35 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             if rgba[3] < 0.999 {
                 attributes.insert("bsi::ifc::presentation::opacity".into(), json!(rgba[3]));
             }
-            attributes.insert("usd::usdgeom::mesh".into(), json!({"points": points, "faceVertexIndices": faces}));
             let path = element_path(file_name, li, id);
-            data.push(json!({"path": path, "attributes": attributes}));
+            // a framed system is its prefab units: each an assembly of its own under it, with
+            // the unit's part of the mesh; the system itself has none then
+            let mut units = Map::new();
+            for a in model.project.assemblies_of(li, id).filter(|a| a.first >= first && a.first + a.count <= first + count) {
+                let Some(own) = layer.indices.get(a.first as usize..(a.first + a.count) as usize) else { continue };
+                let (points, faces, colour) = mesh_of(layer, own);
+                if points.is_empty() {
+                    continue;
+                }
+                let rgba = colour.unwrap_or(rgba);
+                let unit = uuid(&format!("{file_name}/element/{li}/{id}/assembly/{}", a.number));
+                data.push(json!({"path": unit, "attributes": {
+                    "bsi::ifc::class": {"code": "IfcElementAssembly"},
+                    "bsi::ifc::prop::Name": a.mark,
+                    "bsi::ifc::prop::Unit": format!("{} / {}", a.number, a.of),
+                    "bsi::ifc::prop::Length": format!("{:.3} m", a.length),
+                    "bsi::ifc::prop::Parts": a.parts.to_string(),
+                    "bsi::ifc::presentation::diffuseColor": [rgba[0], rgba[1], rgba[2]],
+                    "usd::usdgeom::mesh": {"points": lifted(points), "faceVertexIndices": faces},
+                }}));
+                units.insert(a.mark.clone(), unit.into());
+            }
+            if units.is_empty() {
+                attributes.insert("usd::usdgeom::mesh".into(), json!({"points": lifted(points), "faceVertexIndices": faces}));
+                data.push(json!({"path": path, "attributes": attributes}));
+            } else {
+                data.push(json!({"path": path, "children": units, "attributes": attributes}));
+            }
             let label = if id == u64::MAX { name } else { format!("{name} #{id}") };
             match storey {
                 Some(s) => add_child(&mut storey_children[s], label, path),

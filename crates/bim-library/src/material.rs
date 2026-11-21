@@ -162,6 +162,10 @@ pub struct Material {
     /// Its grade or strength class, as its standard writes it ("C24", "S355", "C20/25").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// Its hatch under a hatch standard, by the standard's key, where it names one of its own
+    /// ([`crate::standard`]); under the others its sign gives it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hatches: std::collections::BTreeMap<String, crate::standard::MaterialHatch>,
 }
 
 impl Material {
@@ -171,7 +175,7 @@ impl Material {
 
     /// A material drawn by its hatch kind.
     pub fn new(key: &str, names: Names, hatch: HatchKind, colour: [u8; 3]) -> Self {
-        Self { key: key.into(), names, hatch, colour, sign: None, grade: None }
+        Self { key: key.into(), names, hatch, colour, sign: None, grade: None, hatches: Default::default() }
     }
 
     /// Its own hatch of the hatch catalogue, when it names one the catalogue has.
@@ -195,8 +199,8 @@ impl Material {
 fn starter_sign(key: &str) -> Option<&'static str> {
     Some(match key {
         "concrete" => "openaec-5",
-        "steel" => "openaec-18",
-        "aluminium" | "zinc" => "openaec-19",
+        "steel" | "galvanised-steel" => "openaec-18",
+        "aluminium" | "zinc" | "copper" => "openaec-19",
         "roofing" => "openaec-24",
         "hollow-core-concrete" => "openaec-6",
         "brick" => "openaec-1",
@@ -253,6 +257,10 @@ pub fn starter() -> Vec<Material> {
         m("mineral-fibre", "mineraalvezel", "mineral fibre", "Mineralfaser", "fibre minérale", Generic, [238, 238, 232]),
         m("hpl", "HPL", "HPL", "HPL", "HPL", Generic, [72, 76, 82]),
         m("pvc", "PVC", "PVC", "PVC", "PVC", Generic, [244, 244, 240]),
+        m("galvanised-steel", "verzinkt staal", "galvanised steel", "verzinkter Stahl", "acier galvanisé", Steel, [176, 182, 188]),
+        m("copper", "koper", "copper", "Kupfer", "cuivre", Generic, [184, 115, 51]),
+        m("polyethylene", "polyetheen", "polyethylene", "Polyethylen", "polyéthylène", Generic, [40, 44, 52]),
+        m("elastomeric-foam", "elastomeerschuim", "elastomeric foam", "Elastomerschaum", "mousse élastomère", Insulation, [52, 54, 58]),
         m("roofing", "dakbedekking", "roofing", "Dachabdichtung", "étanchéité de toiture", Generic, [42, 46, 49]),
         m("generic", "algemeen", "generic", "allgemein", "générique", Generic, GENERIC),
     ]

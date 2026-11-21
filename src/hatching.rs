@@ -23,7 +23,7 @@ pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64
 pub fn hatch_with(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64, looks: Option<&std::collections::HashMap<u64, Look>>) {
     let mut patterns = Vec::with_capacity(cut.fills.len());
     for fill in &mut cut.fills {
-        let pattern = fill_pattern(model, fill, standard);
+        let pattern = fill_pattern(model, fill, standard).at(scale);
         let pattern = match fill.element.and_then(|e| looks?.get(&e)) {
             Some(look) => look.apply(pattern),
             None => pattern,
@@ -156,6 +156,10 @@ pub struct Pattern {
     /// The grids are sized on paper (a drafting pattern), so they grow with the drawing's scale;
     /// else in the model.
     pub on_paper: bool,
+    /// Its lines are drawn on drawings at 1 : `from` and larger; 0: at every scale.
+    pub from: f64,
+    /// What a smaller drawing shows in their place: this colour; none: the paper.
+    pub below: Option<[u8; 3]>,
 }
 
 /// Parallel rows of a hatch: lines at `angle` (radians, anticlockwise from x), the first through
@@ -182,7 +186,20 @@ pub struct PartMaterial {
 /// The materials of `library` as the parts of a model name them: in the library's order, each
 /// with its hatch kind and its own hatch of the hatch catalogue where it has one.
 pub fn part_materials(library: &bim_library::Library) -> Vec<PartMaterial> {
-    library.materials.iter().map(|m| PartMaterial { name: m.name(bim_library::Lang::En).to_string(), kind: m.hatch, pattern: m.catalogue_hatch().map(Pattern::from) }).collect()
+    library.materials.iter().map(|m| PartMaterial { name: m.name(bim_library::Lang::En).to_string(), kind: m.hatch, pattern: cut_pattern(library, m) }).collect()
+}
+
+/// The hatch of a cut through material `m` of `library` under the library's chosen hatch
+/// standard, where that gives it a hatch of the catalogue: with the scale it is drawn from and
+/// what a smaller drawing shows (the hatch's colour, else the material's; or the paper).
+pub fn cut_pattern(library: &bim_library::Library, m: &bim_library::Material) -> Option<Pattern> {
+    let own = library.material_hatch(&m.key)?;
+    let hatch = own.cut_hatch()?;
+    let below = match own.below {
+        bim_library::Below::Fill => Some(hatch.fill.unwrap_or(m.colour)),
+        bim_library::Below::Nothing => None,
+    };
+    Some(Pattern { from: own.from, below, ..Pattern::from(hatch) })
 }
 
 /// The hatch of a cut face: of its part's material where the face is of a part of an element
@@ -203,14 +220,14 @@ impl From<&bim_library::Hatch> for Pattern {
         let (rows, _) = hatch.rows();
         let line = rows.first().map_or([0, 0, 0], |row| row.colour);
         let grids = rows.into_iter().map(|row| Grid { angle: row.angle, origin: row.origin, shift: row.shift, offset: row.offset, dashes: row.dashes }).collect();
-        Pattern { fill: hatch.fill, line, solid: false, grids, on_paper: false }
+        Pattern { fill: hatch.fill, line, solid: false, grids, on_paper: false, from: 0.0, below: None }
     }
 }
 
 /// The cut patterns of the materials of `library` that have a hatch of their own in the hatch
 /// catalogue, by the English name an element's `Material` property has.
 pub fn library_patterns(library: &bim_library::Library) -> std::collections::HashMap<String, Pattern> {
-    library.materials.iter().filter_map(|m| Some((m.name(bim_library::Lang::En).to_string(), Pattern::from(m.catalogue_hatch()?)))).collect()
+    library.materials.iter().filter_map(|m| Some((m.name(bim_library::Lang::En).to_string(), cut_pattern(library, m)?))).collect()
 }
 
 impl From<HatchPattern> for Pattern {
@@ -229,7 +246,7 @@ impl From<HatchPattern> for Pattern {
         } else {
             vec![grid(p.angle, p.spacing)]
         };
-        Pattern { fill: Some(p.fill), line: p.line, solid: false, grids, on_paper: false }
+        Pattern { fill: Some(p.fill), line: p.line, solid: false, grids, on_paper: false, from: 0.0, below: None }
     }
 }
 
@@ -315,6 +332,15 @@ fn ink_over(ink: crate::drawing::Ink, under: crate::drawing::Ink) -> crate::draw
 }
 
 impl Pattern {
+    /// The pattern as a drawing at 1 : `scale` draws it: itself, or on a drawing smaller than
+    /// the scale it is drawn from what it shows below that, without lines.
+    pub fn at(self, scale: f64) -> Pattern {
+        if self.from <= 0.0 || scale <= self.from + 1e-9 {
+            return self;
+        }
+        Pattern { fill: self.below, solid: false, grids: Vec::new(), ..self }
+    }
+
     /// The colours a face takes: behind its lines, and its lines.
     pub fn look(&self) -> ([u8; 3], [u8; 3]) {
         (if self.solid { self.line } else { self.fill.unwrap_or([255; 3]) }, self.line)
@@ -474,7 +500,7 @@ mod tests {
     /// view's list first.
     #[test]
     fn a_look_changes_only_what_it_gives() {
-        let brick = Pattern { fill: Some([200, 100, 50]), line: [0; 3], solid: false, grids: vec![Grid { angle: 0.785, offset: 0.003, ..Grid::default() }], on_paper: true };
+        let brick = Pattern { fill: Some([200, 100, 50]), line: [0; 3], solid: false, from: 0.0, below: None, grids: vec![Grid { angle: 0.785, offset: 0.003, ..Grid::default() }], on_paper: true };
         let grey = Look { pattern: Some((Vec::new(), true)), color: Some([192; 3]), ..Look::default() };
         let solid = grey.apply(brick.clone());
         assert!(solid.solid && solid.grids.is_empty());

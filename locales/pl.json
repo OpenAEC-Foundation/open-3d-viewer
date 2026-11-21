@@ -1723,6 +1723,14 @@
     "fill": "wypełnienie",
     "nothing": "nic",
     "By the material's sign": "Według znaku materiału",
-    "A face seen is not hatched on a drawing yet.": "Widok nie jest jeszcze kreskowany na rysunku."
+    "A face seen is not hatched on a drawing yet.": "Widok nie jest jeszcze kreskowany na rysunku.",
+    "Mouse buttons": "Przyciski myszy",
+    "Left button drag": "Przeciąganie lewym przyciskiem",
+    "Wheel pressed drag": "Przeciąganie wciśniętym kółkiem",
+    "Right button drag": "Przeciąganie prawym przyciskiem",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "Obrót odbywa się wokół punktu pod kursorem. Dwukrotne kliknięcie lub menu kontekstowe ustala stały punkt obrotu; pozostaje, dopóki dwukrotne kliknięcie w pustym miejscu lub menu go nie usunie. Podczas rozglądania się kursor zostaje w miejscu, jak w grze. Shift + lewy przesuwa, Shift + kółko obraca.",
+    "Set pivot here": "Ustaw tu punkt obrotu",
+    "double click": "dwukrotne kliknięcie",
+    "Clear pivot": "Usuń punkt obrotu"
   }
 }

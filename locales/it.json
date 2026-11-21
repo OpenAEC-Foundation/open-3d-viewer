@@ -1723,6 +1723,14 @@
     "fill": "riempimento",
     "nothing": "niente",
     "By the material's sign": "Secondo il segno del materiale",
-    "A face seen is not hatched on a drawing yet.": "Una faccia vista non è ancora tratteggiata su un disegno."
+    "A face seen is not hatched on a drawing yet.": "Una faccia vista non è ancora tratteggiata su un disegno.",
+    "Mouse buttons": "Pulsanti del mouse",
+    "Left button drag": "Trascina con il tasto sinistro",
+    "Wheel pressed drag": "Trascina con la rotella premuta",
+    "Right button drag": "Trascina con il tasto destro",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "La rotazione avviene attorno al punto sotto il cursore. Un doppio clic o il menu contestuale fissa un punto di rotazione; resta finché un doppio clic nel vuoto o il menu non lo rimuove. Guardandosi intorno, il cursore resta al suo posto, come in un gioco. Maiusc + sinistro sposta, Maiusc + rotella ruota.",
+    "Set pivot here": "Imposta qui il punto di rotazione",
+    "double click": "doppio clic",
+    "Clear pivot": "Rimuovi punto di rotazione"
   }
 }

@@ -10,6 +10,7 @@ use crate::measure::Tool;
 use crate::product::{Edition, Product, RibbonPage, PLANNED};
 use crate::theme::{Palette, ThemeKind};
 use crate::viewport::camera::ViewPreset;
+use crate::viewport::{MouseAction, MouseButtons};
 use crate::viewport::render::RenderMode;
 use openaec_ui::design::chrome::{self as ch, WindowActions, WindowIcons};
 use openaec_ui::design::command::{self as cm, Command, Shortcut, ShortcutKey};
@@ -237,6 +238,26 @@ const TEXT_SIZES: [[Named<TextSize>; 3]; LANGUAGES] = [
     [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standart"), named(TextSize::Large, "Büyük")],
 ];
 
+/// What a mouse button's drag can do.
+const MOUSE_ACTIONS: [[Named<MouseAction>; 3]; LANGUAGES] = [
+    [named(MouseAction::Orbit, "Draaien om punt"), named(MouseAction::Look, "Rondkijken"), named(MouseAction::Pan, "Model verschuiven")],
+    [named(MouseAction::Orbit, "Orbit about point"), named(MouseAction::Look, "Look around"), named(MouseAction::Pan, "Pan")],
+    [named(MouseAction::Orbit, "Um Punkt drehen"), named(MouseAction::Look, "Umsehen"), named(MouseAction::Pan, "Verschieben")],
+    [named(MouseAction::Orbit, "Orbiter autour du point"), named(MouseAction::Look, "Regarder autour"), named(MouseAction::Pan, "Déplacer")],
+    [named(MouseAction::Orbit, "Orbitar alrededor del punto"), named(MouseAction::Look, "Mirar alrededor"), named(MouseAction::Pan, "Desplazar")],
+    [named(MouseAction::Orbit, "Orbita attorno al punto"), named(MouseAction::Look, "Guardarsi intorno"), named(MouseAction::Pan, "Sposta")],
+    [named(MouseAction::Orbit, "Orbitar em torno do ponto"), named(MouseAction::Look, "Olhar em volta"), named(MouseAction::Pan, "Deslocar")],
+    [named(MouseAction::Orbit, "Obrót wokół punktu"), named(MouseAction::Look, "Rozglądanie się"), named(MouseAction::Pan, "Przesuwanie")],
+    [named(MouseAction::Orbit, "Rotera runt punkt"), named(MouseAction::Look, "Se sig omkring"), named(MouseAction::Pan, "Panorera")],
+    [named(MouseAction::Orbit, "Nokta etrafında döndür"), named(MouseAction::Look, "Etrafa bak"), named(MouseAction::Pan, "Kaydır")],
+];
+
+/// A row of the settings: what a drag with one mouse button does.
+fn mouse_button_row<'a>(look: Look, l: Language, label: &'a str, chosen: MouseAction, with: impl Fn(MouseAction) -> MouseButtons + 'a) -> Element<'a, Msg> {
+    let (list, picked) = options(&MOUSE_ACTIONS, l, chosen);
+    w::property_row(look, label, w::select(look, list, picked, move |n: Named<MouseAction>| Msg::App(Message::MouseButtons(with(n.value))), D::Regular))
+}
+
 /// The options of a setting in `language`, and the one that is chosen.
 fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; LANGUAGES], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
     let list = &lists[language.index()];
@@ -273,6 +294,8 @@ struct Prefs {
     levels_3d: bool,
     /// The 3D view draws ambient shadows in its shaded styles.
     ambient: bool,
+    /// What a drag with each mouse button does in the viewport.
+    mouse_buttons: MouseButtons,
 }
 
 impl Default for Prefs {
@@ -296,6 +319,7 @@ impl Default for Prefs {
             grid_dims: false,
             levels_3d: false,
             ambient: false,
+            mouse_buttons: MouseButtons::default(),
         }
     }
 }
@@ -916,6 +940,7 @@ impl Studio {
         self.prefs = Prefs::load(&prefs);
         self.apply_extensions();
         (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient);
+        self.app.mouse_buttons = self.prefs.mouse_buttons;
         self.prefs_path = Some(prefs);
         let keymap = dir.join("shortcuts.json");
         self.keymap = Keymap::load(&keymap);
@@ -1825,6 +1850,11 @@ impl Studio {
                 let kept = (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient);
                 if kept != (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient) {
                     (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient) = kept;
+                    self.save_prefs();
+                }
+                // and what the mouse buttons do
+                if self.app.mouse_buttons != self.prefs.mouse_buttons {
+                    self.prefs.mouse_buttons = self.app.mouse_buttons;
                     self.save_prefs();
                 }
                 // what opens in the explorer shows it
@@ -3039,6 +3069,7 @@ impl Studio {
                 let workspaces = options(&WORKSPACES, l, self.prefs.workspace());
                 let statusbars = options(&STATUSBARS, l, self.prefs.statusbar());
                 let text_sizes = options(&TEXT_SIZES, l, self.prefs.text_size());
+                let buttons = self.app.mouse_buttons;
                 let body: Element<'_, Msg> = match self.settings_page {
                     SettingsPage::General => column![
                         w::mono_label(look, l.text("Weergave", "Appearance")),
@@ -3052,6 +3083,11 @@ impl Studio {
                         w::checkbox(look, l.text("Stramienbollen achter het model verbergen", "Hide grid heads behind the model"), self.app.grid_heads_hidden, Some(|_| Msg::App(Message::ToggleGridHeadsHidden))),
                         w::checkbox(look, l.text("Maten tussen de stramienen tonen", "Show the dimensions between grid lines"), self.app.grid_dims, Some(|_| Msg::App(Message::ToggleGridDims))),
                         w::checkbox(look, l.text("Peilen met peilmaten tonen", "Show the levels with their marks"), self.app.levels_3d, Some(|_| Msg::App(Message::ToggleLevels3d))),
+                        w::mono_label(look, l.text("Muisknoppen", "Mouse buttons")),
+                        mouse_button_row(look, l, l.text("Linkermuisknop slepen", "Left button drag"), buttons.left, move |a| MouseButtons { left: a, ..buttons }),
+                        mouse_button_row(look, l, l.text("Wiel ingedrukt slepen", "Wheel pressed drag"), buttons.middle, move |a| MouseButtons { middle: a, ..buttons }),
+                        mouse_button_row(look, l, l.text("Rechtermuisknop slepen", "Right button drag"), buttons.right, move |a| MouseButtons { right: a, ..buttons }),
+                        w::secondary(look, l.text("Draaien gaat om het punt onder de muis. Een dubbelklik of het rechtermuismenu zet een vast draaipunt; dat blijft staan tot een dubbelklik in de lucht of het menu het opheft. Bij rondkijken blijft de muis op zijn plek, zoals in een game. Shift + links pant, Shift + wiel draait.", "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.")),
                         w::mono_label(look, l.text("Taal", "Language")),
                         w::property_row(look, l.text("Taal", "Language"), w::select(look, &Language::ALL, Some(l), Msg::Language, D::Regular)),
                     ]

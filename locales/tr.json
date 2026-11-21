@@ -1673,6 +1673,14 @@
     "Equal bays": "Eşit açıklıklar",
     "Whole from the start": "Baştan itibaren tam",
     "Whole from the end": "Sondan itibaren tam",
-    "Centred": "Ortalanmış"
+    "Centred": "Ortalanmış",
+    "Mouse buttons": "Fare düğmeleri",
+    "Left button drag": "Sol düğmeyle sürükleme",
+    "Wheel pressed drag": "Basılı tekerlekle sürükleme",
+    "Right button drag": "Sağ düğmeyle sürükleme",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "Döndürme imlecin altındaki nokta etrafında yapılır. Çift tıklama veya sağ tık menüsü sabit bir döndürme noktası belirler; boşluğa çift tıklama veya menü onu kaldırana kadar kalır. Etrafa bakarken imleç, bir oyundaki gibi yerinde kalır. Shift + sol kaydırır, Shift + tekerlek döndürür.",
+    "Set pivot here": "Döndürme noktasını buraya koy",
+    "double click": "çift tıklama",
+    "Clear pivot": "Döndürme noktasını kaldır"
   }
 }

@@ -1673,6 +1673,14 @@
     "Equal bays": "Travées égales",
     "Whole from the start": "Entiers depuis le début",
     "Whole from the end": "Entiers depuis la fin",
-    "Centred": "Centré"
+    "Centred": "Centré",
+    "Mouse buttons": "Boutons de la souris",
+    "Left button drag": "Glisser avec le bouton gauche",
+    "Wheel pressed drag": "Glisser avec la molette enfoncée",
+    "Right button drag": "Glisser avec le bouton droit",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "La rotation se fait autour du point sous le curseur. Un double-clic ou le menu contextuel fixe un point de rotation ; il reste jusqu'à ce qu'un double-clic dans le vide ou le menu le supprime. En regardant autour, le curseur reste en place, comme dans un jeu. Maj + gauche déplace la vue, Maj + molette fait pivoter.",
+    "Set pivot here": "Placer le point de rotation ici",
+    "double click": "double-clic",
+    "Clear pivot": "Supprimer le point de rotation"
   }
 }

@@ -226,7 +226,7 @@ signal-hook = "0.3"
 [target.'cfg(windows)'.dependencies]
 # Which GPU the window gets, before wgpu starts (`gpu`), and the window's rectangle when its
 # display scale changes (`dpi_drag`); the version wgpu-hal uses (MIT OR Apache-2.0)
-windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The web frame of the Planner: the system's web view (WebView2) as a child of the app's window
 # (MIT OR Apache-2.0). On Windows only for now: elsewhere it needs system libraries the builds lack.
 wry = { version = "0.57", default-features = false, optional = true }

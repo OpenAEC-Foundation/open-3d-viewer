@@ -1673,6 +1673,14 @@
     "Equal bays": "Lika fack",
     "Whole from the start": "Hela från början",
     "Whole from the end": "Hela från slutet",
-    "Centred": "Centrerad"
+    "Centred": "Centrerad",
+    "Mouse buttons": "Musknappar",
+    "Left button drag": "Dra med vänster knapp",
+    "Wheel pressed drag": "Dra med nedtryckt hjul",
+    "Right button drag": "Dra med höger knapp",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "Rotation sker runt punkten under markören. Ett dubbelklick eller högerklicksmenyn sätter en fast rotationspunkt; den ligger kvar tills ett dubbelklick i tomrummet eller menyn tar bort den. När du ser dig omkring stannar markören på sin plats, som i ett spel. Skift + vänster panorerar, Skift + hjul roterar.",
+    "Set pivot here": "Sätt rotationspunkt här",
+    "double click": "dubbelklick",
+    "Clear pivot": "Ta bort rotationspunkt"
   }
 }

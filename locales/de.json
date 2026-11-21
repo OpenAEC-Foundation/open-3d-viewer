@@ -1673,6 +1673,14 @@
     "Equal bays": "Gleiche Felder",
     "Whole from the start": "Ganz ab Anfang",
     "Whole from the end": "Ganz ab Ende",
-    "Centred": "Zentriert"
+    "Centred": "Zentriert",
+    "Mouse buttons": "Maustasten",
+    "Left button drag": "Ziehen mit linker Taste",
+    "Wheel pressed drag": "Ziehen mit gedrücktem Mausrad",
+    "Right button drag": "Ziehen mit rechter Taste",
+    "Orbiting turns about the point under the cursor. A double click or the right-click menu sets a fixed pivot; it stays until a double click in empty space or the menu clears it. Looking around holds the cursor in place, as in a game. Shift + left pans, Shift + wheel orbits.": "Gedreht wird um den Punkt unter dem Mauszeiger. Ein Doppelklick oder das Kontextmenü setzt einen festen Drehpunkt; er bleibt, bis ein Doppelklick ins Leere oder das Menü ihn aufhebt. Beim Umsehen bleibt der Mauszeiger an seiner Stelle, wie in einem Spiel. Umschalt + links verschiebt, Umschalt + Mausrad dreht.",
+    "Set pivot here": "Drehpunkt hier setzen",
+    "double click": "Doppelklick",
+    "Clear pivot": "Drehpunkt aufheben"
   }
 }

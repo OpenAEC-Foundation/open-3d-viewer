@@ -5,8 +5,11 @@ use crate::annotate::{self, DrawingSet};
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
 use crate::nlsfb::{self, Code};
+use crate::connection::{self, ConnectionType, Family};
 use crate::object::{self, ObjectGroup, ObjectType};
 use crate::profile::{self, LinearRole, LinearType};
+use crate::service::{self, Carrier, CoverType, ServiceType};
+use crate::standard::{self, HatchStandard, MaterialHatch};
 use crate::system::{self, SystemGroup, SystemType};
 use crate::template::{self, ViewTemplate};
 use crate::{Lang, LibraryError};
@@ -40,6 +43,20 @@ pub struct Library {
     /// ([`crate::object`]).
     #[serde(default)]
     pub object_types: Vec<ObjectType>,
+    /// Its connection types: how elements are joined where they meet ([`crate::connection`]).
+    #[serde(default)]
+    pub connection_types: Vec<ConnectionType>,
+    /// Its service types: ducts, pipes, cable trays, ladders and conduits with their sizes
+    /// and fittings ([`crate::service`]).
+    #[serde(default)]
+    pub service_types: Vec<ServiceType>,
+    /// Its cover types: the insulation round a run and the lining inside it.
+    #[serde(default)]
+    pub cover_types: Vec<CoverType>,
+    /// Its hatch standards, one of them chosen: how its materials are hatched
+    /// ([`crate::standard`]).
+    #[serde(default)]
+    pub hatch_standards: Vec<HatchStandard>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -87,7 +104,7 @@ impl Library {
     /// linear types and system types. The steel profiles are a catalogue
     /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter(), codes: nlsfb::starter(), object_types: object::starter(), connection_types: connection::starter(), service_types: service::starter(), cover_types: service::covers(), hatch_standards: standard::starter(), drawing_sets: annotate::starter(), view_templates: template::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -257,6 +274,140 @@ impl Library {
         self.object_types.iter().find(|o| o.id == id)
     }
 
+    /// The connection type with key `id`.
+    pub fn connection_type(&self, id: &str) -> Option<&ConnectionType> {
+        self.connection_types.iter().find(|c| c.id == id)
+    }
+
+    /// The connection types of `family`, in the order they were added.
+    pub fn connection_types_of(&self, family: Family) -> impl Iterator<Item = &ConnectionType> {
+        self.connection_types.iter().filter(move |c| c.family == family)
+    }
+
+    /// Adds a connection type. Refused when it does not hold together, its key is taken, or
+    /// its parts are of a material the library lacks.
+    pub fn add_connection_type(&mut self, connection: ConnectionType) -> Result<(), LibraryError> {
+        connection.check()?;
+        if self.connection_type(&connection.id).is_some() {
+            return Err(LibraryError::Duplicate(connection.id));
+        }
+        if let Some(material) = connection.material.as_ref().filter(|key| self.material(key).is_none()) {
+            return Err(LibraryError::UnknownMaterial(material.clone()));
+        }
+        self.connection_types.push(connection);
+        Ok(())
+    }
+
+    /// The service type with key `id`.
+    pub fn service_type(&self, id: &str) -> Option<&ServiceType> {
+        self.service_types.iter().find(|s| s.id == id)
+    }
+
+    /// The service types of `carrier`, in the order they were added.
+    pub fn service_types_of(&self, carrier: Carrier) -> impl Iterator<Item = &ServiceType> {
+        self.service_types.iter().filter(move |s| s.carrier == carrier)
+    }
+
+    /// Adds a service type. Refused when it does not hold together, its key is taken, or it
+    /// is of a material the library lacks.
+    pub fn add_service_type(&mut self, service: ServiceType) -> Result<(), LibraryError> {
+        service.check(&self.materials)?;
+        if self.service_type(&service.id).is_some() {
+            return Err(LibraryError::Duplicate(service.id));
+        }
+        self.service_types.push(service);
+        Ok(())
+    }
+
+    /// The cover type with key `id`.
+    pub fn cover_type(&self, id: &str) -> Option<&CoverType> {
+        self.cover_types.iter().find(|c| c.id == id)
+    }
+
+    /// Adds a cover type, refused as a service type is.
+    pub fn add_cover_type(&mut self, cover: CoverType) -> Result<(), LibraryError> {
+        cover.check(&self.materials)?;
+        if self.cover_type(&cover.id).is_some() {
+            return Err(LibraryError::Duplicate(cover.id));
+        }
+        self.cover_types.push(cover);
+        Ok(())
+    }
+
+    /// The hatch standard a drawing hatches by: the chosen one, else the first.
+    pub fn hatch_standard(&self) -> Option<&HatchStandard> {
+        self.hatch_standards.iter().find(|s| s.chosen).or_else(|| self.hatch_standards.first())
+    }
+
+    /// Chooses the standard with `key`; false when the library has none such.
+    pub fn choose_hatch_standard(&mut self, key: &str) -> bool {
+        if !self.hatch_standards.iter().any(|s| s.key == key) {
+            return false;
+        }
+        for s in &mut self.hatch_standards {
+            s.chosen = s.key == key;
+        }
+        true
+    }
+
+    /// Adds a hatch standard. Refused without a key or a name, or when its key is taken; where
+    /// the library has a chosen one already, it comes unchosen.
+    pub fn add_hatch_standard(&mut self, mut standard: HatchStandard) -> Result<(), LibraryError> {
+        standard.check()?;
+        if self.hatch_standards.iter().any(|s| s.key == standard.key) {
+            return Err(LibraryError::Duplicate(standard.key));
+        }
+        standard.chosen &= !self.hatch_standards.iter().any(|s| s.chosen);
+        self.hatch_standards.push(standard);
+        Ok(())
+    }
+
+    /// Adds a standard named `names` as a copy of the one with key `from`: the same set, and
+    /// what the materials name under `from` they name under the copy too. Its key is made of
+    /// its English name, numbered where that is taken; it is returned.
+    pub fn copy_hatch_standard(&mut self, from: &str, names: crate::material::Names) -> Result<String, LibraryError> {
+        let set = self.hatch_standards.iter().find(|s| s.key == from).ok_or_else(|| LibraryError::BadHatch(format!("a standard of the library, not \"{from}\"")))?.set;
+        let slug: String = names.en.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        let slug = slug.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+        let slug = if slug.is_empty() { "standard".to_string() } else { slug };
+        let key = std::iter::once(slug.clone()).chain((2..).map(|n| format!("{slug}-{n}"))).find(|key| !self.hatch_standards.iter().any(|s| &s.key == key)).expect("a free key");
+        self.add_hatch_standard(HatchStandard::new(&key, names, set))?;
+        for m in &mut self.materials {
+            if let Some(own) = m.hatches.get(from).cloned() {
+                m.hatches.insert(key.clone(), own);
+            }
+        }
+        Ok(key)
+    }
+
+    /// The hatch of the material with `key` under the chosen standard; a library without
+    /// standards gives the material's own sign.
+    pub fn material_hatch(&self, key: &str) -> Option<MaterialHatch> {
+        let material = self.material(key)?;
+        Some(match self.hatch_standard() {
+            Some(standard) => standard.of(material),
+            None => MaterialHatch { cut: material.catalogue_hatch().map(|h| h.key.clone()), ..MaterialHatch::default() },
+        })
+    }
+
+    /// Gives the material with key `material` its own hatch under the standard with key
+    /// `standard`, or takes it away (`None`: its sign gives it again). Refused when the
+    /// library lacks either, or the hatch does not hold together.
+    pub fn set_material_hatch(&mut self, material: &str, standard: &str, hatch: Option<MaterialHatch>) -> Result<(), LibraryError> {
+        if !self.hatch_standards.iter().any(|s| s.key == standard) {
+            return Err(LibraryError::BadHatch(format!("a standard of the library, not \"{standard}\"")));
+        }
+        if let Some(hatch) = &hatch {
+            hatch.check()?;
+        }
+        let m = self.materials.iter_mut().find(|m| m.key == material).ok_or_else(|| LibraryError::UnknownMaterial(material.into()))?;
+        match hatch {
+            Some(hatch) => m.hatches.insert(standard.into(), hatch),
+            None => m.hatches.remove(standard),
+        };
+        Ok(())
+    }
+
     /// The object types of `group`, in the order they were added.
     pub fn object_types_of(&self, group: ObjectGroup) -> impl Iterator<Item = &ObjectType> {
         self.object_types.iter().filter(move |o| o.group == group)
@@ -330,14 +481,18 @@ impl Library {
         self.code(code).map(|c| c.name(lang).to_string()).or_else(|| nlsfb::group_name(code, lang).map(str::to_string))
     }
 
-    /// The types that have `code`, by their ids: build-ups, linear types and system types. With
+    /// The types that have `code`, by their ids: build-ups, linear types, system types,
+    /// object types, connection types and service types. With
     /// `deeper`, also those of a code under it ("21" has the types of "21.22").
     pub fn coded(&self, code: &str, deeper: bool) -> Vec<&str> {
         let has = |of: String| of == code || deeper && of.strip_prefix(code).is_some_and(|rest| rest.starts_with('.') || code.contains('.'));
         let buildups = self.buildups.iter().filter(|b| has(b.nlsfb(&self.materials))).map(|b| b.id.as_str());
         let linear = self.linear_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
         let systems = self.system_types.iter().filter(|t| has(t.nlsfb())).map(|t| t.id.as_str());
-        buildups.chain(linear).chain(systems).collect()
+        let objects = self.object_types.iter().filter(|o| has(o.nlsfb())).map(|o| o.id.as_str());
+        let connections = self.connection_types.iter().filter(|c| c.nlsfb().is_some_and(&has)).map(|c| c.id.as_str());
+        let services = self.service_types.iter().filter(|s| has(s.nlsfb())).map(|s| s.id.as_str());
+        buildups.chain(linear).chain(systems).chain(objects).chain(connections).chain(services).collect()
     }
 
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
@@ -403,6 +558,28 @@ impl Library {
                 added += 1;
             }
         }
+        // (by their keys: a connection the library has is not taken again)
+        for c in &other.connection_types {
+            if self.add_connection_type(c.clone()).is_ok() {
+                added += 1;
+            }
+        }
+        // (service and cover types by their keys too, each once its material is there)
+        for s in &other.service_types {
+            if self.add_service_type(s.clone()).is_ok() {
+                added += 1;
+            }
+        }
+        for c in &other.cover_types {
+            if self.add_cover_type(c.clone()).is_ok() {
+                added += 1;
+            }
+        }
+        for s in &other.hatch_standards {
+            if self.add_hatch_standard(s.clone()).is_ok() {
+                added += 1;
+            }
+        }
         added
     }
 }
@@ -416,7 +593,7 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), ..Library::default() };
+        let mut fresh = Library { materials: lib.materials.clone(), hatch_standards: lib.hatch_standards.clone(), codes: lib.codes.clone(), drawing_sets: lib.drawing_sets.clone(), view_templates: lib.view_templates.clone(), object_types: lib.object_types.clone(), connection_types: lib.connection_types.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
         }
@@ -425,6 +602,12 @@ mod tests {
         }
         for t in &lib.system_types {
             fresh.add_system_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        }
+        for t in &lib.service_types {
+            fresh.add_service_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        }
+        for c in &lib.cover_types {
+            fresh.add_cover_type(c.clone()).unwrap_or_else(|e| panic!("{}: {e}", c.id));
         }
         assert_eq!(fresh, lib);
         assert_eq!(lib.name("roof.flat-concrete-pir", Lang::Nl).unwrap(), "Isolatie PIR-beton 320");
